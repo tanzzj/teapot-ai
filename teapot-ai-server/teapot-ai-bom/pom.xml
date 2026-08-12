@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  teapot-ai-bom：依赖版本中心（SPEC §4.1）。
+  工程所有外部依赖的版本号只出现在此模块；业务模块声明依赖一律不带版本号。
+  独立 pom（不继承 teapot-ai-server parent），避免 parent import 子模块的循环解析。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.teamer.teapot</groupId>
+    <artifactId>teapot-ai-bom</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>teapot-ai-bom</name>
+    <description>Teapot AI 平台依赖版本中心：集中管理全部外部依赖版本</description>
+
+    <properties>
+        <!-- 版本基线（SPEC §3 / §3.1） -->
+        <spring-boot.version>3.5.16</spring-boot.version>
+        <agentscope.version>2.0.1</agentscope.version>
+        <mybatis-starter.version>3.0.5</mybatis-starter.version>
+        <java-jwt.version>4.5.0</java-jwt.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 框架 BOM 引入（管理 spring-web/mybatis 之外的传递依赖、mysql-connector-j、caffeine 等） -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- AgentScope 全家桶（统一 ${agentscope.version}） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-core</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-harness</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-model-dashscope</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-model-openai</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-mysql</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-skill-mysql-repository</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-agui-spring-boot-starter</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+
+            <!-- 其余外部依赖 -->
+            <dependency>
+                <groupId>org.mybatis.spring.boot</groupId>
+                <artifactId>mybatis-spring-boot-starter</artifactId>
+                <version>${mybatis-starter.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.auth0</groupId>
+                <artifactId>java-jwt</artifactId>
+                <version>${java-jwt.version}</version>
+            </dependency>
+
+            <!-- 内部模块互引同样经 bom 管理版本，避免硬编码 -->
+            <dependency>
+                <groupId>com.teamer.teapot</groupId>
+                <artifactId>teapot-ai-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.teamer.teapot</groupId>
+                <artifactId>teapot-ai-rbac</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.teamer.teapot</groupId>
+                <artifactId>teapot-ai-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

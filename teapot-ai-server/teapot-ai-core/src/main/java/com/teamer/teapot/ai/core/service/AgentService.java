@@ -1,0 +1,241 @@
+package com.teamer.teapot.ai.core.service;
+
+import com.teamer.teapot.ai.common.exception.BizException;
+import com.teamer.teapot.ai.common.model.PageData;
+import com.teamer.teapot.ai.core.agui.TeapotAguiAgentRegistrar;
+import com.teamer.teapot.ai.core.config.AuditService;
+import com.teamer.teapot.ai.core.config.TeapotAiProperties;
+import com.teamer.teapot.ai.core.dao.AgentMapper;
+import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
+import com.teamer.teapot.ai.core.model.AgentDO;
+import com.teamer.teapot.ai.core.model.AgentSkillBind;
+import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.AgentUpdateRequest;
+import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
+import com.teamer.teapot.ai.core.model.vo.AgentDetailVO;
+import com.teamer.teapot.ai.rbac.context.ContextUtil;
+import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.message.Msg;
+import io.agentscope.harness.agent.HarnessAgent;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
+
+/**
+ * Agent 管理（SPEC §7）：CRUD + Skill 绑定 + 同步调试对话。
+ * 写操作同步维护 AguiAgentRegistry / AgentRegistry 实例缓存。
+ */
+@Slf4j
+@Service
+public class AgentService {
+
+    /** 调试对话最长等待（模型侧超时由 run-timeout 控制，这里做兜底） */
+    private static final Duration CHAT_TIMEOUT = Duration.ofSeconds(180);
+
+    /** 压缩策略默认值（与 AgentRegistry 构建时一致；DDL 列为 NOT NULL） */
+    private static final int DEFAULT_COMPACTION_TRIGGER = 30;
+    private static final int DEFAULT_COMPACTION_KEEP = 10;
+
+    private final AgentMapper agentMapper;
+    private final AgentSkillMapper agentSkillMapper;
+    private final AgentRegistry agentRegistry;
+    private final TeapotAguiAgentRegistrar aguiRegistrar;
+    private final AuditService auditService;
+    private final TeapotAiProperties properties;
+
+    public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
+                        AgentRegistry agentRegistry, TeapotAguiAgentRegistrar aguiRegistrar,
+                        AuditService auditService, TeapotAiProperties properties) {
+        this.agentMapper = agentMapper;
+        this.agentSkillMapper = agentSkillMapper;
+        this.agentRegistry = agentRegistry;
+        this.aguiRegistrar = aguiRegistrar;
+        this.auditService = auditService;
+        this.properties = properties;
+    }
+
+    public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled) {
+        int offset = Math.max(page - 1, 0) * size;
+        long total = agentMapper.count(keyword, includeDisabled);
+        List<AgentDO> list = agentMapper.selectPage(keyword, includeDisabled, offset, size);
+        return PageData.of(total, list);
+    }
+
+    public AgentDetailVO detail(String agentKey) {
+        AgentDO agent = requireAgent(agentKey);
+        List<String> skillNames = agentSkillMapper.selectByAgentKey(agentKey)
+                .stream().map(AgentSkillBind::getSkillName).toList();
+        return AgentDetailVO.of(agent, skillNames);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public AgentDO create(AgentCreateRequest request) {
+        AgentDO existed = agentMapper.selectByAgentKey(request.getAgentKey());
+        if (existed != null && Integer.valueOf(1).equals(existed.getStatus())) {
+            throw new BizException("agentKey 已存在：" + request.getAgentKey());
+        }
+        AgentDO agent = new AgentDO();
+        agent.setAgentKey(request.getAgentKey());
+        agent.setName(request.getName());
+        agent.setDescription(request.getDescription());
+        agent.setSysPrompt(request.getSysPrompt());
+        agent.setModelId(request.getModelId());
+        agent.setCompactionTrigger(request.getCompactionTrigger() == null
+                ? DEFAULT_COMPACTION_TRIGGER : request.getCompactionTrigger());
+        agent.setCompactionKeep(request.getCompactionKeep() == null
+                ? DEFAULT_COMPACTION_KEEP : request.getCompactionKeep());
+        agent.setStatus(1);
+        agent.setCreatedBy(ContextUtil.currentUserId());
+        if (existed != null) {
+            // 软删行复活（唯一键冲突规避，SPEC §10.1）：全字段覆盖更新
+            agentMapper.update(agent);
+        } else {
+            agentMapper.insert(agent);
+        }
+        replaceBindings(request.getAgentKey(), request.getSkillNames());
+        writeAgentsMd(request.getAgentKey(), request.getSysPrompt());
+        aguiRegistrar.register(request.getAgentKey());
+        auditService.log("agent.create", request.getAgentKey(),
+                "modelId=" + request.getModelId());
+        return agentMapper.selectByAgentKey(request.getAgentKey());
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public AgentDO update(String agentKey, AgentUpdateRequest request) {
+        AgentDO agent = requireAgent(agentKey);
+        if (!Integer.valueOf(1).equals(agent.getStatus())) {
+            throw new BizException("Agent 已停用，不可修改：" + agentKey);
+        }
+        // 合并非空字段（null = 不修改），XML 为全字段更新
+        if (request.getName() != null) {
+            agent.setName(request.getName());
+        }
+        if (request.getDescription() != null) {
+            agent.setDescription(request.getDescription());
+        }
+        if (request.getSysPrompt() != null) {
+            agent.setSysPrompt(request.getSysPrompt());
+        }
+        if (request.getModelId() != null) {
+            agent.setModelId(request.getModelId());
+        }
+        // compaction 列为 NOT NULL：合并后仍为 null 时回填默认值
+        if (agent.getCompactionTrigger() == null) {
+            agent.setCompactionTrigger(DEFAULT_COMPACTION_TRIGGER);
+        }
+        if (agent.getCompactionKeep() == null) {
+            agent.setCompactionKeep(DEFAULT_COMPACTION_KEEP);
+        }
+        if (request.getCompactionTrigger() != null) {
+            agent.setCompactionTrigger(request.getCompactionTrigger());
+        }
+        if (request.getCompactionKeep() != null) {
+            agent.setCompactionKeep(request.getCompactionKeep());
+        }
+        agentMapper.update(agent);
+        if (request.getSkillNames() != null) {
+            replaceBindings(agentKey, request.getSkillNames());
+        }
+        writeAgentsMd(agentKey, agent.getSysPrompt());
+        agentRegistry.invalidate(agentKey);
+        auditService.log("agent.update", agentKey, null);
+        return agent;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void delete(String agentKey) {
+        AgentDO agent = requireAgent(agentKey);
+        agentMapper.softDelete(agentKey);
+        agentSkillMapper.deleteByAgentKey(agentKey);
+        aguiRegistrar.unregister(agentKey);
+        agentRegistry.invalidate(agentKey);
+        auditService.log("agent.delete", agentKey,
+                "name=" + agent.getName());
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void bindSkill(String agentKey, String skillName) {
+        requireAgent(agentKey);
+        boolean exists = agentSkillMapper.selectByAgentKey(agentKey).stream()
+                .anyMatch(b -> b.getSkillName().equals(skillName));
+        if (!exists) {
+            AgentSkillBind bind = new AgentSkillBind();
+            bind.setAgentKey(agentKey);
+            bind.setSkillName(skillName);
+            bind.setCreatedBy(ContextUtil.currentUserId());
+            agentSkillMapper.insert(bind);
+        }
+        agentRegistry.invalidate(agentKey);
+        auditService.log("agent.bindSkill", agentKey, "skill=" + skillName);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void unbindSkill(String agentKey, String skillName) {
+        requireAgent(agentKey);
+        agentSkillMapper.delete(agentKey, skillName);
+        agentRegistry.invalidate(agentKey);
+        auditService.log("agent.unbindSkill", agentKey, "skill=" + skillName);
+    }
+
+    /**
+     * 同步调试对话（SPEC §7.1 /api/agent/chat）：
+     * 复用 HarnessAgent 实例 + RuntimeContext(userId, sessionId)，与 AG-UI 流式链路同状态域。
+     */
+    public String chat(String agentKey, ChatDebugRequest request) {
+        requireAgent(agentKey);
+        HarnessAgent agent = agentRegistry.getOrCreate(agentKey);
+        String sessionId = request.getSessionId() == null || request.getSessionId().isBlank()
+                ? "default" : request.getSessionId();
+        RuntimeContext context = RuntimeContext.builder()
+                .userId(ContextUtil.currentUserId())
+                .sessionId(sessionId)
+                .build();
+        Msg reply = agent.call(request.getMessage(), context).block(CHAT_TIMEOUT);
+        if (reply == null) {
+            throw new BizException("模型未返回结果，请稍后重试");
+        }
+        return reply.getTextContent();
+    }
+
+    private AgentDO requireAgent(String agentKey) {
+        AgentDO agent = agentMapper.selectByAgentKey(agentKey);
+        if (agent == null) {
+            throw new BizException("Agent 不存在：" + agentKey);
+        }
+        return agent;
+    }
+
+    /** 整体替换绑定集合（skillNames 为 null 时不动） */
+    private void replaceBindings(String agentKey, List<String> skillNames) {
+        if (skillNames == null) {
+            return;
+        }
+        agentSkillMapper.deleteByAgentKey(agentKey);
+        String userId = ContextUtil.currentUserId();
+        for (String skillName : skillNames) {
+            AgentSkillBind bind = new AgentSkillBind();
+            bind.setAgentKey(agentKey);
+            bind.setSkillName(skillName);
+            bind.setCreatedBy(userId);
+            agentSkillMapper.insert(bind);
+        }
+    }
+
+    /** workspace/<agentKey>/AGENTS.md（内容 = sysPrompt，SPEC §7.1 create） */
+    private void writeAgentsMd(String agentKey, String sysPrompt) {
+        try {
+            Path dir = Path.of(properties.getAgentscope().getWorkspaceRoot()).resolve(agentKey);
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("AGENTS.md"), sysPrompt, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.warn("AGENTS.md 写入失败 agentKey={}", agentKey, e);
+        }
+    }
+}

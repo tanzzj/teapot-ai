@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M0 兼容性验证模块（SPEC §11.2 前置动作 2）：
+  验证 AgentScope 2.0.1 在 MySQL 8.4 LTS 上 createIfNotExist 自动建表 + 读写往返。
+  一次性工具：验证通过后可整体删除本模块（并从 parent modules 移除）。
+  用法：mvn package -pl teapot-ai-m0-check -am -DskipTests
+        scp target/app.jar 到服务器 → java -jar app.jar '<db_password>'
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.teamer.teapot</groupId>
+        <artifactId>teapot-ai-server</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>teapot-ai-m0-check</artifactId>
+    <name>teapot-ai-m0-check</name>
+    <description>AgentScope-on-MySQL-8.4 最小兼容性验证（一次性）</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-mysql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-skill-mysql-repository</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>app</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.teamer.teapot.ai.m0.M0CompatCheck</mainClass>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

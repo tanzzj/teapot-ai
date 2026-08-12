@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.AgentSkillMapper">
+
+    <resultMap id="bindMap" type="com.teamer.teapot.ai.core.model.AgentSkillBind">
+        <id property="id" column="id"/>
+        <result property="agentKey" column="agent_key"/>
+        <result property="skillName" column="skill_name"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <select id="selectByAgentKey" resultMap="bindMap">
+        SELECT id, agent_key, skill_name, created_by, created_at
+        FROM t_agent_skill WHERE agent_key = #{agentKey} ORDER BY id
+    </select>
+
+    <select id="selectBySkillName" resultMap="bindMap">
+        SELECT id, agent_key, skill_name, created_by, created_at
+        FROM t_agent_skill WHERE skill_name = #{skillName} ORDER BY id
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_agent_skill (agent_key, skill_name, created_by)
+        VALUES (#{agentKey}, #{skillName}, #{createdBy})
+    </insert>
+
+    <delete id="delete">
+        DELETE FROM t_agent_skill WHERE agent_key = #{agentKey} AND skill_name = #{skillName}
+    </delete>
+
+    <delete id="deleteByAgentKey">
+        DELETE FROM t_agent_skill WHERE agent_key = #{agentKey}
+    </delete>
+
+    <delete id="deleteBySkillName">
+        DELETE FROM t_agent_skill WHERE skill_name = #{skillName}
+    </delete>
+</mapper>

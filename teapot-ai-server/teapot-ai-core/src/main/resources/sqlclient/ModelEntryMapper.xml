@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.ModelEntryMapper">
+
+    <resultMap id="modelEntryMap" type="com.teamer.teapot.ai.core.model.ModelEntryDO">
+        <id property="id" column="id"/>
+        <result property="provider" column="provider"/>
+        <result property="modelName" column="model_name"/>
+        <result property="displayName" column="display_name"/>
+        <result property="baseUrl" column="base_url"/>
+        <result property="status" column="status"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="cols">
+        id, provider, model_name, display_name, base_url, status, created_by, created_at, updated_at
+    </sql>
+
+    <select id="selectAll" resultMap="modelEntryMap">
+        SELECT <include refid="cols"/> FROM t_model_entry ORDER BY provider, model_name
+    </select>
+
+    <select id="selectAllEnabled" resultMap="modelEntryMap">
+        SELECT <include refid="cols"/> FROM t_model_entry WHERE status = 1 ORDER BY provider, model_name
+    </select>
+
+    <select id="selectById" resultMap="modelEntryMap">
+        SELECT <include refid="cols"/> FROM t_model_entry WHERE id = #{id}
+    </select>
+
+    <select id="selectByModelId" resultMap="modelEntryMap">
+        SELECT <include refid="cols"/> FROM t_model_entry
+        WHERE provider = #{provider} AND model_name = #{modelName} LIMIT 1
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_model_entry (provider, model_name, display_name, base_url, status, created_by)
+        VALUES (#{provider}, #{modelName}, #{displayName}, #{baseUrl}, #{status}, #{createdBy})
+    </insert>
+
+    <update id="update">
+        UPDATE t_model_entry
+        SET provider = #{provider}, model_name = #{modelName}, display_name = #{displayName},
+            base_url = #{baseUrl}, status = #{status}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM t_model_entry WHERE id = #{id}
+    </delete>
+</mapper>

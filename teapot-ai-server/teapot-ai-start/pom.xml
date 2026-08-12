@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.teamer.teapot</groupId>
+        <artifactId>teapot-ai-server</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>teapot-ai-start</artifactId>
+    <name>teapot-ai-start</name>
+    <description>启动与配置（SPEC §4.2）：Spring Boot 主类、AG-UI starter 装配、application 配置、fat jar 打包</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.teamer.teapot</groupId>
+            <artifactId>teapot-ai-core</artifactId>
+        </dependency>
+        <!-- 健康探针（SPEC §11.4 nginx/systemd 探活） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>app</finalName>
+        <plugins>
+            <!-- repackage 产出 app.jar，与老 teapot 的 teapot-start 部署形态一致（§4.2 / §11.4） -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

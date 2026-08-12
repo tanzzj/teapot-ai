@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    sans-serif;
+  /* 百炼主题衬托：顶部淡紫过渡到主题底色，配合毛玻璃 Header/卡片 */
+  background: linear-gradient(180deg, #f2f1fb 0%, #f9fafd 280px);
+  background-attachment: fixed;
+}
+
+/* 滚动条细化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
+}

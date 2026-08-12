@@ -1,0 +1,91 @@
+# Teapot AI 平台公共配置（SPEC §13）；环境差异见 application-dev.yml / application-prod.yml
+server:
+  port: 9126
+  servlet:
+    encoding: { charset: UTF-8, force: true }
+
+spring:
+  application: { name: teapot-ai }
+  datasource:                                    # 业务库（Docker MySQL 8.4 LTS 映射宿主机 3306）
+    # 注：8.4 默认 caching_sha2_password，非 SSL 连接必须 allowPublicKeyRetrieval=true
+    url: jdbc:mysql://127.0.0.1:3306/teapot_ai?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT%2B8&useSSL=false&allowPublicKeyRetrieval=true&zeroDateTimeBehavior=CONVERT_TO_NULL
+    username: teapot_ai
+    password: ${TEAPOT_AI_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+mybatis:
+  mapper-locations: classpath*:sqlclient/*.xml
+  configuration: { jdbc-type-for-null: null }
+
+rbac:                                            # 登录-用户体系（SPEC §5.2，与老 rbac: 前缀同构）
+  permit-list:
+    - /api/auth/login
+    - /api/auth/refresh
+    - /actuator/health
+  resource-list:
+    - roleId: admin
+      resource: /*
+    - roleId: developer
+      resource:
+        - /api/agent/*
+        - /api/skill/*
+        - /api/chat/*
+        - /api/model/*
+        - /api/user/profile
+        - /agui/*
+    - roleId: viewer
+      resource:
+        - /api/agent/list
+        - /api/agent/detail/*
+        - /api/skill/list
+        - /api/skill/detail/*
+        - /api/chat/*
+        - /api/model/presets
+        - /api/user/profile
+        - /agui/*
+  jwt:
+    secret: ${RBAC_JWT_SECRET}                   # 环境变量注入，不入库不入 git
+    access-token-ttl: PT2H
+    refresh-token-ttl: P7D
+
+teapot:
+  ai:
+    agentscope:
+      datasource:                                # agentscope 库（独立连接池）
+        url: jdbc:mysql://127.0.0.1:3306/agentscope?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT%2B8&useSSL=false&allowPublicKeyRetrieval=true
+        username: teapot_ai
+        password: ${TEAPOT_AI_DB_PASSWORD}
+      workspace-root: ${AGENTSCOPE_WORKSPACE:./workspace}
+      create-if-not-exist: true
+    model-presets:                               # 兜底白名单：仅当 t_model_entry 无启用入口时生效（正常由管理界面配置，SPEC §6.4 修订）
+      - dashscope:qwen-plus
+      - dashscope:qwen-max
+      - dashscope:qwen-turbo
+    cors-allowed-origins:                        # SPEC §14.4（dev server + 站点域名）
+      - http://localhost:5173
+      - https://teapot.teamer.com.cn
+
+agentscope:                                      # AG-UI starter（SPEC §6.3）
+  agui:
+    path-prefix: /agui
+    agent-id-header: X-Agent-Id
+    cors-enabled: false                          # /agui/** 的 CORS 由 nginx 统一处理
+    run-timeout: 10m
+    emit-state-events: true
+    emit-tool-call-args: true
+    emit-token-usage: true
+    enable-reasoning: true
+    server-side-memory: false                    # 会话历史由 MysqlAgentStateStore 持久化
+
+logging:
+  level:
+    com.teamer.teapot.ai: info
+
+management:                                      # 健康探针（SPEC §11.4）：仅暴露 health
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.ChatSessionMapper">
+
+    <resultMap id="sessionMap" type="com.teamer.teapot.ai.core.model.ChatSessionDO">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="agentKey" column="agent_key"/>
+        <result property="sessionId" column="session_id"/>
+        <result property="title" column="title"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="selectByUser" resultMap="sessionMap">
+        SELECT id, user_id, agent_key, session_id, title, created_at, updated_at
+        FROM t_chat_session
+        WHERE user_id = #{userId}
+        <if test="agentKey != null and agentKey != ''">AND agent_key = #{agentKey}</if>
+        ORDER BY updated_at DESC LIMIT 100
+    </select>
+
+    <select id="selectByUserSession" resultMap="sessionMap">
+        SELECT id, user_id, agent_key, session_id, title, created_at, updated_at
+        FROM t_chat_session WHERE user_id = #{userId} AND session_id = #{sessionId} LIMIT 1
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_chat_session (user_id, agent_key, session_id, title)
+        VALUES (#{userId}, #{agentKey}, #{sessionId}, #{title})
+    </insert>
+
+    <update id="touch">
+        UPDATE t_chat_session
+        SET updated_at = CURRENT_TIMESTAMP
+        <if test="title != null">, title = #{title}</if>
+        WHERE user_id = #{userId} AND session_id = #{sessionId}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM t_chat_session WHERE user_id = #{userId} AND session_id = #{sessionId}
+    </delete>
+</mapper>
