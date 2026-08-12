@@ -1,0 +1,20 @@
+# Teapot AI — MySQL 8.4 LTS 容器编排（SPEC §11.3）
+# 实际部署可用 deploy/setup-mysql.sh（幂等，含建库建号）；本文件供审阅/重建参考。
+# root 密码经 env_file 注入（仅服务器 /main/apps/teapot-ai/mysql.env，chmod 600，不入仓）。
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: teapot-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    volumes:
+      - /main/mysql84/data:/var/lib/mysql
+    env_file:
+      - /main/apps/teapot-ai/mysql.env   # MYSQL_ROOT_PASSWORD
+    environment:
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=512M

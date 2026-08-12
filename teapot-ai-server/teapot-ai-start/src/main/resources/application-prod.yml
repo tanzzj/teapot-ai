@@ -1,0 +1,15 @@
+# 生产环境（114.116.14.26，SPEC §11/§13/§14）：全部密钥仅通过环境变量注入，零落盘
+spring:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/teapot_ai?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT%2B8&useSSL=false&allowPublicKeyRetrieval=true&zeroDateTimeBehavior=CONVERT_TO_NULL
+
+teapot:
+  ai:
+    agentscope:
+      workspace-root: ${AGENTSCOPE_WORKSPACE:/main/apps/teapot-ai/workspace}
+
+logging:
+  file:
+    name: /main/apps/teapot-ai/logs/teapot-ai.log
+  level:
+    com.teamer.teapot.ai: info

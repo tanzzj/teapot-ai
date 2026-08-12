@@ -1,0 +1,43 @@
+# ===== 构建产物 =====
+target/
+dist/
+dist.zip
+*.zip
+build/
+*.class
+*.jar
+!**/lib/*.jar
+
+# Maven flatten 插件产物
+.flattened-pom.xml
+
+# ===== 前端 =====
+node_modules/
+*.local
+
+# ===== 密钥与环境变量（安全红线：密钥零落盘入库） =====
+app.env
+.env
+.env.*
+!.env.example
+
+# ===== 运行时 =====
+logs/
+*.log
+workspace/
+
+# ===== IDE =====
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== 本地工具链与临时文件 =====
+tools/
+target_spec_api.txt
+
+teapot-ai-web/tsconfig.tsbuildinfo

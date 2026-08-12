@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.rbac.dao.UserMapper">
+
+    <resultMap id="userMap" type="com.teamer.teapot.ai.rbac.model.TeapotUser">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="username" column="username"/>
+        <result property="password" column="password"/>
+        <result property="realName" column="real_name"/>
+        <result property="mobile" column="mobile"/>
+        <result property="email" column="email"/>
+        <result property="roles" column="roles"/>
+        <result property="status" column="status"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="cols">
+        id, user_id, username, password, real_name, mobile, email, roles, status, created_at, updated_at
+    </sql>
+
+    <select id="selectByUsername" resultMap="userMap">
+        SELECT <include refid="cols"/> FROM t_user WHERE username = #{username} LIMIT 1
+    </select>
+
+    <select id="selectByUserId" resultMap="userMap">
+        SELECT <include refid="cols"/> FROM t_user WHERE user_id = #{userId} LIMIT 1
+    </select>
+
+    <select id="selectPage" resultMap="userMap">
+        SELECT <include refid="cols"/> FROM t_user ORDER BY id LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM t_user
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_user (user_id, username, password, real_name, mobile, email, roles, status)
+        VALUES (#{userId}, #{username}, #{password}, #{realName}, #{mobile}, #{email}, #{roles}, #{status})
+    </insert>
+
+    <update id="update">
+        UPDATE t_user
+        <set>
+            <if test="realName != null">real_name = #{realName},</if>
+            <if test="mobile != null">mobile = #{mobile},</if>
+            <if test="email != null">email = #{email},</if>
+            <if test="roles != null">roles = #{roles},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="password != null">password = #{password},</if>
+        </set>
+        WHERE user_id = #{userId}
+    </update>
+</mapper>

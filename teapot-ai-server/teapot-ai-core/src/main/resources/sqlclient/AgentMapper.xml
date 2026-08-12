@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.AgentMapper">
+
+    <resultMap id="agentMap" type="com.teamer.teapot.ai.core.model.AgentDO">
+        <id property="id" column="id"/>
+        <result property="agentKey" column="agent_key"/>
+        <result property="name" column="name"/>
+        <result property="description" column="description"/>
+        <result property="sysPrompt" column="sys_prompt"/>
+        <result property="modelId" column="model_id"/>
+        <result property="compactionTrigger" column="compaction_trigger"/>
+        <result property="compactionKeep" column="compaction_keep"/>
+        <result property="status" column="status"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="cols">
+        id, agent_key, name, description, sys_prompt, model_id,
+        compaction_trigger, compaction_keep, status, created_by, created_at, updated_at
+    </sql>
+
+    <select id="selectByAgentKey" resultMap="agentMap">
+        SELECT <include refid="cols"/> FROM t_agent WHERE agent_key = #{agentKey} LIMIT 1
+    </select>
+
+    <select id="selectPage" resultMap="agentMap">
+        SELECT <include refid="cols"/> FROM t_agent
+        <where>
+            <if test="!includeDisabled">status = 1</if>
+            <if test="keyword != null and keyword != ''">
+                AND (agent_key LIKE CONCAT('%', #{keyword}, '%')
+                  OR name LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+        ORDER BY id LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM t_agent
+        <where>
+            <if test="!includeDisabled">status = 1</if>
+            <if test="keyword != null and keyword != ''">
+                AND (agent_key LIKE CONCAT('%', #{keyword}, '%')
+                  OR name LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+    </select>
+
+    <select id="selectAllEnabled" resultMap="agentMap">
+        SELECT <include refid="cols"/> FROM t_agent WHERE status = 1
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_agent (agent_key, name, description, sys_prompt, model_id,
+                             compaction_trigger, compaction_keep, status, created_by)
+        VALUES (#{agentKey}, #{name}, #{description}, #{sysPrompt}, #{modelId},
+                #{compactionTrigger}, #{compactionKeep}, #{status}, #{createdBy})
+    </insert>
+
+    <!-- 全字段更新（service 侧先合并原值），支持软删行复活 -->
+    <update id="update">
+        UPDATE t_agent
+        SET name = #{name}, description = #{description}, sys_prompt = #{sysPrompt},
+            model_id = #{modelId}, compaction_trigger = #{compactionTrigger},
+            compaction_keep = #{compactionKeep}, status = #{status}, created_by = #{createdBy}
+        WHERE agent_key = #{agentKey}
+    </update>
+
+    <update id="softDelete">
+        UPDATE t_agent SET status = 0 WHERE agent_key = #{agentKey}
+    </update>
+</mapper>
