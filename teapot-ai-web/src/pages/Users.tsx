@@ -74,16 +74,18 @@ export default function Users() {
   };
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建用户
         </Button>
       </Space>
+      <div className="mobile-table-scroll">
       <Table<TeapotUser>
         rowKey="userId"
         loading={loading}
         dataSource={list}
+        scroll={window.innerWidth < 768 ? { x: 720 } : undefined}
         pagination={{
           current: page,
           pageSize: 10,
@@ -153,6 +155,7 @@ export default function Users() {
           },
         ]}
       />
+      </div>
 
       <Modal
         title="新建用户"

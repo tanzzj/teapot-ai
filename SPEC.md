@@ -776,6 +776,16 @@ server {
 - 日志：logback rolling（单文件 ≤ 100M，保留 7 天）。
 - 巡检：一期手工（`ss -lntp` / `ps` / `df -h`）；二期再评估可观测性（OtelTracingMiddleware 等）。
 
+### 11.7 环境判定约定与 qodercli（2026-08-12 配置）
+
+- **环境判定约定：若当前处于 Linux 环境，即可认为当前就在服务器（114.116.14.26）上，构建与部署均可直接在服务器上执行**——无需"本地构建 + 上传产物"，可直接在本机 `mvn package`、改 nginx、`systemctl restart teapot-ai`。
+- 服务器已安装 Qoder CLI：v1.1.20，入口 `/root/.local/bin/qodercli`（安装命令 `curl -fsSL https://qoder.com/install | bash`，PATH 已写入 `/root/.bashrc`）。
+- 本 Spec 与 skill 已同步给服务器上的 qodercli：
+  - 本文件存于服务器 `/main/apps/teapot-ai/SPEC.md`（项目工作目录）；
+  - server-ops skill 存于 `/root/.qoder/skills/server-ops/SKILL.md`（qodercli 全局 skill）。
+- 注意：Linux 环境下对自身的操作不再经由 `_ssh.ps1` 远程入口，直接本地 bash 执行即可；涉及 systemd 服务（teapot-ai.service）与 `/main/main-nginx` 的操作规范仍遵循 §11.4/§11.5 与 server-ops skill。
+- **qodercli 守护进程（2026-08-13 部署）**：systemd 服务 `qoder-remote.service`（unit 入仓 `deploy/qoder-remote.service`）常驻运行 `qodercli remote-control --name 114-teapot-ai --directory /main/apps/teapot-ai --capacity 4`，开机自启、异常退出 5s 后重拉；可随时从 Qoder 移动端 / https://qoder.com/agents 向服务器下发任务（并发会话上限 4，受内存约束），运维命令：`systemctl restart|status qoder-remote`、`journalctl -u qoder-remote -f`。
+
 ---
 
 ## 12. 前端设计（teapot-ai-web，基于 AgentScope Spark Design）

@@ -67,7 +67,7 @@ export default function SkillDetailPage() {
   };
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
       <Breadcrumb
         style={{ marginBottom: 16 }}
         items={[

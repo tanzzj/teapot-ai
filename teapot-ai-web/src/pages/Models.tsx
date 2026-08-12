@@ -70,7 +70,7 @@ export default function Models() {
   };
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
       <Space style={{ marginBottom: 8 }} align="center">
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建模型入口
@@ -80,10 +80,12 @@ export default function Models() {
         模型标识形如 provider:model（如 dashscope:qwen-plus）。API Key 仍由服务器环境变量
         （DASHSCOPE_API_KEY / OPENAI_API_KEY）管理，界面不存储任何密钥；OpenAI 兼容端点可在此配置 baseUrl。
       </Typography.Paragraph>
+      <div className="mobile-table-scroll">
       <Table<ModelEntry>
         rowKey="id"
         loading={loading}
         dataSource={list}
+        scroll={window.innerWidth < 768 ? { x: 800 } : undefined}
         pagination={false}
         columns={[
           {
@@ -154,6 +156,7 @@ export default function Models() {
           },
         ]}
       />
+      </div>
 
       <Modal
         title="新建模型入口"

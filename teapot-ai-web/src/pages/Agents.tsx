@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Col, Row, Space, Spin } from 'antd';
+import { Col, Row, Spin } from 'antd';
 import {
   Button,
-  Card,
   Empty,
   Form,
   Input,
@@ -12,14 +11,22 @@ import {
   Popconfirm,
   Select,
   Switch,
-  Tag,
 } from '@agentscope-ai/design';
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  EditOutlined,
+  MessageOutlined,
+  PlusOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { agentCreate, agentDelete, agentList, modelPresets } from '../api/agent';
 import type { Agent } from '../types';
 
-/** Agent 管理列表（SPEC §12.2） */
+/**
+ * Agent 管理列表（Barley 设计语言复刻：大标题 + 三列毛玻璃卡片网格）。
+ * SPEC §12.2
+ */
 export default function Agents() {
   const navigate = useNavigate();
   const [list, setList] = useState<Agent[]>([]);
@@ -65,32 +72,32 @@ export default function Agents() {
   };
 
   return (
-    <div
-      style={{
-        margin: 16,
-        padding: 24,
-        minHeight: 'calc(100vh - 96px)',
-        borderRadius: 16,
-        background:
-          'linear-gradient(135deg, rgba(97, 92, 237, 0.08) 0%, rgba(255, 255, 255, 0) 45%), ' +
-          'radial-gradient(ellipse at top right, rgba(97, 92, 237, 0.10), rgba(255, 255, 255, 0) 55%)',
-      }}
-    >
-      <Space style={{ marginBottom: 16 }} wrap>
+    <div style={{ padding: '24px 28px', minHeight: '100%' }}>
+      {/* 标题行（Barley：大标题 + 副标题 + 右侧黑色主按钮） */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>
+          Agents
+        </h2>
+        <span style={{ color: 'rgba(26, 26, 29, 0.45)', fontSize: 13 }}>
+          管理与配置你的 AI Agent
+        </span>
+        <div style={{ flex: 1 }} />
         <Input
           placeholder="按名称/标识搜索"
           prefix={<SearchOutlined />}
           allowClear
-          style={{ width: 240 }}
+          style={{ width: 200 }}
           value={keyword}
           onChange={(e) => {
             setKeyword(e.target.value);
             setPage(1);
           }}
         />
-        <span>
-          显示已停用：
+        <span style={{ color: 'rgba(26, 26, 29, 0.55)', fontSize: 13, whiteSpace: 'nowrap' }}>
+          显示已停用
           <Switch
+            size="small"
+            style={{ marginLeft: 6 }}
             checked={includeDisabled}
             onChange={(v) => {
               setIncludeDisabled(v);
@@ -106,79 +113,123 @@ export default function Agents() {
             setCreateOpen(true);
           }}
         >
-          新建 Agent
+          New Agent
         </Button>
-      </Space>
+      </div>
 
       <Spin spinning={loading}>
         {list.length === 0 && !loading ? (
-          <Empty description="暂无 Agent" />
+          <Empty description="暂无 Agent" style={{ marginTop: 60 }} />
         ) : (
           <Row gutter={[16, 16]}>
             {list.map((agent) => (
-              <Col key={agent.agentKey} xs={24} sm={12} lg={8} xl={6}>
-                <Card
-                  hoverable
+              <Col key={agent.agentKey} xs={24} md={12} xl={8}>
+                <div
+                  className="glass-card"
+                  style={{ padding: 20, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}
                   onClick={() => navigate(`/agents/${agent.agentKey}`)}
-                  styles={{ body: { padding: 16 } }}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.55)',
-                    backdropFilter: 'blur(14px)',
-                    WebkitBackdropFilter: 'blur(14px)',
-                    border: '1px solid rgba(255, 255, 255, 0.7)',
-                    boxShadow: '0 4px 16px rgba(97, 92, 237, 0.08)',
-                  }}
                 >
-                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                    <Space>
-                      <span style={{ fontWeight: 600, fontSize: 15 }}>{agent.name}</span>
-                      <Tag color={agent.status === 1 ? 'green' : 'default'}>
-                        {agent.status === 1 ? '启用' : '停用'}
-                      </Tag>
-                    </Space>
-                    <div style={{ color: 'rgba(38, 36, 76, 0.45)', fontSize: 12 }}>
-                      {agent.agentKey} · {agent.modelId}
-                    </div>
-                    <div
+                  {/* 卡片头：头像 + 名称/key + 类型标签 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span
                       style={{
-                        color: 'rgba(38, 36, 76, 0.65)',
-                        fontSize: 13,
-                        height: 40,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        width: 44,
+                        height: 44,
+                        borderRadius: 999,
+                        background: 'linear-gradient(135deg, #2b2b31, #1a1a1d)',
+                        color: '#fff',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 18,
+                        fontWeight: 700,
+                        flexShrink: 0,
                       }}
                     >
-                      {agent.description || '（无描述）'}
-                    </div>
-                    <Space size={4} onClick={(e) => e.stopPropagation()}>
-                      <Button size="small" onClick={() => navigate(`/chat?agent=${agent.agentKey}`)}>
-                        对话
-                      </Button>
-                      <Button size="small" onClick={() => navigate(`/agents/${agent.agentKey}`)}>
-                        编辑
-                      </Button>
-                      <Popconfirm
-                        title="确认停用并删除该 Agent？"
-                        onConfirm={async () => {
-                          await agentDelete(agent.agentKey);
-                          message.success('已删除');
-                          load();
+                      {(agent.name || agent.agentKey).charAt(0).toUpperCase()}
+                    </span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 15, color: 'rgba(26, 26, 29, 0.92)' }}>
+                        {agent.name}
+                      </div>
+                      <div
+                        style={{
+                          fontFamily: 'Menlo, Consolas, monospace',
+                          fontSize: 11,
+                          color: 'rgba(26, 26, 29, 0.55)',
+                          background: 'rgba(0, 0, 43, 0.05)',
+                          borderRadius: 6,
+                          padding: '1px 8px',
+                          display: 'inline-block',
+                          marginTop: 2,
                         }}
                       >
-                        <Button size="small" danger>
-                          删除
-                        </Button>
-                      </Popconfirm>
-                    </Space>
-                  </Space>
-                </Card>
+                        {agent.agentKey}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: agent.status === 1 ? 'rgba(97, 92, 237, 0.9)' : 'rgba(26, 26, 29, 0.35)', whiteSpace: 'nowrap' }}>
+                      {agent.status === 1 ? 'Spark Agent' : '已停用'}
+                    </span>
+                  </div>
+
+                  {/* 描述：单行省略 */}
+                  <div
+                    style={{
+                      color: 'rgba(26, 26, 29, 0.6)',
+                      fontSize: 13,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {agent.description || '（无描述）'}
+                  </div>
+
+                  {/* 底部操作（Barley：Start Chat / New Automation 风格） */}
+                  <div
+                    style={{
+                      borderTop: '1px solid rgba(0, 0, 0, 0.06)',
+                      paddingTop: 12,
+                      display: 'flex',
+                      gap: 18,
+                      alignItems: 'center',
+                      marginTop: 'auto',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span
+                      style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'rgba(26, 26, 29, 0.88)', fontWeight: 500, fontSize: 13, cursor: 'pointer' }}
+                      onClick={() => navigate(`/chat?agent=${agent.agentKey}`)}
+                    >
+                      <MessageOutlined /> 对话
+                    </span>
+                    <span
+                      style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'rgba(26, 26, 29, 0.55)', fontSize: 13, cursor: 'pointer' }}
+                      onClick={() => navigate(`/agents/${agent.agentKey}`)}
+                    >
+                      <EditOutlined /> 编辑
+                    </span>
+                    <Popconfirm
+                      title="确认停用并删除该 Agent？"
+                      onConfirm={async () => {
+                        await agentDelete(agent.agentKey);
+                        message.success('已删除');
+                        load();
+                      }}
+                    >
+                      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'rgba(26, 26, 29, 0.35)', fontSize: 13, cursor: 'pointer' }}>
+                        <DeleteOutlined /> 删除
+                      </span>
+                    </Popconfirm>
+                  </div>
+                </div>
               </Col>
             ))}
           </Row>
         )}
       </Spin>
 
-      <div style={{ marginTop: 16, textAlign: 'right' }}>
+      <div style={{ marginTop: 20, textAlign: 'right' }}>
         <Pagination current={page} pageSize={12} total={total} onChange={setPage} showSizeChanger={false} />
       </div>
 

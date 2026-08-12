@@ -12,9 +12,117 @@ body,
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     sans-serif;
-  /* 百炼主题衬托：顶部淡紫过渡到主题底色，配合毛玻璃 Header/卡片 */
-  background: linear-gradient(180deg, #f2f1fb 0%, #f9fafd 280px);
+  /* 白色基底 + 紫色光斑（fixed 保证滚动时光斑不动；透明度足够高才能透过毛玻璃可见） */
+  background:
+    radial-gradient(1000px 620px at 15% 18%, rgba(124, 108, 240, 0.18), transparent 62%),
+    radial-gradient(900px 560px at 78% 12%, rgba(124, 108, 240, 0.14), transparent 62%),
+    radial-gradient(820px 520px at 58% 82%, rgba(124, 108, 240, 0.12), transparent 62%),
+    #ffffff;
   background-attachment: fixed;
+}
+
+/* ── 毛玻璃工具类（Barley 设计语言） ── */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.08);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+  border-radius: 16px;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.glass-card:hover {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.09);
+}
+
+/* ── 移动端适配 ── */
+
+/* 触摸优化：iOS 安全区域 */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* 移动端表格局部横向滚动 */
+.mobile-table-scroll .ant-table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 移动端输入框不自动缩放（iOS 16px 以下会 zoom） */
+@media (max-width: 768px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* ── chat 模板主题微调（AgentScopeRuntimeWebUI） ── */
+
+/* Welcome 提示词的 sparkle 图标是模板硬编码的紫色图片，压成黑色系与 Carbon 主题一致 */
+.agentscope-runtime-webui-welcome-prompts-prompt-icon {
+  filter: grayscale(1) brightness(0.25);
+}
+
+/* ── 会话面板接管（leftHeader 插槽换成 SessionPanel） ──
+   隐藏模板自带的 New Chat + 会话列表，左列撑满并透明融入毛玻璃容器 */
+[class*='chat-anywhere-sessions'] {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  background: transparent !important;
+  border-right: 1px solid rgba(0, 0, 0, 0.05);
+}
+[class*='chat-anywhere-sessions-content'] {
+  display: none !important;
+}
+
+/* 自渲染会话项：hover / 选中态 */
+.teapot-session-item {
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.teapot-session-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+.teapot-session-item[data-active='1'] {
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+.teapot-session-item[data-active='1']:hover {
+  background: #fff;
+}
+.teapot-session-del {
+  visibility: hidden;
+}
+.teapot-session-item:hover .teapot-session-del {
+  visibility: visible;
+}
+
+/* Barley 式用户气泡：黑底白字（模板默认是浅灰底） */
+.agentscope-runtime-webui-bubble-user .agentscope-runtime-webui-bubble-content-filled,
+.agentscope-runtime-webui-bubble-end .agentscope-runtime-webui-bubble-content-filled {
+  background: #1a1a1d;
+  color: #fff;
+}
+
+/* chat 模板嵌套 ConfigProvider 改了前缀，模板内按钮类名是
+   agentscope-runtime-webui-btn-primary / ...-ant-btn-primary，
+   design 包全局 .ant-btn-primary 白字规则够不到，内层 CSS 变量也缺失导致黑字，
+   这里用通配选择器统一兜底白字 */
+button[class*='btn-primary'] {
+  color: #fff !important;
 }
 
 /* 滚动条细化 */

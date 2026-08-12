@@ -28,7 +28,7 @@ export default function Skills() {
   }, [load]);
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/skills/new')}>
           新建 Skill

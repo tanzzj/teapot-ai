@@ -1,319 +1,164 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Empty, Space, Spin, Typography } from 'antd';
-import { Avatar, Button, Card, Collapse, Select, Tag, message } from '@agentscope-ai/design';
-import { ClearOutlined, PlusOutlined, RobotOutlined, UserOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
-import { Conversations, Sender, Markdown } from '@agentscope-ai/chat';
+import { Empty } from 'antd';
+import { Select } from '@agentscope-ai/design';
+import { SparkAgentLine } from '@agentscope-ai/icons';
+import {
+  AgentScopeRuntimeWebUI,
+  useChatAnywhereSessions,
+} from '@agentscope-ai/chat';
+import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
 import { agentList } from '../api/agent';
-import { sessionClear, sessionCreate, sessionList } from '../api/session';
-import { useAguiRun } from '../hooks/useAguiRun';
-import type { Agent, ChatSession } from '../types';
-import type { ToolCallState } from '../hooks/useAguiRun';
+import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
+import { createSessionBridge } from '../chat/sessionBridge';
+import SessionPanel from '../chat/SessionPanel';
+import type { Agent } from '../types';
 
-interface LocalMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  reasoning?: string;
-  toolCalls?: ToolCallState[];
-  error?: string;
-  tokenUsage?: Record<string, unknown>;
+const MOBILE_BP = 768;
+
+/**
+ * 会话 id 桥接器：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽），
+ * 把模板当前的 sessionId getter 暴露给外层 fetch 闭包（作 AG-UI threadId）。
+ */
+function SessionIdBridge(props: { register: (getter: () => string | undefined) => void }) {
+  const { getCurrentSessionId } = useChatAnywhereSessions();
+  const { register } = props;
+  useEffect(() => {
+    register(getCurrentSessionId);
+  }, [register, getCurrentSessionId]);
+  return null;
 }
 
-/** 对话页（SPEC §12.2 / §12.3：会话侧栏 + AG-UI 流式对话） */
+/**
+ * 对话页（Spark Design chat template：AgentScopeRuntimeWebUI，SPEC §12.1）。
+ * - 会话列表 / 消息气泡 / 工具调用 / 思考过程 / Welcome 屏 / 窄屏 Drawer 均由模板内置
+ * - 后端协议经 aguiBridge（AG-UI ↔ Runtime SSE）与 sessionBridge（会话索引）适配
+ */
 export default function Chat() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const urlAgent = searchParams.get('agent') || '';
+  const currentAgent = searchParams.get('agent') || '';
 
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [agentKey, setAgentKey] = useState(urlAgent);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [sessionId, setSessionId] = useState<string>('');
-  const [messages, setMessages] = useState<LocalMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [sessionLoading, setSessionLoading] = useState(false);
-  const { ui, run, abort } = useAguiRun();
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [loadingAgents, setLoadingAgents] = useState(true);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BP);
 
-  // 加载 Agent 列表
-  useEffect(() => {
-    agentList({ page: 1, size: 100 }).then((resp) => {
-      setAgents(resp.list || []);
-      if (!urlAgent && resp.list?.length) {
-        setAgentKey(resp.list[0].agentKey);
-      }
-    });
-  }, [urlAgent]);
-
-  // 加载会话列表
-  const loadSessions = useCallback(async (key: string) => {
-    if (!key) return;
-    setSessionLoading(true);
-    try {
-      const list = await sessionList(key);
-      setSessions(list || []);
-    } finally {
-      setSessionLoading(false);
-    }
+  /** 模板内部 sessionId 的 getter（由 SessionIdBridge 注入） */
+  const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
+  const registerSessionGetter = useCallback((getter: () => string | undefined) => {
+    sessionGetterRef.current = getter;
   }, []);
 
   useEffect(() => {
-    setMessages([]);
-    setSessionId('');
-    loadSessions(agentKey);
-  }, [agentKey, loadSessions]);
+    const onResize = () => setIsMobile(window.innerWidth < MOBILE_BP);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
-  // 流式输出期间：把 ui 状态挂到最后一条 assistant 占位消息上
-  const running = !ui.finished && !ui.error;
-
+  // 加载可用 Agent 列表；未指定时默认选第一个
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, ui.answer, ui.reasoning]);
-
-  // 收尾：流结束后把结果落入消息列表
-  useEffect(() => {
-    if (ui.finished && (ui.answer || ui.error || ui.reasoning || ui.toolCalls.length > 0)) {
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        const done: LocalMessage = {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          content: ui.answer,
-          reasoning: ui.reasoning || undefined,
-          toolCalls: ui.toolCalls.length ? ui.toolCalls : undefined,
-          error: ui.error,
-          tokenUsage: ui.tokenUsage,
-        };
-        if (last && last.id.startsWith('stream-')) {
-          return [...prev.slice(0, -1), { ...done, id: last.id }];
+    (async () => {
+      try {
+        const page = await agentList({ page: 1, size: 100 });
+        const list = page.list || [];
+        setAgents(list);
+        if (!currentAgent && list.length > 0) {
+          setSearchParams({ agent: list[0].agentKey }, { replace: true });
         }
-        return [...prev, done];
-      });
-    }
+      } finally {
+        setLoadingAgents(false);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ui.finished]);
+  }, []);
 
-  const ensureSession = useCallback(async (): Promise<string> => {
-    if (sessionId) return sessionId;
-    const session = await sessionCreate(agentKey);
-    setSessionId(session.sessionId);
-    loadSessions(agentKey);
-    return session.sessionId;
-  }, [sessionId, agentKey, loadSessions]);
-
-  const onSend = async (text: string) => {
-    if (!agentKey) {
-      message.warning('请先选择 Agent');
-      return;
-    }
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setInput('');
-    setMessages((prev) => [
-      ...prev,
-      { id: `u-${Date.now()}`, role: 'user', content: trimmed },
-      { id: `stream-${Date.now()}`, role: 'assistant', content: '' },
-    ]);
-    try {
-      const sid = await ensureSession();
-      await run(agentKey, sid, [{ id: `m-${Date.now()}`, role: 'user', content: trimmed }]);
-    } catch {
-      message.error('发送失败');
-    }
-  };
-
-  const conversationItems = useMemo(
-    () =>
-      sessions.map((s) => ({
-        key: s.sessionId,
-        label: s.title || `会话 ${s.sessionId.slice(0, 8)}`,
-        timestamp: s.createdAt ? new Date(s.createdAt).getTime() : undefined,
-      })),
-    [sessions],
+  const activeAgent = useMemo(
+    () => agents.find((a) => a.agentKey === currentAgent),
+    [agents, currentAgent],
   );
 
-  return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
-      {/* 左侧：Agent 选择 + 会话列表 */}
+  const options = useMemo<IAgentScopeRuntimeWebUIOptions | null>(() => {
+    if (!currentAgent) return null;
+
+    const rightHeader = (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <SessionIdBridge register={registerSessionGetter} />
+        <SparkAgentLine size={16} style={{ color: '#666' }} />
+        <Select
+          value={currentAgent}
+          options={agents.map((a) => ({ label: a.name, value: a.agentKey }))}
+          onChange={(v) => setSearchParams({ agent: v })}
+          style={{ width: isMobile ? 140 : 220 }}
+          size={isMobile ? 'small' : 'middle'}
+        />
+      </div>
+    );
+
+    return {
+      api: {
+        fetch: createAguiFetch({
+          agentKey: currentAgent,
+          getSessionId: () => sessionGetterRef.current?.(),
+        }),
+        // 模板实际按「每行 SSE data 字符串」调用（类型标注为 Response 是上游笔误）
+        responseParser: aguiResponseParser as never,
+      },
+      session: {
+        multiple: true,
+        api: createSessionBridge(currentAgent),
+      },
+      theme: {
+        locale: 'cn',
+        // Carbon 黑色主题（与全局 carbonTheme 一致）
+        colorPrimary: '#1a1a1d',
+        // leftHeader 插槽接管为自定义会话面板（可点击切换 + 时间展示）
+        leftHeader: <SessionPanel title={activeAgent?.name || 'Teapot AI'} />,
+        rightHeader,
+      },
+      welcome: {
+        greeting: '你好，有什么可以帮你？',
+        nick: activeAgent?.name || 'AI 助手',
+        description: activeAgent?.description || '基于 AgentScope 的智能体，支持工具调用与多轮对话。',
+        prompts: [
+          { value: '请介绍一下你自己' },
+          { value: '你能做什么？' },
+          { value: '帮我写一段 Python 快排' },
+        ],
+      },
+      sender: {
+        placeholder: '输入消息，Enter 发送',
+        maxLength: 10000,
+        disclaimer: '内容由 AI 生成，请注意甄别',
+      },
+    };
+  }, [currentAgent, activeAgent, agents, isMobile, registerSessionGetter, setSearchParams]);
+
+  if (loadingAgents) {
+    return null;
+  }
+
+  if (agents.length === 0) {
+    return (
       <div
         style={{
-          width: 260,
-          borderRight: '1px solid #f0f0f0',
-          background: '#fff',
+          height: '100%',
           display: 'flex',
-          flexDirection: 'column',
-          padding: 12,
-          gap: 8,
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
-        <Select
-          value={agentKey || undefined}
-          placeholder="选择 Agent"
-          style={{ width: '100%' }}
-          onChange={(v) => {
-            setAgentKey(v);
-            setSearchParams({ agent: v });
-          }}
-          options={agents.map((a) => ({ label: a.name, value: a.agentKey }))}
-        />
-        <Button
-          icon={<PlusOutlined />}
-          block
-          onClick={() => {
-            setSessionId('');
-            setMessages([]);
-          }}
-        >
-          新会话
-        </Button>
-        <Spin spinning={sessionLoading} style={{ marginTop: 24 }}>
-          {conversationItems.length > 0 ? (
-            <Conversations
-              items={conversationItems}
-              activeKey={sessionId || undefined}
-              onActiveChange={(key) => {
-                setSessionId(key);
-                setMessages([]);
-              }}
-              menu={[
-                {
-                  label: '清空记忆',
-                  key: 'clear',
-                  danger: true,
-                  onClick: async (conv) => {
-                    await sessionClear(conv.key);
-                    message.success('已清空该会话记忆');
-                    if (conv.key === sessionId) {
-                      setMessages([]);
-                    }
-                  },
-                },
-              ]}
-            />
-          ) : (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />
-          )}
-        </Spin>
+        <Empty description="暂无可用 Agent，请先在「Agent 管理」中创建" />
       </div>
-
-      {/* 右侧：消息流 + 输入框 */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 16, minWidth: 0 }}>
-        <div style={{ flex: 1, overflowY: 'auto', paddingRight: 8 }}>
-          {messages.length === 0 && !running ? (
-            <div style={{ textAlign: 'center', marginTop: 120, color: '#999' }}>
-              <RobotOutlined style={{ fontSize: 48 }} />
-              <div style={{ marginTop: 12 }}>选择 Agent 后开始对话</div>
-            </div>
-          ) : (
-            [...messages].map((m) =>
-              m.id.startsWith('stream-') && running ? (
-                <StreamingBubble key={m.id} />
-              ) : m.id.startsWith('stream-') ? null : (
-                <MessageBubble key={m.id} msg={m} />
-              ),
-            )
-          )}
-          <div ref={bottomRef} />
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <Sender
-            value={input}
-            onChange={setInput}
-            onSubmit={onSend}
-            onCancel={abort}
-            loading={running}
-            placeholder={agentKey ? `向 ${agentKey} 提问…` : '请先选择 Agent'}
-          />
-        </div>
-      </div>
-    </div>
-  );
-
-  function StreamingBubble() {
-    return (
-      <Card size="small" style={{ marginBottom: 12, maxWidth: '85%' }}>
-        {ui.reasoning && (
-          <Collapse
-            size="small"
-            style={{ marginBottom: 8 }}
-            items={[{ key: 'r', label: '思考过程', children: <pre style={preStyle}>{ui.reasoning}</pre> }]}
-          />
-        )}
-        {ui.toolCalls.map((t) => (
-          <Tag key={t.toolCallId} color="processing" style={{ marginBottom: 8 }}>
-            🔧 {t.name} {t.result !== undefined ? '✓' : '…'}
-          </Tag>
-        ))}
-        <Markdown content={ui.answer} cursor="dot" />
-      </Card>
     );
   }
-}
 
-const preStyle: React.CSSProperties = {
-  whiteSpace: 'pre-wrap',
-  fontSize: 12,
-  color: '#888',
-  margin: 0,
-  maxHeight: 200,
-  overflow: 'auto',
-};
+  if (!options) {
+    return null;
+  }
 
-function MessageBubble({ msg }: { msg: LocalMessage }) {
-  const isUser = msg.role === 'user';
   return (
-    <div style={{ display: 'flex', marginBottom: 12, justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
-      <Space align="start" style={{ flexDirection: isUser ? 'row-reverse' : 'row', maxWidth: '85%' }}>
-        <Avatar
-          style={{ background: isUser ? '#1677ff' : '#f0f0f0', color: isUser ? '#fff' : '#666' }}
-          icon={isUser ? <UserOutlined /> : <RobotOutlined />}
-        />
-        <Card
-          size="small"
-          style={{
-            background: isUser ? '#e6f4ff' : '#fff',
-            borderTopRightRadius: isUser ? 2 : 8,
-            borderTopLeftRadius: isUser ? 8 : 2,
-          }}
-        >
-          {msg.reasoning && (
-            <Collapse
-              size="small"
-              style={{ marginBottom: 8, background: '#fafafa' }}
-              items={[{ key: 'r', label: '思考过程', children: <pre style={preStyle}>{msg.reasoning}</pre> }]}
-            />
-          )}
-          {msg.toolCalls?.map((t) => (
-            <Collapse
-              key={t.toolCallId}
-              size="small"
-              style={{ marginBottom: 8, background: '#fafafa' }}
-              items={[
-                {
-                  key: 't',
-                  label: `🔧 ${t.name}`,
-                  children: (
-                    <div>
-                      {t.args && <pre style={preStyle}>参数：{t.args}</pre>}
-                      {t.result !== undefined && <pre style={preStyle}>结果：{t.result}</pre>}
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          ))}
-          {msg.error ? (
-            <Typography.Text type="danger">⚠ {msg.error}</Typography.Text>
-          ) : (
-            <Markdown content={msg.content} />
-          )}
-          {msg.tokenUsage && (
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              tokens: {JSON.stringify(msg.tokenUsage)}
-            </Typography.Text>
-          )}
-        </Card>
-      </Space>
+    <div style={{ height: '100%' }}>
+      {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
+      <AgentScopeRuntimeWebUI key={currentAgent} options={options} />
     </div>
   );
 }
