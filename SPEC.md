@@ -150,12 +150,12 @@ RBAC 登录鉴权体系（`teapot-rbac` 模块）。本项目在**新仓库 `tea
 
 ## 4. 仓库与模块结构
 
-新仓库根目录：`d:\teamer\teapot-ai`；远程仓库（origin）：**`https://github.com/tanzzj/teapot-ai.git`**（已 `git init` 并关联）。
+新仓库根目录：`d:\teamer\teapot-ai`；远程仓库（origin）：**`https://github.com/tanzzj/teapot-ai.git`**（默认分支 **main**；`deploy/` 目录已入 `.gitignore`，**不入库**——脚本仅存服务器 `/main/apps/teapot-ai/` 与本地工作区）。
 
 ```
 teapot-ai/
 ├── SPEC.md                          # 本文档
-├── deploy/
+├── deploy/                          # ⚠️ 不入库（.gitignore），仅存服务器/本地工作区
 │   ├── teapot-ai.service            # systemd unit（§11.4）
 │   ├── docker-compose-mysql.yml     # MySQL 8.4 LTS 容器编排（§11.3）
 │   ├── nginx-teapot-ai.conf         # 站点配置片段（§11.5）
@@ -681,7 +681,7 @@ CREATE TABLE t_audit_log (
 
 ### 11.3 库与账号初始化（方案 A 实施清单）
 
-容器部署（入仓 `deploy/docker-compose-mysql.yml`，要点等价于）：
+容器部署（服务器侧 `deploy/docker-compose-mysql.yml`，不入库；要点等价于）：
 
 ```bash
 docker run -d --name teapot-mysql --restart unless-stopped \
@@ -724,7 +724,7 @@ FLUSH PRIVILEGES;
 
 - 目录：`/main/apps/teapot-ai/`：`app.jar`、`application-prod.yml`、`app.env`、`logs/`、`workspace/`、`ui/`
 - JDK：复用 `/opt/rising-sun/jdk21`（Temurin 21.0.12）
-- 进程管理：systemd unit `teapot-ai.service`（入仓 `deploy/`），要点：
+- 进程管理：systemd unit `teapot-ai.service`（服务器侧 `deploy/`，不入库），要点：
   - `EnvironmentFile=/main/apps/teapot-ai/app.env` 注入 `TEAPOT_AI_DB_PASSWORD` /
     `RBAC_JWT_SECRET` / `DASHSCOPE_API_KEY` / `OPENAI_API_KEY` / `AGENTSCOPE_WORKSPACE`
   - `ExecStart=/opt/rising-sun/jdk21/bin/java -Xms256m -Xmx1024m -jar /main/apps/teapot-ai/app.jar --spring.profiles.active=prod`
@@ -771,7 +771,7 @@ server {
 ### 11.6 备份与运维
 
 - 备份：crontab 每日 03:00 `mysqldump` 导出 `teapot_ai`、`agentscope` 两库 →
-  `/main/backup/teapot-ai/YYYY-MM-DD.sql`，保留 7 份（脚本入仓 `deploy/backup-mysql.sh`）；
+  `/main/backup/teapot-ai/YYYY-MM-DD.sql`，保留 7 份（脚本为服务器侧 `deploy/backup-mysql.sh`，不入库）；
   **磁盘水位超过 90% 时优先清理备份与日志**。
 - 日志：logback rolling（单文件 ≤ 100M，保留 7 天）。
 - 巡检：一期手工（`ss -lntp` / `ps` / `df -h`）；二期再评估可观测性（OtelTracingMiddleware 等）。
@@ -784,7 +784,7 @@ server {
   - 本文件存于服务器 `/main/apps/teapot-ai/SPEC.md`（项目工作目录）；
   - server-ops skill 存于 `/root/.qoder/skills/server-ops/SKILL.md`（qodercli 全局 skill）。
 - 注意：Linux 环境下对自身的操作不再经由 `_ssh.ps1` 远程入口，直接本地 bash 执行即可；涉及 systemd 服务（teapot-ai.service）与 `/main/main-nginx` 的操作规范仍遵循 §11.4/§11.5 与 server-ops skill。
-- **qodercli 守护进程（2026-08-13 部署）**：systemd 服务 `qoder-remote.service`（unit 入仓 `deploy/qoder-remote.service`）常驻运行 `qodercli remote-control --name 114-teapot-ai --directory /main/apps/teapot-ai --capacity 4`，开机自启、异常退出 5s 后重拉；可随时从 Qoder 移动端 / https://qoder.com/agents 向服务器下发任务（并发会话上限 4，受内存约束），运维命令：`systemctl restart|status qoder-remote`、`journalctl -u qoder-remote -f`。
+- **qodercli 守护进程（2026-08-13 部署）**：systemd 服务 `qoder-remote.service`（unit 为服务器侧 `deploy/qoder-remote.service`，不入库）常驻运行 `qodercli remote-control --name 114-teapot-ai --directory /main/apps/teapot-ai --capacity 4`，开机自启、异常退出 5s 后重拉；可随时从 Qoder 移动端 / https://qoder.com/agents 向服务器下发任务（并发会话上限 4，受内存约束），运维命令：`systemctl restart|status qoder-remote`、`journalctl -u qoder-remote -f`。
 
 ---
 
