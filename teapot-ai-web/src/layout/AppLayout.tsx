@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Drawer, Menu, Segmented, Space, theme } from 'antd';
-import { Dropdown, Avatar } from '@agentscope-ai/design';
+import { Button, Dropdown, Avatar } from '@agentscope-ai/design';
 import {
   ApiOutlined,
   RobotOutlined,
@@ -128,6 +128,9 @@ export default function AppLayout() {
                 Teapot AI
               </span>
             )}
+            {!isMobile && (
+              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0813k</span>
+            )}
           </div>
 
           {/* 分段标签导航（Barley Chat/Agent 切换样式） */}
@@ -142,6 +145,7 @@ export default function AppLayout() {
           <div style={{ flex: 1 }} />
 
           <Dropdown
+            trigger={['click']}
             menu={{
               items: [
                 { key: 'roles', label: `角色：${user?.roles || '-'}`, disabled: true },
@@ -197,6 +201,18 @@ export default function AppLayout() {
             <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
               角色：{user?.roles || '-'}
             </div>
+            <Button
+              block
+              style={{ marginTop: 12 }}
+              icon={<LogoutOutlined />}
+              onClick={() => {
+                logout();
+                setDrawerOpen(false);
+                navigate('/login');
+              }}
+            >
+              退出登录
+            </Button>
           </div>
         </Drawer>
       )}

@@ -67,6 +67,24 @@
                 <artifactId>agentscope-extensions-skill-mysql-repository</artifactId>
                 <version>${agentscope.version}</version>
             </dependency>
+            <!-- Git Skill 仓库（SPEC §15） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-skill-git-repository</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <!-- AgentRun 沙箱适配器（SPEC §16，harness 本体仅含 docker 实现） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-sandbox-agentrun</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <!-- E2B 兼容沙箱适配器（AgentRun E2B 端点，SPEC §16 修订：MCP 未激活时的可用链路） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-sandbox-e2b</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.agentscope</groupId>
                 <artifactId>agentscope-agui-spring-boot-starter</artifactId>

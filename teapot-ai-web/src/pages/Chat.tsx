@@ -1,31 +1,70 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Empty } from 'antd';
-import { Select } from '@agentscope-ai/design';
-import { SparkAgentLine } from '@agentscope-ai/icons';
+import { Drawer, IconButton, Select } from '@agentscope-ai/design';
+import { SparkAgentLine, SparkHistoryLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
+  useChatAnywhereInput,
   useChatAnywhereSessions,
+  useChatAnywhereSessionsState,
 } from '@agentscope-ai/chat';
 import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
 import { agentList } from '../api/agent';
 import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
-import { createSessionBridge } from '../chat/sessionBridge';
+import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
+import { newChatCoordinator } from '../chat/newChatCoordinator';
 import type { Agent } from '../types';
 
 const MOBILE_BP = 768;
 
 /**
- * 会话 id 桥接器：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽），
- * 把模板当前的 sessionId getter 暴露给外层 fetch 闭包（作 AG-UI threadId）。
+ * 桥接组件：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽，桌面/移动均常驻挂载）。
+ * 1) 把模板当前的 sessionId getter 暴露给外层 fetch 闭包（作 AG-UI threadId）；
+ * 2) 懒创建会话接线：上报当前会话、注册建会话能力；
+ * 3) 揭示时机：AI 首条回复完成（loading true→false）后把隐藏会话放入列表。
  */
-function SessionIdBridge(props: { register: (getter: () => string | undefined) => void }) {
-  const { getCurrentSessionId } = useChatAnywhereSessions();
-  const { register } = props;
+function ChatBridge(props: { register: (getter: () => string | undefined) => void }) {
+  const { getCurrentSessionId, createSession } = useChatAnywhereSessions();
+  const { currentSessionId, setSessions } = useChatAnywhereSessionsState();
+  const loading = useChatAnywhereInput((v) => ({ loading: v.loading })).loading;
+
   useEffect(() => {
-    register(getCurrentSessionId);
-  }, [register, getCurrentSessionId]);
+    props.register(getCurrentSessionId);
+  }, [props.register, getCurrentSessionId]);
+
+  // 上报当前会话 id，供 beforeSubmit 判断是否需要懒创建
+  useEffect(() => {
+    newChatCoordinator.reportSession(currentSessionId);
+  }, [currentSessionId]);
+
+  // 注册懒创建能力：提交前无会话时先建会话，再等模板 loader 冲刷完成
+  useEffect(() => {
+    newChatCoordinator.registerEnsure(async () => {
+      await createSession({ name: '' });
+      await new Promise((r) => setTimeout(r, 250));
+    });
+    return () => newChatCoordinator.registerEnsure(undefined);
+  }, [createSession]);
+
+  // 懒创建会话的揭示：AI 首条回复完成（loading true→false）后才进列表
+  const prevLoadingRef = useRef(loading);
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading) {
+      const revealed = revealHiddenSessions();
+      if (revealed) setSessions(revealed);
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, setSessions]);
+
+  // 揭示兜底：重新挂载（如切换 agent 后回来）时若仍有隐藏会话，直接展示
+  useEffect(() => {
+    const revealed = revealHiddenSessions();
+    if (revealed) setSessions(revealed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return null;
 }
 
@@ -41,8 +80,9 @@ export default function Chat() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BP);
+  const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
 
-  /** 模板内部 sessionId 的 getter（由 SessionIdBridge 注入） */
+  /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
   const registerSessionGetter = useCallback((getter: () => string | undefined) => {
     sessionGetterRef.current = getter;
@@ -81,15 +121,39 @@ export default function Chat() {
 
     const rightHeader = (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <SessionIdBridge register={registerSessionGetter} />
+        {isMobile && (
+          <IconButton
+            bordered={false}
+            icon={<SparkHistoryLine />}
+            onClick={() => setSessionDrawerOpen(true)}
+          />
+        )}
+        <ChatBridge register={registerSessionGetter} />
         <SparkAgentLine size={16} style={{ color: '#666' }} />
         <Select
+          className="teapot-agent-select"
           value={currentAgent}
           options={agents.map((a) => ({ label: a.name, value: a.agentKey }))}
           onChange={(v) => setSearchParams({ agent: v })}
           style={{ width: isMobile ? 140 : 220 }}
           size={isMobile ? 'small' : 'middle'}
         />
+        {isMobile && (
+          <Drawer
+            open={sessionDrawerOpen}
+            onClose={() => setSessionDrawerOpen(false)}
+            placement="left"
+            width="80vw"
+            title={null}
+            closable={false}
+            styles={{ body: { padding: 0, height: '100%' } }}
+          >
+            <SessionPanel
+              title={activeAgent?.name || 'Teapot AI'}
+              onNavigate={() => setSessionDrawerOpen(false)}
+            />
+          </Drawer>
+        )}
       </div>
     );
 
@@ -105,6 +169,9 @@ export default function Chat() {
       session: {
         multiple: true,
         api: createSessionBridge(currentAgent),
+        // 移动端隐藏模板内置会话列表（其头部带 "Runtime WebUI" 品牌且抽屉非自定义面板），
+        // 改用 rightHeader 内的自定义抽屉；桌面端左侧栏不受影响
+        hideBuiltInSessionList: isMobile,
       },
       theme: {
         locale: 'cn',
@@ -128,9 +195,12 @@ export default function Chat() {
         placeholder: '输入消息，Enter 发送',
         maxLength: 10000,
         disclaimer: '内容由 AI 生成，请注意甄别',
+        // 懒创建会话：提交前无会话则先创建（含等待 loader 冲刷），规避模板内部竞态
+        beforeSubmit: () =>
+          newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
       },
     };
-  }, [currentAgent, activeAgent, agents, isMobile, registerSessionGetter, setSearchParams]);
+  }, [currentAgent, activeAgent, agents, isMobile, sessionDrawerOpen, registerSessionGetter, setSearchParams]);
 
   if (loadingAgents) {
     return null;

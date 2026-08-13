@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.SysConfigMapper">
+
+    <resultMap id="configMap" type="com.teamer.teapot.ai.core.model.SysConfigDO">
+        <id property="id" column="id"/>
+        <result property="configKey" column="config_key"/>
+        <result property="configValue" column="config_value"/>
+        <result property="keyVersion" column="key_version"/>
+        <result property="encrypted" column="encrypted"/>
+        <result property="updatedBy" column="updated_by"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="selectByKey" resultMap="configMap">
+        SELECT id, config_key, config_value, key_version, encrypted, updated_by, updated_at
+        FROM t_sys_config WHERE config_key = #{configKey} LIMIT 1
+    </select>
+
+    <insert id="upsert">
+        INSERT INTO t_sys_config (config_key, config_value, key_version, encrypted, updated_by)
+        VALUES (#{configKey}, #{configValue}, #{keyVersion}, #{encrypted}, #{updatedBy})
+        ON DUPLICATE KEY UPDATE
+            config_value = VALUES(config_value),
+            key_version  = VALUES(key_version),
+            encrypted    = VALUES(encrypted),
+            updated_by   = VALUES(updated_by)
+    </insert>
+</mapper>

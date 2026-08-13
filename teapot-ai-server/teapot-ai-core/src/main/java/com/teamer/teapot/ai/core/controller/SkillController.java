@@ -15,9 +15,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /**
- * Skill 工坊接口（SPEC §8；权限由 RbacAccessFilter 按 resource-list 控制）。
+ * Skill 工坊接口（SPEC §8/§15；权限由 RbacAccessFilter 按 resource-list 控制）。
  */
 @RestController
 @RequestMapping("/api/skill")
@@ -57,5 +58,17 @@ public class SkillController {
     @PostMapping("/preview")
     public Result<String> preview(@Valid @RequestBody SkillSaveRequest request) {
         return Result.ok(skillService.preview(request));
+    }
+
+    /** Git 来源状态（SPEC §15.9；登录可读，viewer 在 resource-list 显式放行） */
+    @GetMapping("/git/status")
+    public Result<Map<String, Object>> gitStatus() {
+        return Result.ok(skillService.gitStatus());
+    }
+
+    /** Git 手动同步（SPEC §15.9；developer，被 /api/skill/* 通配覆盖） */
+    @PostMapping("/git/sync")
+    public Result<Map<String, Object>> gitSync() {
+        return Result.ok(skillService.gitSync());
     }
 }

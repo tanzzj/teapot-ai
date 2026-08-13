@@ -12,12 +12,8 @@ body,
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     sans-serif;
-  /* 白色基底 + 紫色光斑（fixed 保证滚动时光斑不动；透明度足够高才能透过毛玻璃可见） */
-  background:
-    radial-gradient(1000px 620px at 15% 18%, rgba(124, 108, 240, 0.18), transparent 62%),
-    radial-gradient(900px 560px at 78% 12%, rgba(124, 108, 240, 0.14), transparent 62%),
-    radial-gradient(820px 520px at 58% 82%, rgba(124, 108, 240, 0.12), transparent 62%),
-    #ffffff;
+  /* 纯浅色基底（fixed 无内容，保留属性以防后续调整）；毛玻璃面板在其上呈现磨砂质感 */
+  background: #f7f7f9;
   background-attachment: fixed;
 }
 
@@ -73,6 +69,33 @@ body {
 /* Welcome 提示词的 sparkle 图标是模板硬编码的紫色图片，压成黑色系与 Carbon 主题一致 */
 .agentscope-runtime-webui-welcome-prompts-prompt-icon {
   filter: grayscale(1) brightness(0.25);
+}
+
+/* 头部 Agent 选择器：去边框，对齐 Spark Chat 头部的无边框模型选择器（桌面/移动一致） */
+.teapot-agent-select [class*='-select-selector'] {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+/* ── Spark Chat 浅紫呼吸光效（桌面端）──
+   发送框 / New Chat 按钮外围柔和紫色光晕往复呼吸 */
+@keyframes teapot-breath-glow {
+  0%,
+  100% {
+    box-shadow: 0 2px 10px rgba(31, 38, 135, 0.05), 0 0 0 0 rgba(97, 92, 237, 0);
+  }
+  50% {
+    box-shadow: 0 2px 10px rgba(31, 38, 135, 0.05), 0 0 22px 3px rgba(97, 92, 237, 0.16);
+  }
+}
+@media (min-width: 769px) {
+  .agentscope-runtime-webui-sender {
+    animation: teapot-breath-glow 3.2s ease-in-out infinite;
+  }
+  .teapot-new-chat-btn {
+    animation: teapot-breath-glow 3.2s ease-in-out infinite;
+  }
 }
 
 /* ── 会话面板接管（leftHeader 插槽换成 SessionPanel） ──

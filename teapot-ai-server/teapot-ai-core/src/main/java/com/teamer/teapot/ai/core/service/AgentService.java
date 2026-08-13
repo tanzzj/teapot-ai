@@ -1,13 +1,16 @@
 package com.teamer.teapot.ai.core.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.common.model.PageData;
 import com.teamer.teapot.ai.core.agui.TeapotAguiAgentRegistrar;
+import com.teamer.teapot.ai.core.config.AgentRunConnection;
 import com.teamer.teapot.ai.core.config.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
+import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.AgentSkillBind;
 import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
 import com.teamer.teapot.ai.core.model.dto.AgentUpdateRequest;
@@ -27,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Agent 管理（SPEC §7）：CRUD + Skill 绑定 + 同步调试对话。
@@ -49,16 +53,20 @@ public class AgentService {
     private final TeapotAguiAgentRegistrar aguiRegistrar;
     private final AuditService auditService;
     private final TeapotAiProperties properties;
+    private final AgentRunConnection agentRunConnection;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                         AgentRegistry agentRegistry, TeapotAguiAgentRegistrar aguiRegistrar,
-                        AuditService auditService, TeapotAiProperties properties) {
+                        AuditService auditService, TeapotAiProperties properties,
+                        AgentRunConnection agentRunConnection) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.agentRegistry = agentRegistry;
         this.aguiRegistrar = aguiRegistrar;
         this.auditService = auditService;
         this.properties = properties;
+        this.agentRunConnection = agentRunConnection;
     }
 
     public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled) {
@@ -91,6 +99,7 @@ public class AgentService {
                 ? DEFAULT_COMPACTION_TRIGGER : request.getCompactionTrigger());
         agent.setCompactionKeep(request.getCompactionKeep() == null
                 ? DEFAULT_COMPACTION_KEEP : request.getCompactionKeep());
+        agent.setFeature(validateFeature(request.getFeature()));
         agent.setStatus(1);
         agent.setCreatedBy(ContextUtil.currentUserId());
         if (existed != null) {
@@ -138,6 +147,10 @@ public class AgentService {
         }
         if (request.getCompactionKeep() != null) {
             agent.setCompactionKeep(request.getCompactionKeep());
+        }
+        // feature 非 null 时整体替换（SPEC §16.6；空对象 {} = 清空）
+        if (request.getFeature() != null) {
+            agent.setFeature(validateFeature(request.getFeature()));
         }
         agentMapper.update(agent);
         if (request.getSkillNames() != null) {
@@ -210,6 +223,22 @@ public class AgentService {
             throw new BizException("Agent 不存在：" + agentKey);
         }
         return agent;
+    }
+
+    /**
+     * feature 保存前强校验（SPEC §16.6）：枚举/范围/前缀/全局接入，不合法直接拒绝；
+     * 返回入库 JSON（空命名空间返回 null）。
+     */
+    private String validateFeature(Map<String, Object> featureMap) {
+        try {
+            AgentFeature feature = AgentFeature.parse(objectMapper.writeValueAsString(featureMap));
+            feature.validate(agentRunConnection.anyConfigured());
+            return feature.toJson();
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BizException("feature 序列化失败：" + e.getMessage());
+        }
     }
 
     /** 整体替换绑定集合（skillNames 为 null 时不动） */
