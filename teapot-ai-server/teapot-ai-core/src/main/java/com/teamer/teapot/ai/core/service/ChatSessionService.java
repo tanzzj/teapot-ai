@@ -7,6 +7,7 @@ import com.teamer.teapot.ai.core.dao.ChatSessionMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.ChatSessionDO;
 import com.teamer.teapot.ai.core.model.dto.SessionCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.SessionRenameRequest;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import io.agentscope.extensions.mysql.state.MysqlAgentStateStore;
 import lombok.extern.slf4j.Slf4j;
@@ -56,6 +57,24 @@ public class ChatSessionService {
                 ? agent.getName() : request.getTitle());
         chatSessionMapper.insert(session);
         return session;
+    }
+
+    /** 会话改名（懒创建会话后以首条消息回填标题），仅允许改本人会话 */
+    @Transactional(rollbackFor = Exception.class)
+    public void rename(SessionRenameRequest request) {
+        String userId = requireUserId();
+        ChatSessionDO session = chatSessionMapper.selectByUserSession(userId, request.getSessionId());
+        if (session == null) {
+            throw new BizException("会话不存在：" + request.getSessionId());
+        }
+        String title = request.getTitle().trim();
+        if (title.isEmpty()) {
+            return;
+        }
+        if (title.length() > 50) {
+            title = title.substring(0, 50);
+        }
+        chatSessionMapper.touch(userId, request.getSessionId(), title);
     }
 
     /** 清空会话（SPEC §9）：删 stateStore 中的消息状态 + 删索引记录 */

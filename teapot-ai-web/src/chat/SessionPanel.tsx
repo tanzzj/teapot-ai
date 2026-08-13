@@ -7,9 +7,8 @@ import {
 import type { SessionItem } from './sessionBridge';
 
 /**
- * 自定义会话面板（接管模板 leftHeader 插槽）。
- * 模板内置列表项依赖 IntersectionObserver 渲染且无时间槽位，
- * 这里自渲染普通 div：点击必然触发切换，并展示最后活跃时间。
+ * 自定义会话面板（桌面接管模板 leftHeader 插槽 / 移动端置于自定义抽屉）。
+ * 懒创建与揭示接线在 ChatBridge（常驻挂载），这里纯展示与交互。
  */
 
 function formatTime(ts?: string) {
@@ -24,11 +23,17 @@ function formatTime(ts?: string) {
     : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 }
 
-export default function SessionPanel(props: { title: string }) {
+export default function SessionPanel(props: { title: string; onNavigate?: () => void }) {
   const { sessions, currentSessionId } = useChatAnywhereSessionsState();
-  const { createSession, changeCurrentSessionId, removeSession } =
-    useChatAnywhereSessions();
+  const { changeCurrentSessionId, removeSession } = useChatAnywhereSessions();
   const list = (sessions || []) as SessionItem[];
+
+  // New Chat 不立即创建后端会话：清空当前会话回到欢迎页，
+  // 用户发送第一条消息时由 beforeSubmit 触发创建（标题由模板改为首条消息）
+  const handleNewChat = () => {
+    changeCurrentSessionId(undefined as unknown as string);
+    props.onNavigate?.();
+  };
 
   return (
     <div
@@ -48,8 +53,9 @@ export default function SessionPanel(props: { title: string }) {
       <Button
         block
         type="primary"
+        className="teapot-new-chat-btn"
         icon={<SparkPlusLine />}
-        onClick={() => createSession()}
+        onClick={handleNewChat}
       >
         New Chat
       </Button>
@@ -76,7 +82,10 @@ export default function SessionPanel(props: { title: string }) {
               key={s.id}
               className="teapot-session-item"
               data-active={active ? '1' : '0'}
-              onClick={() => changeCurrentSessionId(s.id)}
+              onClick={() => {
+                changeCurrentSessionId(s.id);
+                props.onNavigate?.();
+              }}
               style={{
                 position: 'relative',
                 padding: '8px 12px',

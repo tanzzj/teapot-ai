@@ -16,3 +16,7 @@ export function sessionCreate(agentKey: string, title?: string) {
 export function sessionClear(sessionId: string) {
   return unwrap<void>(http.delete<Result<void>>(`/api/chat/session/clear/${sessionId}`));
 }
+
+export function sessionRename(sessionId: string, title: string) {
+  return unwrap<void>(http.put<Result<void>>('/api/chat/session/rename', { sessionId, title }));
+}

@@ -31,6 +31,7 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/skill/*
         - /api/chat/*
         - /api/model/*
+        - /api/config/sandbox-options          # 沙箱选项与接入状态（写 /api/config/sandbox 仅 admin，SPEC §16.5.1）
         - /api/user/profile
         - /agui/*
     - roleId: viewer
@@ -39,6 +40,7 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/agent/detail/*
         - /api/skill/list
         - /api/skill/detail/*
+        - /api/skill/git/status                # Git 来源状态只读（SPEC §15.9）
         - /api/chat/*
         - /api/model/presets
         - /api/user/profile
@@ -57,6 +59,26 @@ teapot:
         password: ${TEAPOT_AI_DB_PASSWORD}
       workspace-root: ${AGENTSCOPE_WORKSPACE:./workspace}
       create-if-not-exist: true
+    skill-git:                                    # Git Skill 仓库（第二 skill 来源，SPEC §15.5）
+      enabled:    ${GIT_SKILL_ENABLED:false}      # 开关：false 时 Bean 不装配，零副作用
+      remote-url: ${GIT_SKILL_REMOTE:}            # 空 = 未配置；私有仓凭证仅经系统 git 配置
+      branch:     ${GIT_SKILL_BRANCH:main}
+      local-path: ${GIT_SKILL_LOCAL_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/git-skills}
+      source:     git                             # 列表/详情展示的 source 标识
+      auto-sync:  true                            # 读操作轻量 ls-remote，HEAD 变化才 pull
+    sandbox:                                      # 沙箱双链路配置（SPEC §16.5 修订；凭证在 t_sys_config / env）
+      link: ${SANDBOX_LINK:e2b}                   # 首选链路：e2b / agentrun；不可用时自动回落另一链路
+      e2b:                                        # E2B 兼容链路（AgentRun E2B 端点，CLI 实测可用）
+        enabled: ${SANDBOX_E2B_ENABLED:true}
+        codec: JSON                               # 阿里云兼容端点 envd 仅支持 connect+json（PROTO 会 400）
+        default-workspace-root: /home/user
+        default-idle-timeout-seconds: 1800
+        snapshot-path: ${AGENT_SNAPSHOT_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/sandbox-snapshots}
+      agent-run:                                  # AgentRun MCP 链路（需先 ActivateTemplateMCP）
+        enabled: ${SANDBOX_AGENTRUN_ENABLED:true}
+        snapshot-path: ${AGENT_SNAPSHOT_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/sandbox-snapshots}
+        default-workspace-root: /home/agentscope/workspace
+        default-idle-timeout-seconds: 1800
     model-presets:                               # 兜底白名单：仅当 t_model_entry 无启用入口时生效（正常由管理界面配置，SPEC §6.4 修订）
       - dashscope:qwen-plus
       - dashscope:qwen-max

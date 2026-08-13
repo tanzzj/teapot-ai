@@ -1,9 +1,17 @@
 package com.teamer.teapot.ai.core.config;
 
+import com.teamer.teapot.ai.common.exception.BizException;
 import com.zaxxer.hikari.HikariDataSource;
+import io.agentscope.core.skill.repository.GitSkillRepository;
 import io.agentscope.core.skill.repository.mysql.MysqlSkillRepository;
+import io.agentscope.core.util.JacksonJsonCodec;
+import io.agentscope.core.util.JsonUtils;
 import io.agentscope.extensions.mysql.state.MysqlAgentStateStore;
+import io.agentscope.extensions.sandbox.agentrun.AgentRunHarnessSandboxJacksonModule;
+import io.agentscope.extensions.sandbox.e2b.E2bHarnessSandboxJacksonModule;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -12,6 +20,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 import javax.sql.DataSource;
+import java.nio.file.Path;
 
 /**
  * 数据源与 AgentScope 基础设施装配（SPEC §6.2/§8.1）：
@@ -23,6 +32,18 @@ import javax.sql.DataSource;
 @Configuration
 @EnableConfigurationProperties(TeapotAiProperties.class)
 public class AgentScopeConfig {
+
+    /**
+     * SandboxState 多态反序列化（SPEC §16.7 / 风险 17）：全局 JsonCodec 注册 AgentRun/E2B 子类型，
+     * 否则跨 call 沙箱状态恢复失败。启动期一次性设置，幂等。
+     */
+    @PostConstruct
+    void registerSandboxJacksonModule() {
+        JacksonJsonCodec codec = new JacksonJsonCodec();
+        codec.getObjectMapper().registerModule(new AgentRunHarnessSandboxJacksonModule());
+        codec.getObjectMapper().registerModule(new E2bHarnessSandboxJacksonModule());
+        JsonUtils.setJsonCodec(codec);
+    }
 
     /** 业务库 teapot_ai（spring.datasource.*） */
     @Bean
@@ -78,5 +99,20 @@ public class AgentScopeConfig {
                 .createIfNotExist(properties.getAgentscope().isCreateIfNotExist())
                 .writeable(false)
                 .build();
+    }
+
+    /**
+     * Git Skill 仓库（第二 skill 来源，SPEC §15.6）：enabled=false 时不装配，零副作用；
+     * 消费方一律 ObjectProvider 注入。remote-url 空则 fail-fast，避免静默降级。
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(prefix = "teapot.ai.skill-git", name = "enabled", havingValue = "true")
+    public GitSkillRepository gitSkillRepository(TeapotAiProperties properties) {
+        TeapotAiProperties.SkillGit cfg = properties.getSkillGit();
+        if (cfg.getRemoteUrl() == null || cfg.getRemoteUrl().isBlank()) {
+            throw new BizException("teapot.ai.skill-git.remote-url 未配置：Git Skill 已启用但仓库地址为空");
+        }
+        return new GitSkillRepository(cfg.getRemoteUrl(), cfg.getBranch(),
+                Path.of(cfg.getLocalPath()), cfg.getSource(), cfg.isAutoSync());
     }
 }

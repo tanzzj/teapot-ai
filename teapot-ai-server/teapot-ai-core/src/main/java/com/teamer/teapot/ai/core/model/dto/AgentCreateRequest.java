@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 新增 Agent 请求（SPEC §7.1）。
@@ -37,4 +38,7 @@ public class AgentCreateRequest {
 
     /** 绑定的 skill name 列表（可空） */
     private List<String> skillNames;
+
+    /** 扩展功能配置（一期仅 sandbox 命名空间，SPEC §16.6；保存时强校验） */
+    private Map<String, Object> feature;
 }

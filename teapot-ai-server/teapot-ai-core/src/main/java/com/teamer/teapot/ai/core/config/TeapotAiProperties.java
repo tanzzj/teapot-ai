@@ -15,6 +15,12 @@ public class TeapotAiProperties {
 
     private Agentscope agentscope = new Agentscope();
 
+    /** Git Skill 仓库（第二 skill 来源，SPEC §15.5） */
+    private SkillGit skillGit = new SkillGit();
+
+    /** 沙箱全局配置（SPEC §16.5 修订：e2b / agent-run 双链路；凭证走 t_sys_config） */
+    private Sandbox sandbox = new Sandbox();
+
     /** 管理台模型下拉白名单（provider:model，yml 维护不改代码，SPEC §6.4） */
     private List<String> modelPresets = new ArrayList<>();
 
@@ -33,6 +39,61 @@ public class TeapotAiProperties {
             private String url;
             private String username;
             private String password;
+        }
+    }
+
+    /** Git Skill 仓库配置（SPEC §15.5；鉴权复用系统 git 配置） */
+    @Data
+    public static class SkillGit {
+        /** 功能开关：false 时 Bean 不装配，零副作用 */
+        private boolean enabled = false;
+        /** 远程仓库地址（SSH/HTTPS）；私有仓凭证仅经系统 git 配置，不写此处 */
+        private String remoteUrl;
+        private String branch = "main";
+        /** 本地 clone 路径（可再生，不纳入备份） */
+        private String localPath;
+        /** 列表/详情展示的 source 标识 */
+        private String source = "git";
+        /** 读操作轻量 ls-remote，HEAD 变化才 pull */
+        private boolean autoSync = true;
+    }
+
+    /**
+     * 沙箱全局配置（SPEC §16.5 修订）：e2b / agent-run 双链路均为配置项。
+     * link 选择首选链路；首选未启用或凭证不齐时自动回落另一链路（AgentRegistry 路由）。
+     * 凭证与连接参数在 t_sys_config（可被 env 覆盖），此处仅行为开关与默认值。
+     */
+    @Data
+    public static class Sandbox {
+        /** 首选链路：e2b / agentrun（大小写不敏感） */
+        private String link = "e2b";
+        private E2b e2b = new E2b();
+        private Agentrun agentrun = new Agentrun();
+
+        @Data
+        public static class E2b {
+            /** 链路开关：false 时即使凭证齐备也不走 E2B */
+            private boolean enabled = true;
+            /** envd connect 编解码：阿里云兼容端点仅支持 JSON（PROTO 会 400） */
+            private String codec = "JSON";
+            /** 全局默认工作区根（feature 未指定时用） */
+            private String defaultWorkspaceRoot = "/home/user/workspace";
+            /** 全局默认闲置超时（秒），feature 未指定时用 */
+            private int defaultIdleTimeoutSeconds = 1800;
+            /** 本地快照存放目录（LOCAL_SNAPSHOT 持久化用，服务器本地路径） */
+            private String snapshotPath = "./workspace/sandbox-snapshots";
+        }
+
+        @Data
+        public static class Agentrun {
+            /** 链路开关：false 时即使凭证齐备也不走 AgentRun MCP */
+            private boolean enabled = true;
+            /** 本地快照存放目录（LOCAL_SNAPSHOT 持久化用，服务器本地路径） */
+            private String snapshotPath = "./workspace/sandbox-snapshots";
+            /** 全局默认工作区根（feature 未指定时用） */
+            private String defaultWorkspaceRoot = "/home/agentscope/workspace";
+            /** 全局默认闲置超时（秒），feature 未指定时用 */
+            private int defaultIdleTimeoutSeconds = 1800;
         }
     }
 }

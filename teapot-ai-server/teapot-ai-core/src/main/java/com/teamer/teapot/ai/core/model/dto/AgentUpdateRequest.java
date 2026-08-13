@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 修改 Agent 请求（SPEC §7.1；字段为 null 表示不修改；agentKey 不可改）。
@@ -28,4 +29,7 @@ public class AgentUpdateRequest {
 
     /** 非 null 时整体替换绑定集合 */
     private List<String> skillNames;
+
+    /** 非 null 时整体替换扩展功能配置（SPEC §16.6；保存时强校验） */
+    private Map<String, Object> feature;
 }

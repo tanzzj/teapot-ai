@@ -21,6 +21,8 @@ public class AgentDO implements Serializable {
     private String modelId;
     private Integer compactionTrigger;
     private Integer compactionKeep;
+    /** 扩展功能配置 JSON（一期仅 sandbox 命名空间，SPEC §16.6） */
+    private String feature;
     /** 1 启用 0 停用（删除即软删为 0） */
     private Integer status;
     private String createdBy;

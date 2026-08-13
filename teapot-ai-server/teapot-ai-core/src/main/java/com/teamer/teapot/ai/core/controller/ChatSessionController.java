@@ -3,12 +3,14 @@ package com.teamer.teapot.ai.core.controller;
 import com.teamer.teapot.ai.common.model.Result;
 import com.teamer.teapot.ai.core.model.ChatSessionDO;
 import com.teamer.teapot.ai.core.model.dto.SessionCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.SessionRenameRequest;
 import com.teamer.teapot.ai.core.service.ChatSessionService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -38,6 +40,13 @@ public class ChatSessionController {
     @PostMapping("/create")
     public Result<ChatSessionDO> create(@Valid @RequestBody SessionCreateRequest request) {
         return Result.ok(chatSessionService.create(request));
+    }
+
+    /** 会话改名（懒创建会话后以首条消息回填标题） */
+    @PutMapping("/rename")
+    public Result<Void> rename(@Valid @RequestBody SessionRenameRequest request) {
+        chatSessionService.rename(request);
+        return Result.ok();
     }
 
     /** 清空会话（删状态 + 删索引） */

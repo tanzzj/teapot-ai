@@ -26,7 +26,7 @@ RBAC 登录鉴权体系（`teapot-rbac` 模块）。本项目在**新仓库 `tea
 ### 1.1 非目标（本期不做）
 
 - 不改造老 teapot 工程（JDK 8 / SB 2.1 保持原样，新平台独立部署）。
-- 不引入 K8s / Sandbox 容器化执行（`DockerFilesystemSpec` 沙箱留作二期，见 §15 演进路线）。
+- 沙箱执行选用**阿里云 AgentRun** 托管沙箱（`AgentRunFilesystemSpec`，见 §16）；不自建 K8s / Docker 沙箱。
 - 不引入 Redis / Nacos / OSS（生产强化项，见 §14）。
 - 不做 Agent 自学习闭环（`enableSkillManageTool` + Promotion Gate），留作二期。
 
@@ -434,15 +434,20 @@ agentscope:
   "modelId": "dashscope:qwen-plus",
   "compactionTrigger": 30,
   "compactionKeep": 10,
-  "skillNames": ["code-reviewer", "sql-helper"]
+  "skillNames": ["code-reviewer", "sql-helper"],
+  "feature": { "sandbox": { "enabled": false } }
 }
 ```
+
+`feature` 为通用扩展字段（JSON），一期仅 `sandbox` 命名空间，结构与校验规则见 §16.6；
+`update` 请求携带 `feature` 时为整体替换语义。
 
 ### 7.2 关键流程
 
 1. 新增 Agent：校验 `agentKey` 唯一（`^[a-z][a-z0-9-]{2,31}$`）→ 写 `t_agent` + `t_agent_skill`
    → 在 workspace 根目录下生成该 agent 的 `AGENTS.md`（内容 = sysPrompt，作为 workspace 人设种子）。
-2. 修改/删除：写库 → `AgentRegistry.invalidate(agentKey)`。
+2. 修改/删除：写库 → `AgentRegistry.invalidate(agentKey)`；携带 `feature` 时先按 §16.6 规则强校验
+   （枚举/范围/前缀/全局接入状态），不合法直接拒绝不写库。
 3. 对话：前端携 `X-Agent-Id` 走 `/agui/**`，`AgentRegistry` 惰性构建实例。
 
 ---
@@ -462,6 +467,8 @@ agentscope:
 平台侧持有 `writeable=true` 的管理实例用于 CRUD；**注入 Agent 的实例 `writeable=false`**
 （官方生产清单：Agent 只读，写回走管理台）。
 
+Git 仓库为第二 skill 来源（Git PR 流程管控版本，详见 §15）。
+
 ### 8.2 配置化 Skill 工坊（核心产品能力）
 
 "通过配置建设一切 skill" = 用户**不写 SKILL.md 文件**，用表单 + 编辑器生产 skill：
@@ -472,7 +479,7 @@ agentscope:
 | 触发描述 `description` | frontmatter `description:`（决定 Agent 何时加载该 skill，界面给出写作指引） |
 | 指令正文 `instructions` | markdown body（Monaco 编辑器，支持变量提示） |
 | 参考文档列表 `references[]` | `references/<文件名>` → `agentscope_skill_resources` |
-| 脚本列表 `scripts[]` | `scripts/<文件名>` → `agentscope_skill_resources`（提示：脚本执行依赖 shell/sandbox，一期仅随 skill 分发，执行能力二期沙箱提供） |
+| 脚本列表 `scripts[]` | `scripts/<文件名>` → `agentscope_skill_resources`（提示：脚本执行依赖 shell/sandbox；AgentRun 沙箱启用后（§16）可在沙箱内执行，落盘方式见 §16.12） |
 
 后端职责：把表单序列化为标准 `SKILL.md`（frontmatter + body），调用
 `MysqlSkillRepository.save(List.of(skill), overwrite=true)`；删除调用 `repo.delete(name)`。
@@ -493,7 +500,7 @@ agentscope:
 | 层 | 平台落地 |
 |----|----------|
 | L1 项目全局目录 | 不使用 |
-| L2 市场（Marketplace） | **MysqlSkillRepository（平台主战场，配置化 CRUD）** |
+| L2 市场（Marketplace） | **MysqlSkillRepository（平台主战场，配置化 CRUD）** + GitSkillRepository（Git 管控来源，见 §15） |
 | L3 workspace 共享 | 各 agent workspace 预留 `skills/`，用于运维手工放置紧急 skill |
 | L4 用户级 | 一期不使用；二期"个人 skill"可用 `<userId>/skills/` 覆盖 |
 
@@ -543,6 +550,7 @@ CREATE TABLE t_agent (
   model_id            VARCHAR(64)  NOT NULL DEFAULT 'dashscope:qwen-plus' COMMENT 'provider:model',
   compaction_trigger  INT          NOT NULL DEFAULT 30,
   compaction_keep     INT          NOT NULL DEFAULT 10,
+  feature             JSON         NULL COMMENT '扩展功能配置(JSON)：sandbox 等，SPEC §16.6（存量升级走 V4__agent_feature.sql）',
   status              TINYINT      NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
   created_by          VARCHAR(64)  NOT NULL,
   created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -576,6 +584,19 @@ CREATE TABLE t_chat_session (
   UNIQUE KEY uk_user_session (user_id, session_id),
   KEY idx_user_agent (user_id, agent_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话索引';
+
+-- 系统配置表（含加密凭证，SPEC §16.5.1，存量升级走 V5__sys_config.sql）
+CREATE TABLE t_sys_config (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  config_key   VARCHAR(64)  NOT NULL COMMENT 'agentrun.api_key / agentrun.account_id / agentrun.region / …',
+  config_value TEXT         NOT NULL COMMENT '敏感项存 AES-GCM 密文 v<keyVer>:<base64(iv+ciphertext+tag)>',
+  key_version  TINYINT      NOT NULL DEFAULT 1 COMMENT '主密钥版本，轮换用',
+  encrypted    TINYINT      NOT NULL DEFAULT 0 COMMENT '1密文 0明文',
+  updated_by   VARCHAR(64)  NOT NULL,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_config_key (config_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统配置（含加密凭证）';
 ```
 
 ### 10.2 AgentScope 库 `agentscope`（框架自动建表，DDL 列此供审阅/备份参考，勿手工改）
@@ -903,7 +924,8 @@ agentscope:                                      # AG-UI starter，见 §6.3
 
 ## 14. 安全设计
 
-1. 密钥零落盘：DB 密码 / JWT secret / 模型 API Key 仅通过环境变量注入。
+1. 密钥管理：DB 密码 / JWT secret 仅环境变量注入；**业务侧密钥**（AgentRun API Key 等，§16.5.1）
+   允许对称加密入库（AES-256-GCM，主密钥仍仅环境变量），禁止明文落库；UI/日志/审计一律脱敏。
 2. BCrypt 存密；登录失败统一文案，不区分"用户不存在/密码错误"；登录增加失败计数锁定
    （5 次锁 10 分钟，内存计数一期即可）。
 3. JWT 校验在过滤器链最前；`/agui/**` 与 `/api/**` 同等鉴权；`RuntimeContext.userId` 服务端强制。
@@ -915,7 +937,525 @@ agentscope:                                      # AG-UI starter，见 §6.3
 
 ---
 
-## 15. 里程碑与验收标准
+## 15. Git Skill 仓库接入（GitSkillRepository）
+
+### 15.1 背景与目标
+
+§8 的 MySQL Skill Repository 支撑“配置化建设一切 skill”的在线编辑场景；但团队级技能资产还需要
+**Git PR 流程管控**（可 review、可回滚、跨项目共享）。本章接入 AgentScope 官方
+`agentscope-extensions-skill-git-repository`，把远程 Git 仓库作为**第二 skill 来源**，与 MySQL 来源共存：
+
+- Git 来源：**只读**，内容经 PR 合并后由平台自动/手动同步生效；
+- MySQL 来源：保持 §8 全部能力（表单 CRUD、预览、级联解绑）不变；
+- 两来源对 Agent 透明：绑定仍按 skill name（`t_agent_skill` 不感知来源）。
+
+### 15.2 非目标
+
+- 平台**不写回 Git**（不提供在线编辑 git skill 的能力，修改一律走 PR）；
+- 一期仅支持**单仓库**配置（多仓库管理表 `t_skill_repo` 留二期）；
+- 不改变 §8.4 四层模型与 `SkillFilter` 语义；沙箱执行由 §16 单独接入，本章不涉及。
+
+### 15.3 官方能力基线（文档 + 2.0.1 构件实测）
+
+依赖构件：`io.agentscope:agentscope-extensions-skill-git-repository:${agentscope.version}`（2.0.1，
+Maven Central 已核实存在；底层 JGit，HTTPS/SSH 均支持）。
+
+类：`io.agentscope.core.skill.repository.GitSkillRepository implements AgentSkillRepository`。
+2.0.1 实测构造器（javap）：
+
+| # | 签名 | 语义（官方文档） |
+|---|------|------------------|
+| 1 | `(String remoteUrl)` | 默认分支 + 临时目录 + autoSync=true |
+| 2 | `(String remoteUrl, Path localPath)` | 自定义本地 clone 路径 |
+| 3 | `(String remoteUrl, String branch)` | 选定分支 |
+| 4 | `(String remoteUrl, boolean autoSync)` | 关闭自动同步 |
+| 5 | `(String remoteUrl, String branch, Path localPath, String source, boolean autoSync)` | **平台采用**：全参 |
+| 6 | `(…, boolean autoSync, String extra)` | 末参语义待实施期确认（疑似凭证参数，见 §18 风险 13） |
+
+关键行为（官方文档 v2《Git 技能仓库》）：
+
+- **autoSync=true（默认）**：`getSkill/getAllSkills/skillExists` 读操作前先 `ls-remote` 轻量检查，
+  仅远端 HEAD 变化才真正 pull，平时几乎零开销；
+- **autoSync=false**：完全不自动 pull，需手动 `repo.sync()`；
+- **鉴权复用系统级 Git 配置**，Java 侧不管理凭证：HTTPS 走 `~/.gitconfig` credential helper；
+  SSH 走 `~/.ssh/` 密钥与 ssh-agent；
+- 本地 clone：临时目录（注册 JVM Shutdown Hook 清理）或自定义 Path；建议 Spring 单例持有、退出统一 `close()`；
+- 多实例部署各自维护一份 clone，无锁竞争。
+
+`AgentSkillRepository` 接口（javap 实测）：`getSkill / getAllSkillNames / getAllSkills / save /
+delete / skillExists / getRepositoryInfo / getSource / setWriteable / isWriteable / close`。
+
+**关键实测**：`HarnessAgent.Builder` 同时提供 `skillRepository(单个)` 与
+`skillRepositories(List<AgentSkillRepository>)` —— 多来源**无需自写组合仓库**，直接传列表。
+
+### 15.4 总体架构
+
+```
+                    ┌────────────────────────────┐
+  Skill 工坊(§8) ──写──▶ MysqlSkillRepository(admin, writeable=true)
+                    │    MysqlSkillRepository(agent, writeable=false) ─
+  远程 Git 仓库 ──clone──▶ GitSkillRepository(read-only, autoSync) ────┤ skillRepositories(List)
+                    └────────────────────────────┘                    ▼
+                                                              HarnessAgent（SkillFilter 按 name 过滤）
+```
+
+- **读侧合并**：`SkillService.list/detail` 同时读两来源，`source` 字段区分 `platform` / `git`；
+- **写侧隔离**：`save/delete` 只落 MySQL，且对 git 来源做同名守卫（§15.8）；
+- **Agent 侧**：`AgentRegistry` 改传 `skillRepositories([mysqlAgent, git?])`，`SkillFilter` 语义不变
+  （按 name 跨来源过滤；空绑定 = 两来源全集）。
+
+### 15.5 配置设计
+
+`TeapotAiProperties` 增加嵌套 `SkillGit`；`application.yml` 草案：
+
+```yaml
+teapot:
+  ai:
+    skill-git:
+      enabled:    ${GIT_SKILL_ENABLED:false}          # 功能开关：false 时 Bean 不装配，零副作用
+      remote-url: ${GIT_SKILL_REMOTE:}                # 空 = 未配置；私有仓凭证仅经环境变量注入
+      branch:     ${GIT_SKILL_BRANCH:main}
+      local-path: ${GIT_SKILL_LOCAL_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/git-skills}
+      source:     git                                 # 列表/详情展示的 source 标识
+      auto-sync:  true                                # 读操作轻量 ls-remote，HEAD 变化才 pull
+```
+
+服务器侧（§11/§13 约定）：`app.env` 增加 `GIT_SKILL_ENABLED=true`、`GIT_SKILL_REMOTE=…`、
+`GIT_SKILL_LOCAL_PATH=/main/apps/teapot-ai/git-skills`；clone 目录可再生，**不纳入备份清单**。
+
+### 15.6 Bean 装配（AgentScopeConfig 改造）
+
+```java
+@Bean(destroyMethod = "close")
+@ConditionalOnProperty(prefix = "teapot.ai.skill-git", name = "enabled", havingValue = "true")
+public GitSkillRepository gitSkillRepository(TeapotAiProperties props) {
+    SkillGit cfg = props.getSkillGit();
+    return new GitSkillRepository(cfg.getRemoteUrl(), cfg.getBranch(),
+            Path.of(cfg.getLocalPath()), cfg.getSource(), cfg.isAutoSync());
+}
+```
+
+- `remote-url` 为空时启动报配置错误（fail-fast，避免静默降级）；
+- 消费方一律 `ObjectProvider<GitSkillRepository>` 注入，`enabled=false` 时自然缺席；
+- BOM 增加 `agentscope-extensions-skill-git-repository`（版本随 `${agentscope.version}`），core 模块加依赖。
+
+### 15.7 AgentRegistry 改造
+
+`build(agentKey)` 中：
+
+```java
+List<AgentSkillRepository> repos = new ArrayList<>();
+repos.add(skillRepositoryAgent);                       // MySQL 只读实例（现状）
+GitSkillRepository git = gitRepoProvider.getIfAvailable();
+if (git != null) repos.add(git);
+HarnessAgent.builder()… .skillRepositories(repos) …   // 替换原 .skillRepository(单个)
+```
+
+- 列表顺序 `[mysql, git]`；同名合并优先级官方未文档化 → 平台以**跨来源同名守卫**（§15.8）规避歧义，
+  实际行为由集成测试记录（§18 风险 14）；
+- `invalidate()` 语义不变；git 内容更新无需重建实例（autoSync 读时生效，与 §8.2 动态合并一致）。
+
+### 15.8 SkillService 改造（双来源读、单来源写）
+
+| 方法 | 改造 |
+|------|------|
+| `list()` | mysql 全量 + git 全量合并；按 name 去重（防御性：git 优先 + `log.warn`）；`SkillListVO.source` 区分 |
+| `detail(name)` | 两来源按“mysql 优先存在性”取数并回填 `source`；git 来源前端只读（§15.12） |
+| `save()` | **同名守卫**：`git.skillExists(name)` 为真 → `BizException("与 Git 仓库 skill 同名，请走 Git PR 流程修改")` |
+| `delete()` | 仅 mysql 存在才允许删；git 来源 → 拒绝 |
+| `gitStatus()` | 新增：`{enabled, remoteMasked, branch, skillCount, lastSyncAt}`；remote 脱敏（剥 userinfo） |
+| `gitSync()` | 新增：`repo.sync()` + 记录 `lastSyncAt` + 审计 `skill.git.sync`；返回最新列表计数 |
+
+体积上限（§8.2 SKILL.md ≤256KB / 单资源 ≤1MB）对 git 来源**只做展示告警不拦截**（内容归 Git 管）。
+
+### 15.9 REST API 增量
+
+| Method | Path | 说明 | 权限 |
+|--------|------|------|------|
+| GET | `/api/skill/git/status` | Git 来源状态（enabled/branch/skillCount/lastSyncAt/remoteMasked） | 登录（viewer 可读） |
+| POST | `/api/skill/git/sync` | 手动同步（autoSync=false 或运维强制刷新） | developer |
+
+RBAC yml：viewer 资源列表追加 `/api/skill/git/status`；developer 已被 `/api/skill/*` 通配覆盖 sync。
+现有 `/api/skill/list`、`/api/skill/detail/{name}` 出参增加 `source` 字段（向后兼容）。
+
+### 15.10 Git 仓库目录约定
+
+```
+repo-root/
+├── <skill-name>/
+│   ├── SKILL.md            # frontmatter: name（必须等于目录名）+ description
+│   ├── references/*.md     # 参考文档（可选）
+│   └── scripts/*           # 脚本（可选；一期只分发不执行，§1.1）
+├── <another-skill>/SKILL.md
+└── README.md               # 无 SKILL.md 的目录/文件被忽略
+```
+
+- 扫描规则以官方实现为准（含 `SKILL.md` 的目录识别为 skill）；集成测试用 fixture 仓库核实，
+  若官方支持其他布局（如根级 SKILL.md）再修订本节约定（§18 风险 15）；
+- CI 建议（仓库侧）：校验 frontmatter `name` 与目录名一致、description 非空、体积上限。
+
+### 15.11 同步与降级矩阵
+
+| 场景 | 行为 |
+|------|------|
+| 启动首次 clone 失败（网络/凭证） | error 日志；git 来源空集；平台（mysql）功能不受影响；status 体现 skillCount=0 |
+| 运行期 ls-remote/pull 失败 | 沿用上次成功 clone 内容，warn 日志（官方 autoSync 语义） |
+| 本地 clone 目录损坏 | 运维处置：删除 `local-path` 后调用 `/api/skill/git/sync` 或重启（触发重 clone） |
+| `enabled=false` | Bean 不装配；list/detail/save 全链路短路 git 分支；回滚即关 |
+
+### 15.12 鉴权与安全
+
+- **公开仓库**：直接 HTTPS URL，无凭证；
+- **私有仓库（推荐）**：服务器生成 ed25519 **deploy key（只读）** 注册到 Git 平台，私钥放服务账号
+  `HOME/.ssh`（chmod 600），`remote-url` 用 SSH 形式（`git@host:org/skills.git`）；systemd 单元确保
+  `HOME` 指向正确（§11）；
+- **私有仓库（备选）**：HTTPS + PAT 内嵌 URL（`https://oauth2:<token>@host/…`），整串仅存 `app.env`
+  环境变量；**脱敏规则**：日志/status/审计一律剥离 userinfo 只显 host+path；凭证不入库、不入 git、不入审计；
+- git skill 内容进入 Agent 上下文，等同平台 skill，受 §14 输入校验与审计约束。
+
+### 15.13 前端设计（teapot-ai-web）
+
+- **Skills 页**：`status.enabled` 时顶部状态条：`branch · skillCount · lastSyncAt` + 「立即同步」按钮
+  （developer 及以上可见，调用 sync 后刷新列表）；
+- 列表增加 `source` 标签（platform / git）；git 行**隐藏编辑/删除**，详情抽屉只读并展示横幅：
+  “该 skill 由 Git 仓库（branch xxx）管控，修改请提交 PR”；
+- **Agent 详情-技能绑定**：选项 label 追加来源后缀（如 `name（git）`），绑定值仍为 name；
+- API 层 `api/skill.ts` 增加 `gitStatus()/gitSync()`。
+
+### 15.14 审计
+
+`skill.git.sync`（操作人、同步后 skillCount）写入现有审计通道（§14 第 6 条）；status 查询不审计。
+
+### 15.15 数据库变更
+
+**无新表、无改表**。`t_agent_skill` 按 name 绑定、不感知来源，天然兼容双来源。
+二期演进：多仓库管理表 `t_skill_repo(id, repo_key, remote_url, branch, …)` + 管理 UI。
+
+### 15.16 部署与运维
+
+- `app.env` 新增 `GIT_SKILL_ENABLED/GIT_SKILL_REMOTE/GIT_SKILL_BRANCH/GIT_SKILL_LOCAL_PATH`（chmod 600，不入仓）；
+- deploy key 生成与注册步骤写入 `deploy/` 脚本注释（`setup-git-skill.sh`，幂等）；
+- clone 目录磁盘占用小（纯文本），纳入 §11.6 观察项即可；多实例各自 clone 无锁竞争；
+- 回滚：`GIT_SKILL_ENABLED=false` + 重启，立即回到单 MySQL 来源。
+
+### 15.17 测试计划
+
+- **单元**：同名守卫、remote 脱敏、双来源合并去重排序；
+- **集成**：本地 `file://` 远程仓库 fixture：clone→`getAllSkills` 往返；push 新 commit 后读操作可见新内容
+  （autoSync）；`sync()` 手动路径；
+- **e2e**：git skill 出现在列表（source=git）→ 绑定 Agent → 对话中 `<available_skills>` 可见并可调用；
+  平台 save 同名拒绝；`enabled=false` 全链路无 git 痕迹。
+
+### 15.18 实施任务分解
+
+| # | 任务 | 涉及 |
+|---|------|------|
+| T1 | BOM + core pom 增加 git-repository 依赖 | `teapot-ai-bom/pom.xml`、`teapot-ai-core/pom.xml` |
+| T2 | `TeapotAiProperties.SkillGit` + yml + `AgentScopeConfig` 条件 Bean | core/config |
+| T3 | `AgentRegistry.skillRepositories` 切换；`SkillService` 双来源读/守卫/status/sync；Controller + rbac yml | core/service、controller、start/resources |
+| T4 | 前端 Skills 页 source 标签/只读/状态条/同步按钮；Agent 详情来源后缀 | teapot-ai-web |
+| T5 | 部署：app.env、deploy key 脚本、重启验证 | deploy/ |
+| T6 | 单元/集成/e2e 按 §15.17 验收 | teapot-test |
+
+---
+
+## 16. 阿里云 AgentRun 沙箱接入（AgentRunFilesystemSpec）
+
+### 16.1 背景与目标
+
+§1.1 原定“沙箱执行留二期”（风险 7：skill 脚本只分发不执行）。本章将**隔离执行能力**提入一期，
+后端选用阿里云 AgentRun（函数计算 FC 3.0 Sandbox API，版本 2025-09-10）托管沙箱：
+
+- Agent 获得 `shell_execute` 与文件读写能力，真实 IO/进程全部发生在阿里云隔离容器内，宿主机（114 服务器）无感；
+- skill `scripts/` 具备执行条件（pip install / python / bash），跨轮次状态保留（同 session 恢复同一沙箱）；
+- 不在生产服务器自建 Docker daemon（2C3.7G 资源紧张，且容器与业务进程同机有安全风险）；
+  Serverless 按量计费、免运维、中国大陆低延迟。
+
+### 16.2 非目标
+
+- 不使用「AgentRun 内置 Agent & Skills MCP 模式」（该模式面向外部客户端经 MCP 调用内置 Agent；
+  平台走 harness 官方沙箱适配器，与 HarnessAgent 生命周期深度整合）；
+- 不自建 K8s / Daytona / E2B 后端（同为 `SandboxFilesystemSpec` 可换，留二期多云选项）；
+- 不承诺沙箱网络出口白名单（依赖模板凭证/VPC 配置，运维按模板评估）。
+
+### 16.3 官方能力基线（文档 + 2.0.1 构件 javap 实测）
+
+依赖构件：`io.agentscope:agentscope-extensions-sandbox-agentrun:${agentscope.version}`（2.0.1，
+Maven Central 已核实存在）。
+
+**关键实测结论**：
+
+- `agentscope-harness:2.0.1` 本体**仅含 docker 实现**（`sandbox/impl/docker`，jar tf 核实），
+  AgentRun 适配器在**独立扩展构件**，BOM 需显式声明；
+- 实际包名 `io.agentscope.extensions.sandbox.agentrun`（官网文档页写作
+  `io.agentscope.harness.agent.sandbox.impl.agentrun`，已过时；**以构件 javap 实测为准**，见 §17 风险 16）。
+
+核心类（javap 实测）：
+
+| 类 | 职责 |
+|----|------|
+| `AgentRunFilesystemSpec extends SandboxFilesystemSpec` | HarnessAgent 装配入口，fluent 配置 |
+| `AgentRunSandboxClient / AgentRunSandboxClientOptions` | 数据面 HTTP（OkHttp）+ 生命周期；含 `MAX_OSS_MOUNTS`、`ALLOWED_MOUNT_PREFIXES` 约束 |
+| `AgentRunNasMountConfig` | NAS 挂载：serverAddr / mountDir / remotePath / enableTLS |
+| `AgentRunOssMountConfig` | OSS 挂载（单实例 ≤5 个） |
+| `AgentRunHarnessSandboxJacksonModule` | SandboxState JSON 多态注册（NamedType） |
+| `AgentRunMcpChannel` | 执行通道：`process_exec_cmd` / `read_file` / `write_file` |
+
+`AgentRunFilesystemSpec` 关键配置项（fluent 方法名无 `set` 前缀）：
+
+| 方法 | 说明 |
+|------|------|
+| `apiKey(String)` / `accountId(String)` / `region(String)` | 数据面鉴权 X-API-Key + X-Acs-Parent-Id；数据面 `https://{accountId}.agentrun-data.{region}.aliyuncs.com`，不引入完整 OpenAPI SDK |
+| `templateName(String)` | AgentRun 控制台预创建的沙箱模板名 |
+| `mcpServerUrl(String)` | **必填**：模板 MCP 服务地址（adapter 不自动发现，控制台拷贝） |
+| `dataPlaneBaseUrl(String)` / `mcpEndpoint(String)` | 可选覆盖（专有云/代理场景） |
+| `nasConfig(...)` / `addOssMount(...)` | 实例级动态挂载 |
+| `workspaceRoot(String)` | 沙箱工作区根；以 nasConfig.mountDir 为前缀时自动判定 NAS 持久化 |
+| `sandboxIdleTimeoutSeconds(int)` | 闲置回收阈值（默认 1800），超时销毁、下次同 id 重建恢复 |
+| `connectTimeoutSeconds / readTimeoutSeconds / maxRetries` | 健壮性参数 |
+| `snapshotSpec(...)` / `isolationScope(...)` | 基类 `SandboxFilesystemSpec` 能力 |
+
+关键行为（官方文档 + 实测）：
+
+- **sandboxId 由 sessionId 派生**（SHA-256 → 26 字符 Crockford Base32）：同 session → 同 sandbox；
+  销毁后同 id 重建 ≒ resume（StopSandbox 是终态，adapter 用 DeleteSandbox + 重建模拟）；
+- **IsolationScope=SESSION（平台选型）**：每会话独立沙箱，多用户 SaaS 天然隔离；
+- **工作区投影**：宿主 workspace 的 `AGENTS.md / skills/ / subagents/ / knowledge/` 每次启动按
+  SHA-256 增量同步进沙箱，skill 脚本执行的官方基础机制；
+- 生命周期自动：PreCall acquire→start（4-分支工作区恢复），PostCall/Error stop（快照持久化）→release。
+
+### 16.4 总体架构
+
+```
+HarnessAgent.builder().filesystem(AgentRunFilesystemSpec)…   ← 该 agent 的 feature.sandbox.enabled=true（§16.6）
+     │ 每次 call
+     ▼
+SandboxLifecycleMiddleware
+  PreCall : acquire(sessionId) → CreateSandbox/GetSandbox（数据面）→ start() → MCP 通道就绪
+  [模型推理] shell_execute / 文件读写 → process_exec_cmd / read_file / write_file（阿里云容器内）
+  PostCall: stop()（快照持久化）→ persist state → release；闲置 1800s 自动回收，下次同 id 重建
+```
+
+### 16.5 全局连接配置（凭证与默认值）
+
+凭证管理采用**对称加密入库 + 环境变量应急覆盖**双通道（细则见 §16.5.1）：
+
+- **主通道**：管理员在 UI 配置 API Key / 账号 ID，AES-256-GCM 加密后落 `t_sys_config`，
+  无需 SSH 改 `app.env` 重启；多副本天然共享；
+- **覆盖通道**：`app.env` 同名环境变量存在时**优先于 DB**（应急切换/迁移过渡）；
+- region / 默认模板 / 默认 workspaceRoot 等非敏感项存同表明文；MCP URL 含账号 ID 但不含秘密，
+  同表明文存储，UI 展示不脱敏；
+- snapshot 本地路径仍走 yml（服务器本地目录，非界面配置项）：
+
+```yaml
+teapot:
+  ai:
+    sandbox:
+      agentrun:
+        snapshot-path: ${AGENT_SNAPSHOT_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/sandbox-snapshots}
+```
+
+- `configured()` 判定：apiKey/accountId/mcpServerUrl 三项齐备（env 或 DB 合并后）；
+  未接入时选项接口返回 `configured=false`，前端禁用启用开关（§16.11）；
+- **无全局 enabled 开关**：是否启用沙箱按 Agent 由 `feature.sandbox.enabled` 决定（§16.6）；
+  回滚 = 页面关闭对应 Agent 开关，或清空凭证使全部 Agent 回退 `disableShellTool`；
+- snapshot 目录可再生，**不纳入备份清单**，磁盘占用入 §11.6 观察项。
+
+### 16.5.1 凭证对称加密入库
+
+**表**（`sql/V5__sys_config.sql`，§10.1 同步登记）：
+
+```sql
+CREATE TABLE t_sys_config (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  config_key   VARCHAR(64)  NOT NULL COMMENT 'agentrun.api_key / agentrun.account_id / agentrun.region / …',
+  config_value TEXT         NOT NULL COMMENT '敏感项存 AES-GCM 密文 v<keyVer>:<base64(iv+ciphertext+tag)>',
+  key_version  TINYINT      NOT NULL DEFAULT 1 COMMENT '主密钥版本，轮换用',
+  encrypted    TINYINT      NOT NULL DEFAULT 0 COMMENT '1密文 0明文',
+  updated_by   VARCHAR(64)  NOT NULL,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_config_key (config_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统配置（含加密凭证）';
+```
+
+**加密方案**（`ConfigCryptoService`）：
+
+- AES-256-**GCM**（认证加密，防篡改；禁用 ECB/无认证模式）；每次加密生成**随机 12B IV**，
+  密文格式 `v{keyVersion}:{base64(iv | ciphertext | tag)}`；
+- 主密钥 `TEAPOT_SECRET_KEY`（32B base64）**仅 `app.env` 环境变量**，绝不入库不入 git；
+- 密钥轮换：`key_version` 随密文存储，解密按版本选钥；一期单版本，轮换工具留二期；
+- DB 备份泄露 ≠ 凭证泄露（还需主密钥）；主密钥与 DB 同时泄露才可解密，属已知风险边界。
+
+**脱敏与权限**：
+
+- GET 回显一律脱敏：`configured` 布尔 + 末 4 位掩码（如 `****abcd`），任何接口不返回明文；
+- 写仅 admin（RBAC：`/api/config/*` 读 = developer，写 = admin 独占）；
+- 审计：凭证写入/更新记 `config.update`（只记 key 名不记值，§14 第 6 条）。
+
+### 16.6 按 Agent 沙箱配置：t_agent.feature 字段
+
+新增通用扩展字段（承载一切 Agent 级功能配置，沙箱是首个消费者，后续能力按命名空间追加）：
+
+```sql
+ALTER TABLE t_agent ADD COLUMN feature JSON NULL COMMENT '扩展功能配置(JSON)，SPEC §16.6';
+-- 迁移文件 sql/V4__agent_feature.sql；§10.1 的 CREATE TABLE 同步含该列
+```
+
+JSON 结构（一期仅 `sandbox` 命名空间）：
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "isolationScope": "SESSION",
+    "persistence": "LOCAL_SNAPSHOT",
+    "templateName": "teapot-ci-2c4g",
+    "workspaceRoot": "/home/agentscope/workspace",
+    "idleTimeoutSeconds": 1800,
+    "nas": {
+      "serverAddr": "12345abc-xxx.cn-hangzhou.nas.aliyuncs.com",
+      "mountDir": "/mnt/nas",
+      "remotePath": "/",
+      "enableTLS": false
+    }
+  }
+}
+```
+
+字段与校验规则（AgentService 保存时强校验，不合法直接拒绝）：
+
+| 字段 | 类型 | 校验 | 缺省 |
+|------|------|------|------|
+| `enabled` | boolean | true 时要求全局已接入（§16.5 `configured=true`） | false |
+| `isolationScope` | 枚举 | `SESSION/USER/AGENT/GLOBAL`；USER 及以上为顺序复用非并发共享，一期单实例部署可接受，二期多副本需配 ExecutionGuard（§16.3） | SESSION |
+| `persistence` | 枚举 | `NONE`（不持久化，回收即丢）/ `LOCAL_SNAPSHOT`（tar 拉回本机）/ `NAS`（需 nas 子对象） | LOCAL_SNAPSHOT |
+| `templateName` | string | 可选，覆盖全局 default-template（不同规格模板按 Agent 选型） | 全局默认 |
+| `workspaceRoot` | string | 绝对路径；`persistence=NAS` 时**必须**以 `nas.mountDir` 为前缀（官方 Branch A 判定） | 全局默认 |
+| `idleTimeoutSeconds` | int | 300–21600 | 1800 |
+| `nas.mountDir` | string | 必须 `/home/`、`/mnt/` 或 `/data/` 前缀（官方约束） | — |
+
+向前兼容：未知顶层命名空间原样保留（不拒不改）；`sandbox` 内字段强校验。
+`feature` 为 NULL = 无任何功能启用（存量 Agent 向后兼容）。
+
+### 16.7 后端装配与 AgentRegistry 改造
+
+```java
+// 全局连接配置 Bean：凭证取值 env 优先、DB 次之（解密）；configured() = 三项齐备
+@Bean AgentRunConnection agentRunConnection(SysConfigService configService) { … }
+
+// AgentRegistry.build(agentKey)：
+AgentFeature.Sandbox sb = AgentFeature.parse(agentDO.getFeature()).getSandbox();
+if (sb != null && sb.isEnabled()) {
+    if (!connection.configured()) throw new BizException("AgentRun 未接入，不能启用沙箱"); // 防御，正常已在保存时拦截
+    AgentRunFilesystemSpec spec = new AgentRunFilesystemSpec()
+            .apiKey(connection.getApiKey()).accountId(connection.getAccountId())
+            .region(connection.getRegion())
+            .templateName(sb.getTemplateName())            // feature 覆盖全局默认
+            .mcpServerUrl(connection.getMcpServerUrl())
+            .workspaceRoot(sb.getWorkspaceRoot())
+            .sandboxIdleTimeoutSeconds(sb.getIdleTimeoutSeconds())
+            .snapshotSpec(buildSnapshot(sb))               // NONE→Noop / LOCAL→LocalSnapshotSpec / NAS→Noop
+            .isolationScope(IsolationScope.valueOf(sb.getIsolationScope()));
+    if ("NAS".equals(sb.getPersistence())) spec.nasConfig(toNasConfig(sb.getNas()));
+    builder.filesystem(spec);                              // 沙箱模式：shell/文件全部走阿里云容器
+} else {
+    builder.disableShellTool();                            // 现状：脚本仅分发不执行
+}
+```
+
+- spec 实例**按 agent 构建**（隔离维度/持久化/模板各不相同），生命周期随 Registry 缓存；
+  `agentUpdate` 已触发 `invalidate(agentKey)` → 页面改配置下次对话即生效；
+- `persistence=NAS` 时 workspaceRoot 落挂载目录内，快照自动退化为 no-op（官方 Branch A）；
+- **Jackson 要求**（官方自检清单）：参与 SandboxState 反序列化的 ObjectMapper 必须注册
+  `AgentRunHarnessSandboxJacksonModule`，否则跨 call 状态恢复失败（§18 风险 17）；
+- BOM 增加 `agentscope-extensions-sandbox-agentrun`（版本随 `${agentscope.version}`），core 模块加依赖。
+
+### 16.8 阿里云侧准备（运维清单）
+
+1. 开通函数计算 + AgentRun 并完成授权（RAM 子账号需 FC + AgentRun 权限）；
+2. 控制台创建沙箱模板：一期建议**代码解释器沙箱 2C4G**（纯代码执行，成本低）；
+   如需浏览器/文档处理再升 AIO 沙箱 4C8G；
+3. 模板激活 MCP：`process_exec_cmd / read_file / write_file` 三件套（adapter 仅使用这三个工具）；
+4. 沙箱详情 → 集成与案例 → MCP 集成：启动服务，拷贝服务地址
+   `https://<账号ID>.agentrun-data.<地域>.aliyuncs.com/templates/<模板名>/mcp` → `AGENTRUN_MCP_URL`；
+5. 生成数据面 API Key → `AGENTRUN_API_KEY`；记录主账号 ID → `ALIYUN_ACCOUNT_ID`；
+6. 模板高级配置：闲置超时与 yml 对齐（1800s）；TTL 默认 6h；执行角色一期最小权限（不授 OSS/NAS 策略）；
+7. （二期可选）升级 NAS/OSS 持久化：同地域资源 + RAM 读写策略 + 挂载目录必须
+   `/home/`、`/mnt/` 或 `/data/` 前缀。
+
+### 16.9 安全
+
+- API Key / 账号 ID 对称加密入库（§16.5.1），主密钥仅 env；GET 回显只给 configured + 末 4 位掩码，
+  任何接口不返回明文；日志/审计脱敏；`feature` 只存功能参数不含凭证，可直接回显；
+- 平台 → 阿里云为出站 HTTPS，服务器**不新增任何入站端口**；JWT/CORS 体系（§14）不变；
+- 隔离边界 = FC 容器：`rm -rf`、`pip install` 等仅影响沙箱工作区，宿主机无感；
+  已安装依赖随快照保留，下次恢复无需重装；
+- 沙箱网络出口由模板凭证配置管控（一期默认公网匿名访问；访问内网资源留二期 VPC 方案评估）；
+- `shell_execute` 能力暴露给模型：sysPrompt 约束 + 写操作审计（§14 第 6 条）。
+
+### 16.10 成本与容量
+
+- FC 按沙箱实例 CPU/内存 × 存活时长计费；实例数 ≈ 启用沙箱的 Agent 的活跃会话数，闲置 1800s 自动回收控费；
+- 初始规格 2C4G（代码解释器）起步；账单异常纳入 §11.6 巡检项；
+- 公测免费项（如内置 Agent & Skills 的模型调用）平台不使用，不依赖其政策。
+
+### 16.11 前端（AgentDetail 新增 Sandbox 配置区）
+
+- 左侧胶囊菜单新增 **Sandbox** 分区（Basic Info 与 Skills 之间），字段与 §16.6 一一对应：
+  启用 Switch、隔离维度 Select（SESSION/USER/AGENT/GLOBAL + 中文注释）、持久化 Radio
+  （不持久化/本地快照/NAS 挂载）、模板 Input（placeholder 显示全局默认）、闲置超时 InputNumber（300–21600）；
+  `persistence=NAS` 时条件展开 NAS 四字段子表单；分区顶部（admin 可见）提供「全局接入凭证」
+  编辑入口（API Key/账号 ID/region/MCP URL，回显脱敏，写调 `PUT /api/config/sandbox`，§16.5.1）；
+- 页面加载 `GET /api/config/sandbox-options`（developer）：`{configured, region, defaultTemplate,
+  defaultWorkspaceRoot}`；`configured=false` 时显示横幅“AgentRun 未接入（请联系管理员配置凭证）”
+  并禁用启用开关；
+- 保存：表单序列化为 `feature.sandbox` 随 `PUT /api/agent/update/{agentKey}` 提交；
+  `enabled=false` 时仅提交 `{"enabled": false}`（剔除其余子项，保持 feature 精简）；
+  后端校验失败（枚举/范围/前缀/未接入）返回错误文案，前端 message 展示；
+- 保存成功后 `invalidate` 自动触发，下一轮对话即按新配置构建；
+- API 层 `api/agent.ts` 增 `sandboxOptions()`；`AgentDetailVO` 出参增加 `feature` 用于表单回显；
+- RBAC：developer 资源列表追加 `/api/config/sandbox-options`；`/api/config/*` 写操作仅 admin（`/*` 已覆盖）。
+
+对话台无需改动：沙箱开启后 agent 自动具备 shell 能力，工具调用事件经 AG-UI 透明展示
+（`emit-tool-call-args: true` 已启用）。
+
+### 16.12 与 Skill 脚本的关系
+
+- 官方工作区投影只同步宿主 `workspace/<agent>/skills/` 目录；平台 skill 存于 DB（MySQL/Git 来源），
+  **不会自动进入投影目录**；
+- 一期脚本类 skill 的执行路径：SKILL.md 正文内嵌脚本，模型经 `write_file` 落盘沙箱后执行；
+  或运维按 §8.4 L3 通道把紧急脚本 skill 手工放入宿主 workspace `skills/`（走投影同步）；
+- 「DB skill 脚本自动落盘 workspace 参与投影」为二期优化项（见 §17 演进路线）。
+
+### 16.13 测试计划
+
+- **单元**：`AgentFeature` 解析与保存校验（枚举越界、NAS 缺子对象、mountDir/workspaceRoot 前缀不符、
+  idle 范围、`enabled=true` 但全局未接入拒绝）；feature 为 NULL/空/未知命名空间的兼容分支；
+  `ConfigCryptoService` 加解密往返、篡改检测（GCM tag）、随机 IV 不重复、脱敏掩码、
+  `/api/config/*` 写操作非 admin 403；
+- **集成**（需阿里云测试账号）：spec 构建 → 首次 call 创建沙箱 → `shell_execute` 执行
+  `python3 -c "print(1)"` 返回 1 → stop 后再次 call，同 sandboxId 恢复且前次创建的文件仍在；
+- **e2e**：页面为 Agent A 启用沙箱（SESSION+本地快照）→ 对话 shell_execute 生效、同会话恢复工作区；
+  Agent B 未启用则无 shell 能力（互不影响）；页面改 isolationScope/persistence 保存后下一轮对话生效；
+  关闭开关后回退 `disableShellTool`，对话功能不受影响。
+
+### 16.14 实施任务分解
+
+| # | 任务 | 涉及 |
+|---|------|------|
+| S1 | BOM + core pom 增加 sandbox-agentrun 依赖 | `teapot-ai-bom/pom.xml`、`teapot-ai-core/pom.xml` |
+| S2 | `sql/V5__sys_config.sql` + `SysConfigService` + `ConfigCryptoService`（AES-GCM）；
+     `GET/PUT /api/config/sandbox` + `sandbox-options` + RBAC yml；`AgentRunConnection`（env 优先 DB 次之） | sql、core/config、controller |
+| S3 | `sql/V4__agent_feature.sql`；`AgentDO.feature` + Mapper；Create/Update DTO 加 `feature`；`AgentFeature` 模型 + §16.6 保存校验 | sql、core/model、core/service |
+| S4 | `AgentRegistry` 按 feature 构建 per-agent spec（三种持久化分支 + Jackson Module） | core/service |
+| S5 | 前端 AgentDetail Sandbox 分区（表单/回显/未接入横幅/凭证编辑）+ api/types | teapot-ai-web |
+| S6 | 阿里云控制台：模板创建 + MCP 激活 + API Key；凭证经 UI 配置（env 覆盖通道验证） | 阿里云控制台 |
+| S7 | 单元/集成/e2e 按 §16.13 验收（含加密往返/脱敏/权限用例）；账单观察 | teapot-test |
+
+---
+
+## 17. 里程碑与验收标准
 
 | 阶段 | 内容 | 验收标准 |
 |------|------|----------|
@@ -923,15 +1463,18 @@ agentscope:                                      # AG-UI starter，见 §6.3
 | **M1 登录-用户体系** | rbac 模块、JWT、用户管理 API + 登录页 | admin 登录→拿 token→访问受控 API；无 token 401；权限不足 403；老 rbac 语义用例全部通过 |
 | **M2 Agent 运行时** | AgentRegistry + AG-UI starter + 对话台 | 新建 `general-assistant`→前端流式对话→重启进程后同会话续聊记忆保留 |
 | **M3 Skill 平台** | Skill 工坊 CRUD + Agent 绑定 | 表单创建 `meeting-notes`→绑定 agent→下一轮对话 agent 的 `<available_skills>` 出现该 skill 并可被调用；删除后消失 |
+| **M3.5 Git Skill** | GitSkillRepository 接入（§15） | fixture Git 仓库→列表 `source=git` 展示→绑定 Agent 生效→push 新 commit 后自动/手动 sync 可见；平台 save 同名拒绝；`enabled=false` 一键回退 |
+| **M3.6 AgentRun 沙箱** | 阿里云 AgentRun 沙箱接入（§16） | Agent 配置页按 Agent 设置沙箱隔离维度/持久化/参数（数据落 `t_agent.feature`）→ shell_execute 在沙箱内执行 python 并返回结果；同会话再次 call 恢复工作区；关闭开关后下轮对话回退无 shell |
 | **M4 前端收口** | Agent 配置页、用户管理、权限路由守卫 | 三角色权限矩阵手工验收通过 |
 | **M5 生产收口** | Dockerfile、部署脚本、监控日志、备份演练 | 服务器一键部署跑通；备份可恢复 |
 
-二期路线（不在本 spec 范围）：沙箱执行（`DockerFilesystemSpec`）、Agent 自学习 skill 闭环、
+二期路线（不在本 spec 范围）：按 Agent 粒度沙箱开关、DB skill 脚本投影落盘、NAS/OSS 持久化升级、
+Agent 自学习 skill 闭环、
 Redis 状态存储/多副本、角色权限入库动态化、Plan Mode HITL 审批 UI、subagent 编排。
 
 ---
 
-## 16. 风险与待确认项
+## 18. 风险与待确认项
 
 | # | 事项 | 状态 |
 |---|------|------|
@@ -941,12 +1484,18 @@ Redis 状态存储/多副本、角色权限入库动态化、Plan Mode HITL 审�
 | 4 | ~~磁盘水位 88%~~ → 已清理至 49%（可用 20G）；workspace 增长、备份、日志仍需限额与滚动策略 | 已缓解，§11.6 持续观察 |
 | 5 | 模型供应商：**已确认一期接入 DashScope + OpenAI**（`OPENAI_BASE_URL` 支持代理端点）；GLM/Kimi 二期 | 已确认，落 §6.4 |
 | 6 | `t_agent_skill` 视图过滤方案依赖 AgentScope 2.0.1 实际 API 形状 | 实施阶段验证，降级方案见 §6.1 注 |
-| 7 | skill 内 `scripts/` 一期只分发不执行（无 shell 沙箱），需在 UI 明确提示 | 已知取舍 |
+| 7 | ~~skill 内 `scripts/` 一期只分发不执行~~ → AgentRun 沙箱已提入一期（§16），脚本可在沙箱内执行 | 已解决，落盘方式见 §16.12 |
 | 8 | 老平台 `t_portal_user` 存量用户是否迁移到新平台 | 待确认（迁移脚本可后补） |
 | 9 | 域名已改用 `teapot.teamer.com.cn`（老平台迁至 `old-teapot.teamer.com.cn`）；HTTPS 证书来源 | 待确认（一期可先 80 上线） |
 | 10 | 停原生 MySQL 5.7 前需最终确认无残留业务依赖（datadir 仅 204M，老 teapot 指向远程库） | M0 首日核查 |
 | 11 | Spark Design（`@agentscope-ai/design` / `chat`）npm 发布状态、版本稳定性及 AGUI 组件自定义鉴权头支持度 | M2 启动前验证；降级方案见 §12.1 注 |
 | 12 | Spring Boot 4.x（Framework 7）破坏性变更较多，AgentScope agui starter 基于 SB 3.x 生态构建；一期选 3.5.x 兼顾新与稳 | 二期待 AgentScope 官方适配 SB 4.x 后升级（连带 MyBatis Starter 切 4.0.x） |
+| 13 | `GitSkillRepository` 6 参构造末位 `String` 参数语义未确认（疑似凭证/用户名），sources jar 无法获取 | 实施期反编译 class 或源码仓库核实；不影响一期（采用 5 参构造 + 系统 git 鉴权），见 §15.3 |
+| 14 | 多 repository 同名 skill 的官方合并优先级未文档化 | 平台以「save 同名守卫 + 列表 git 优先并 warn」规避运行时歧义，见 §15.8 |
+| 15 | Git 仓库目录扫描规则（子目录深度、非 SKILL.md 目录是否忽略）官方文档未穷举 | 实施期用 file:// fixture 仓库集成测试核实，见 §15.17 |
+| 16 | AgentRun 官方文档包名与 2.0.1 构件不符（文档写 harness 内置 `impl.agentrun`，实测为独立扩展 `agentscope-extensions-sandbox-agentrun`，包名 `io.agentscope.extensions.sandbox.agentrun`） | 已 javap 核实，以构件为准（§16.3） |
+| 17 | SandboxState 反序列化需 ObjectMapper 注册 `AgentRunHarnessSandboxJacksonModule`，否则跨 call 沙箱状态恢复失败 | 实施期按官方自检清单落实，集成测试覆盖（§16.6） |
+| 18 | AgentRun 按沙箱实例计费（FC 按量），实例数随活跃会话数增长 | 闲置 1800s 回收 + 账单巡检（§16.10）；规格按任务选型（代码解释器 2C4G 起步） |
 
 ---
 

@@ -123,10 +123,10 @@ export default function Agents() {
         ) : (
           <Row gutter={[16, 16]}>
             {list.map((agent) => (
-              <Col key={agent.agentKey} xs={24} md={12} xl={8}>
+              <Col key={agent.agentKey} xs={24} md={12} xl={8} style={{ display: 'flex' }}>
                 <div
                   className="glass-card"
-                  style={{ padding: 20, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}
+                  style={{ padding: 20, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minWidth: 0 }}
                   onClick={() => navigate(`/agents/${agent.agentKey}`)}
                 >
                   {/* 卡片头：头像 + 名称/key + 类型标签 */}
@@ -167,9 +167,11 @@ export default function Agents() {
                         {agent.agentKey}
                       </div>
                     </div>
-                    <span style={{ fontSize: 12, fontWeight: 500, color: agent.status === 1 ? 'rgba(97, 92, 237, 0.9)' : 'rgba(26, 26, 29, 0.35)', whiteSpace: 'nowrap' }}>
-                      {agent.status === 1 ? 'Spark Agent' : '已停用'}
-                    </span>
+                    {agent.status !== 1 && (
+                      <span style={{ fontSize: 12, fontWeight: 500, color: 'rgba(26, 26, 29, 0.35)', whiteSpace: 'nowrap' }}>
+                        已停用
+                      </span>
+                    )}
                   </div>
 
                   {/* 描述：单行省略 */}

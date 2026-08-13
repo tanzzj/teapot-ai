@@ -44,6 +44,21 @@
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-skill-mysql-repository</artifactId>
         </dependency>
+        <!-- Git Skill 仓库（SPEC §15：第二 skill 来源，只读） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-skill-git-repository</artifactId>
+        </dependency>
+        <!-- 阿里云 AgentRun 沙箱（SPEC §16：按 Agent feature 启用） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-sandbox-agentrun</artifactId>
+        </dependency>
+        <!-- E2B 兼容沙箱（AgentRun E2B 端点，配置后优先于 AgentRun MCP 链路） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-sandbox-e2b</artifactId>
+        </dependency>
         <!-- AG-UI Spring Boot Starter（SSE 端点、多 Agent 路由、HITL） -->
         <dependency>
             <groupId>io.agentscope</groupId>
