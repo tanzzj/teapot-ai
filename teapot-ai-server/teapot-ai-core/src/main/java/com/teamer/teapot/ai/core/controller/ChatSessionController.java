@@ -3,6 +3,7 @@ package com.teamer.teapot.ai.core.controller;
 import com.teamer.teapot.ai.common.model.Result;
 import com.teamer.teapot.ai.core.model.ChatSessionDO;
 import com.teamer.teapot.ai.core.model.dto.SessionCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.dto.SessionRenameRequest;
 import com.teamer.teapot.ai.core.service.ChatSessionService;
 import jakarta.validation.Valid;
@@ -47,6 +48,12 @@ public class ChatSessionController {
     public Result<Void> rename(@Valid @RequestBody SessionRenameRequest request) {
         chatSessionService.rename(request);
         return Result.ok();
+    }
+
+    /** 会话消息历史（从 agentscope_sessions 的 agent_state 回放，供前端切换会话后恢复画面） */
+    @GetMapping("/messages/{sessionId}")
+    public Result<List<SessionMessageItem>> messages(@PathVariable String sessionId) {
+        return Result.ok(chatSessionService.messages(sessionId));
     }
 
     /** 清空会话（删状态 + 删索引） */

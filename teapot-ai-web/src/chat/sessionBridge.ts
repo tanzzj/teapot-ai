@@ -2,14 +2,16 @@ import type {
   IAgentScopeRuntimeWebUISession,
   IAgentScopeRuntimeWebUISessionAPI,
 } from '@agentscope-ai/chat';
-import { sessionClear, sessionCreate, sessionList, sessionRename } from '../api/session';
+import { sessionClear, sessionCreate, sessionList, sessionMessages, sessionRename } from '../api/session';
+import type { SessionMessageItem } from '../api/session';
 import { useAuthStore } from '../store/auth';
 
 /**
  * 会话桥接（sparkdesign chat template ↔ Teapot 后端）：
  * - 会话索引（列表/创建/删除）走后端 /api/chat/session（SPEC §9）
- * - 消息体以后端 agentscope_sessions（StateStore）为事实源，模板渲染所需的消息快照
- *   缓存在 localStorage（按 sessionId 隔离，仅用于切换会话后恢复画面）
+ * - 消息体以后端 agentscope_sessions（StateStore）为事实源；模板渲染所需的消息快照
+ *   优先用 localStorage 缓存（按 sessionId 隔离），缓存缺失（跨设备/清缓存）时
+ *   兜底拉后端历史接口 /api/chat/session/messages/{sessionId}
  */
 
 const MSG_CACHE_PREFIX = 'teapot-chat-msgs:';
@@ -86,6 +88,27 @@ function dropCachedMessages(sessionId: string) {
   }
 }
 
+/** 后端历史条目（role+text）→ 模板消息形状（与 updateSession 缓存的形状一致） */
+function toTemplateMessages(items: SessionMessageItem[]) {
+  return items.map((m, i) => {
+    const id = `hist-${i}`;
+    return {
+      id,
+      object: 'message' as const,
+      role: m.role,
+      type: 'message' as const,
+      status: 'completed' as const,
+      content: [{
+        object: 'content' as const,
+        type: 'text' as const,
+        text: m.text,
+        msg_id: id,
+        status: 'completed' as const,
+      }],
+    };
+  });
+}
+
 /** 按 agentKey 创建一个模板会话 API 适配器（切换 agent 时随 options 重建） */
 export function createSessionBridge(agentKey: string): IAgentScopeRuntimeWebUISessionAPI {
   const getMirror = () => sessionIndexCache.get(currentUid() + '|' + agentKey) || [];
@@ -114,7 +137,20 @@ export function createSessionBridge(agentKey: string): IAgentScopeRuntimeWebUISe
     async getSession(sessionId: string) {
       const found = getMirror().find((s) => s.id === sessionId);
       if (!found) return undefined as unknown as IAgentScopeRuntimeWebUISession;
-      return { ...found, messages: loadCachedMessages(sessionId) };
+      let messages = loadCachedMessages(sessionId);
+      if (!messages.length) {
+        // 本地无缓存（跨设备/清过缓存）：兜底读后端 agentscope_sessions 历史
+        try {
+          const items = await sessionMessages(sessionId);
+          messages = toTemplateMessages(items || []);
+          if (messages.length) {
+            cacheMessages(sessionId, messages);
+          }
+        } catch {
+          // 后端历史拉取失败不阻塞主链路，维持空会话画面
+        }
+      }
+      return { ...found, messages };
     },
 
     async createSession(session) {
