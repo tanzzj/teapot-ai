@@ -44,3 +44,6 @@ target_spec_api.txt
 deploy/
 
 teapot-ai-web/tsconfig.tsbuildinfo
+
+teapot-ai-web/dist.zip*
+teapot-ai-web/dist.tar.gz
