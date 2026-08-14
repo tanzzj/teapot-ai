@@ -130,7 +130,7 @@ export default function AppLayout() {
               </span>
             )}
             {!isMobile && (
-              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0813k</span>
+              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0814a</span>
             )}
           </div>
 
