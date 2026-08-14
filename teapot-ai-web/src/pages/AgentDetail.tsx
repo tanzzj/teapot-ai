@@ -77,6 +77,18 @@ export default function AgentDetailPage() {
   const sbEnabled = Form.useWatch(['sandbox', 'enabled'], form);
   const sbPersistence = Form.useWatch(['sandbox', 'persistence'], form);
 
+  /** 全局凭证表单回填：仅非敏感字段（敏感字段一律留空，留空不修改） */
+  const backfillCredForm = useCallback((o: SandboxOptions) => {
+    credForm.setFieldsValue({
+      e2bApiBaseUrl: o.e2bApiBaseUrl,
+      e2bDomain: o.e2bDomain,
+      e2bDefaultTemplate: o.e2bDefaultTemplate,
+      region: o.region,
+      defaultTemplate: o.defaultTemplate,
+      mcpServerUrl: o.mcpServerUrl,
+    });
+  }, [credForm]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -87,6 +99,7 @@ export default function AgentDetailPage() {
         sandboxOptions(),
       ]);
       setSbOptions(sbOpts);
+      backfillCredForm(sbOpts);
       setDetail({
         name: d.agent.name,
         description: d.agent.description,
@@ -130,7 +143,7 @@ export default function AgentDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [agentKey, form]);
+  }, [agentKey, form, backfillCredForm]);
 
   useEffect(() => {
     load();
@@ -174,6 +187,7 @@ export default function AgentDetailPage() {
       });
       setSbOptions(opts);
       credForm.resetFields();
+      backfillCredForm(opts);
       message.success('全局接入凭证已保存');
     } finally {
       setCredSaving(false);
