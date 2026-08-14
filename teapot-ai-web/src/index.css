@@ -19,17 +19,13 @@ body {
 
 /* ── 毛玻璃工具类（Barley 设计语言） ── */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.35);
-  backdrop-filter: blur(24px) saturate(1.4);
-  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.5);
   box-shadow: 0 8px 32px rgba(31, 38, 135, 0.08);
 }
 
 .glass-card {
-  background: rgba(255, 255, 255, 0.4);
-  backdrop-filter: blur(18px) saturate(1.3);
-  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  background: rgba(255, 255, 255, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.6);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
   border-radius: 16px;
@@ -79,8 +75,11 @@ body {
 }
 
 /* Agent 选择器与会话历史入口（移动端 Portal）均已移至全局顶栏，
-   模板自带毛玻璃头部在所有断点下皆空，直接隐藏 */
-[class*='chat-anywhere-header'] {
+   模板自带毛玻璃头部在所有断点下皆空，直接隐藏。
+   注意：窄屏下模板不渲染 chat-anywhere-header，而是渲染
+   layout-right-header（自带 blur(10px)），两者都要隐藏 */
+[class*='chat-anywhere-header'],
+[class*='chat-anywhere-layout-right-header'] {
   display: none !important;
 }
 
