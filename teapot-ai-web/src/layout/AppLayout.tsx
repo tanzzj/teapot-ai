@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
+import AgentSelector from './AgentSelector';
 
 const MOBILE_BP = 768;
 
@@ -143,6 +144,9 @@ export default function AppLayout() {
           )}
 
           <div style={{ flex: 1 }} />
+
+          {/* 对话页顶栏 Agent 选择器（原聊天区右上角，移至全局 header） */}
+          <AgentSelector />
 
           <Dropdown
             trigger={['click']}

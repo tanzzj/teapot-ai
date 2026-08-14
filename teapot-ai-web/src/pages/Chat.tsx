@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Empty } from 'antd';
-import { Drawer, IconButton, Select } from '@agentscope-ai/design';
-import { SparkAgentLine, SparkHistoryLine } from '@agentscope-ai/icons';
+import { Drawer, IconButton } from '@agentscope-ai/design';
+import { SparkHistoryLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
   useChatAnywhereInput,
@@ -129,15 +129,6 @@ export default function Chat() {
           />
         )}
         <ChatBridge register={registerSessionGetter} />
-        <SparkAgentLine size={16} style={{ color: '#666' }} />
-        <Select
-          className="teapot-agent-select"
-          value={currentAgent}
-          options={agents.map((a) => ({ label: a.name, value: a.agentKey }))}
-          onChange={(v) => setSearchParams({ agent: v })}
-          style={{ width: isMobile ? 140 : 220 }}
-          size={isMobile ? 'small' : 'middle'}
-        />
         {isMobile && (
           <Drawer
             open={sessionDrawerOpen}
