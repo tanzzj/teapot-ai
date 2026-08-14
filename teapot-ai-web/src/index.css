@@ -78,6 +78,14 @@ body {
   background: transparent !important;
 }
 
+/* Agent 选择器已移至全局顶栏，模板自带毛玻璃头部在桌面端已空，直接隐藏
+   （移动端保留：内含会话列表折叠按钮） */
+@media (min-width: 769px) {
+  [class*='chat-anywhere-header'] {
+    display: none !important;
+  }
+}
+
 /* ── Spark Chat 浅紫呼吸光效（桌面端）──
    发送框 / New Chat 按钮外围柔和紫色光晕往复呼吸 */
 @keyframes teapot-breath-glow {
