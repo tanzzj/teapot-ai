@@ -1,10 +1,18 @@
 import { http, unwrap } from './http';
 import type { ChatSession, Result } from '../types';
 
-/** 会话历史消息条目（后端从 agentscope_sessions 回放，仅 role + 纯文本） */
+/** 会话历史消息条目（后端按内容块拆分）：
+ *  - user/assistant + type=text：文本消息
+ *  - type=reasoning：深度思考
+ *  - type=tool_call / tool_call_output：工具调用与结果 */
 export interface SessionMessageItem {
   role: string;
-  text: string;
+  type: string;
+  text?: string;
+  toolCallId?: string;
+  toolName?: string;
+  arguments?: string;
+  output?: string;
 }
 
 export function sessionList(agentKey?: string) {

@@ -14,7 +14,7 @@ import { useAuthStore } from '../store/auth';
  *   兜底拉后端历史接口 /api/chat/session/messages/{sessionId}
  */
 
-const MSG_CACHE_PREFIX = 'teapot-chat-msgs:v2:';
+const MSG_CACHE_PREFIX = 'teapot-chat-msgs:v3:';
 const MAX_CACHED_MESSAGES = 100;
 /** 会话标题入库截断长度 */
 const MAX_TITLE_LEN = 50;
@@ -89,17 +89,40 @@ function dropCachedMessages(sessionId: string) {
 }
 
 /**
- * 后端历史条目（role+text）→ 模板消息形状。
- * 模板消息是卡片结构：user 走 AgentScopeRuntimeRequestCard（data.input），
- * assistant 走 AgentScopeRuntimeResponseCard（data.output）；
+ * 后端历史条目（按内容块拆分）→ 模板消息卡片结构：
+ * - user/text：AgentScopeRuntimeRequestCard（data.input）
+ * - assistant 轮的 reasoning/tool_call/tool_call_output/text 块合并进同一张
+ *   AgentScopeRuntimeResponseCard 的 output 数组，与实时回放渲染完全一致；
  * 直接塞裸消息体会被渲染成 [object Object]。
  */
 function toTemplateMessages(items: SessionMessageItem[]) {
   const now = Math.floor(Date.now() / 1000);
-  return items.map((m, i) => {
-    if (m.role === 'user') {
-      return {
-        id: `hist-${i}`,
+  const messages: Record<string, unknown>[] = [];
+  let seq = 0;
+  let output: Record<string, unknown>[] | null = null;
+
+  // 把当前积累的助手轮次块封装为一张响应卡片
+  const flushAssistant = () => {
+    if (output && output.length) {
+      const id = `hist-${seq++}`;
+      messages.push({
+        id,
+        role: 'assistant',
+        cards: [{
+          code: 'AgentScopeRuntimeResponseCard',
+          data: { id: `${id}-resp`, object: 'response', status: 'completed', created_at: now, output },
+        }],
+      });
+    }
+    output = null;
+  };
+
+  for (const m of items) {
+    if (m.role === 'user' && m.type === 'text' && m.text) {
+      flushAssistant();
+      const id = `hist-${seq++}`;
+      messages.push({
+        id,
         role: 'user',
         cards: [{
           code: 'AgentScopeRuntimeRequestCard',
@@ -112,30 +135,43 @@ function toTemplateMessages(items: SessionMessageItem[]) {
             }],
           },
         }],
-      };
+      });
+      continue;
     }
-    const msgId = `hist-${i}-msg`;
-    return {
-      id: `hist-${i}`,
-      role: 'assistant',
-      cards: [{
-        code: 'AgentScopeRuntimeResponseCard',
-        data: {
-          id: `hist-${i}-resp`,
-          object: 'response',
-          status: 'completed',
-          created_at: now,
-          output: [{
-            id: msgId,
-            role: 'assistant',
-            type: 'message',
-            status: 'completed',
-            content: [{ object: 'content', type: 'text', text: m.text, msg_id: msgId, status: 'completed' }],
-          }],
-        },
-      }],
-    };
-  });
+    if (!output) output = [];
+    const mid = `hist-${seq++}-m`;
+    if (m.type === 'reasoning' && m.text) {
+      output.push({
+        id: mid, role: 'assistant', type: 'reasoning', status: 'completed',
+        content: [{ object: 'content', type: 'text', text: m.text, msg_id: mid, status: 'completed' }],
+      });
+    } else if (m.type === 'tool_call') {
+      const callId = m.toolCallId || mid;
+      output.push({
+        id: callId, role: 'assistant', type: 'tool_call', status: 'completed',
+        content: [{
+          object: 'content', type: 'data', msg_id: callId, status: 'completed',
+          data: { name: m.toolName, call_id: callId, arguments: m.arguments || '' },
+        }],
+      });
+    } else if (m.type === 'tool_call_output') {
+      const callId = m.toolCallId || mid;
+      output.push({
+        id: `${callId}-output`, role: 'assistant', type: 'tool_call_output', status: 'completed',
+        content: [{
+          object: 'content', type: 'data', msg_id: `${callId}-output`, status: 'completed',
+          data: { name: m.toolName, call_id: callId, output: m.output || '' },
+        }],
+      });
+    } else if (m.type === 'text' && m.text) {
+      output.push({
+        id: mid, role: 'assistant', type: 'message', status: 'completed',
+        content: [{ object: 'content', type: 'text', text: m.text, msg_id: mid, status: 'completed' }],
+      });
+    }
+  }
+  flushAssistant();
+  return messages;
 }
 
 /** 按 agentKey 创建一个模板会话 API 适配器（切换 agent 时随 options 重建） */
