@@ -17,7 +17,10 @@ import SessionPanel from '../chat/SessionPanel';
 import { newChatCoordinator } from '../chat/newChatCoordinator';
 import type { Agent } from '../types';
 
-const MOBILE_BP = 768;
+// 必须与模板内置 narrowMode 断点一致（ahooks useResponsive 的 lg=992px）：
+// 低于 992 时模板会改渲染内置会话列表（带 "Runtime WebUI" 品牌头部），
+// 若本断点取更小值（如 768），768–991 区间会出现内置列表与自定义逻辑不一致
+const MOBILE_BP = 992;
 
 /**
  * 桥接组件：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽，桌面/移动均常驻挂载）。

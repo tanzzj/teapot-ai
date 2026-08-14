@@ -1,6 +1,12 @@
 import { http, unwrap } from './http';
 import type { ChatSession, Result } from '../types';
 
+/** 会话历史消息条目（后端从 agentscope_sessions 回放，仅 role + 纯文本） */
+export interface SessionMessageItem {
+  role: string;
+  text: string;
+}
+
 export function sessionList(agentKey?: string) {
   return unwrap<ChatSession[]>(
     http.get<Result<ChatSession[]>>('/api/chat/session/list', { params: { agentKey } }),
@@ -19,4 +25,10 @@ export function sessionClear(sessionId: string) {
 
 export function sessionRename(sessionId: string, title: string) {
   return unwrap<void>(http.put<Result<void>>('/api/chat/session/rename', { sessionId, title }));
+}
+
+export function sessionMessages(sessionId: string) {
+  return unwrap<SessionMessageItem[]>(
+    http.get<Result<SessionMessageItem[]>>(`/api/chat/session/messages/${sessionId}`),
+  );
 }
