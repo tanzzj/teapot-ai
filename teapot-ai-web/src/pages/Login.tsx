@@ -87,6 +87,11 @@ export default function Login() {
     >
       <Card style={{ width: 'min(380px, calc(100vw - 32px))', boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <img
+            src="/logo.png"
+            alt="Teapot AI"
+            style={{ width: 64, height: 64, borderRadius: 999, marginBottom: 12 }}
+          />
           <div style={{ fontSize: 26, fontWeight: 700, color: '#1a1a1d' }}>Teapot AI</div>
           <div style={{ color: '#999', marginTop: 4 }}>Agent 平台 · 登录</div>
         </div>

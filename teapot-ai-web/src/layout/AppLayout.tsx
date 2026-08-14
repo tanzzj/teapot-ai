@@ -109,28 +109,18 @@ export default function AppLayout() {
             }}
             onClick={() => navigate('/chat')}
           >
-            <span
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 999,
-                background: 'linear-gradient(135deg, #2b2b31, #1a1a1d)',
-                color: '#fff',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 15,
-              }}
-            >
-              <RobotOutlined />
-            </span>
+            <img
+              src="/logo.png"
+              alt="Teapot AI"
+              style={{ width: 30, height: 30, borderRadius: 999, display: 'block' }}
+            />
             {!isMobile && (
               <span style={{ fontWeight: 700, fontSize: 16, color: token.colorText }}>
                 Teapot AI
               </span>
             )}
             {!isMobile && (
-              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0814b</span>
+              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0814c</span>
             )}
           </div>
 
@@ -187,8 +177,9 @@ export default function AppLayout() {
           styles={{ body: { padding: 0 } }}
           closable={false}
         >
-          <div style={{ padding: '16px 16px 8px', fontWeight: 700, fontSize: 16, color: token.colorPrimary }}>
-            Teapot AI
+          <div style={{ padding: '16px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <img src="/logo.png" alt="Teapot AI" style={{ width: 24, height: 24, borderRadius: 999 }} />
+            <span style={{ fontWeight: 700, fontSize: 16, color: token.colorPrimary }}>Teapot AI</span>
           </div>
           <Menu
             mode="vertical"
