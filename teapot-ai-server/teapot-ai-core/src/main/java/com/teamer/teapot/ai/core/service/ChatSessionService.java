@@ -10,9 +10,15 @@ import com.teamer.teapot.ai.core.model.dto.SessionCreateRequest;
 import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.dto.SessionRenameRequest;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
+import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ThinkingBlock;
+import io.agentscope.core.message.ToolResultBlock;
+import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.state.AgentState;
+import io.agentscope.core.util.JsonUtils;
 import io.agentscope.extensions.mysql.state.MysqlAgentStateStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -110,17 +117,70 @@ public class ChatSessionService {
         List<SessionMessageItem> items = new ArrayList<>();
         for (Msg msg : context) {
             MsgRole role = msg.getRole();
-            // 历史画面仅回放用户/助手文本，跳过 system/tool 消息
-            if (role != MsgRole.USER && role != MsgRole.ASSISTANT) {
+            if (role == MsgRole.USER) {
+                String text = msg.getTextContent();
+                if (text != null && !text.isBlank()) {
+                    items.add(new SessionMessageItem("user", "text", text, null, null, null, null));
+                }
                 continue;
             }
-            String text = msg.getTextContent();
-            if (text == null || text.isBlank()) {
+            // assistant/tool 消息按内容块拆成可渲染条目：思考/工具调用/工具结果/文本
+            if (role != MsgRole.ASSISTANT && role != MsgRole.TOOL) {
                 continue;
             }
-            items.add(new SessionMessageItem(role == MsgRole.USER ? "user" : "assistant", text));
+            for (ContentBlock block : msg.getContent()) {
+                if (block instanceof ThinkingBlock thinking) {
+                    String thinkingText = thinking.getThinking();
+                    if (thinkingText != null && !thinkingText.isBlank()) {
+                        items.add(new SessionMessageItem("assistant", "reasoning", thinkingText, null, null, null, null));
+                    }
+                } else if (block instanceof ToolUseBlock toolUse) {
+                    items.add(new SessionMessageItem("assistant", "tool_call", null,
+                            toolUse.getId(), toolUse.getName(), toolArgs(toolUse), null));
+                } else if (block instanceof ToolResultBlock toolResult) {
+                    items.add(new SessionMessageItem("assistant", "tool_call_output", null,
+                            toolResult.getId(), toolResult.getName(), null, toolResultText(toolResult)));
+                } else if (block instanceof TextBlock textBlock) {
+                    String text = textBlock.getText();
+                    if (text != null && !text.isBlank()) {
+                        items.add(new SessionMessageItem("assistant", "text", text, null, null, null, null));
+                    }
+                }
+            }
         }
         return items;
+    }
+
+    /** 工具调用参数：优先原始 JSON 串，否则序列化解析后的入参 */
+    private static String toolArgs(ToolUseBlock toolUse) {
+        String raw = toolUse.getContent();
+        if (raw != null && !raw.isBlank()) {
+            return raw;
+        }
+        Map<String, Object> input = toolUse.getInput();
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
+        try {
+            return JsonUtils.getJsonCodec().toJson(input);
+        } catch (Exception e) {
+            return String.valueOf(input);
+        }
+    }
+
+    /** 工具结果文本：拼接 output 中的文本块 */
+    private static String toolResultText(ToolResultBlock toolResult) {
+        List<ContentBlock> output = toolResult.getOutput();
+        if (output == null || output.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (ContentBlock block : output) {
+            if (block instanceof TextBlock textBlock && textBlock.getText() != null) {
+                sb.append(textBlock.getText());
+            }
+        }
+        return sb.toString();
     }
 
     /** 清空会话（SPEC §9）：删 stateStore 中的消息状态 + 删索引记录 */
