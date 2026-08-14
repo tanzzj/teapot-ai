@@ -14,7 +14,7 @@ import { useAuthStore } from '../store/auth';
  *   兜底拉后端历史接口 /api/chat/session/messages/{sessionId}
  */
 
-const MSG_CACHE_PREFIX = 'teapot-chat-msgs:';
+const MSG_CACHE_PREFIX = 'teapot-chat-msgs:v2:';
 const MAX_CACHED_MESSAGES = 100;
 /** 会话标题入库截断长度 */
 const MAX_TITLE_LEN = 50;
@@ -88,22 +88,51 @@ function dropCachedMessages(sessionId: string) {
   }
 }
 
-/** 后端历史条目（role+text）→ 模板消息形状（与 updateSession 缓存的形状一致） */
+/**
+ * 后端历史条目（role+text）→ 模板消息形状。
+ * 模板消息是卡片结构：user 走 AgentScopeRuntimeRequestCard（data.input），
+ * assistant 走 AgentScopeRuntimeResponseCard（data.output）；
+ * 直接塞裸消息体会被渲染成 [object Object]。
+ */
 function toTemplateMessages(items: SessionMessageItem[]) {
+  const now = Math.floor(Date.now() / 1000);
   return items.map((m, i) => {
-    const id = `hist-${i}`;
+    if (m.role === 'user') {
+      return {
+        id: `hist-${i}`,
+        role: 'user',
+        cards: [{
+          code: 'AgentScopeRuntimeRequestCard',
+          data: {
+            created_at: now,
+            input: [{
+              role: 'user',
+              type: 'message',
+              content: [{ type: 'text', text: m.text, status: 'created' }],
+            }],
+          },
+        }],
+      };
+    }
+    const msgId = `hist-${i}-msg`;
     return {
-      id,
-      object: 'message' as const,
-      role: m.role,
-      type: 'message' as const,
-      status: 'completed' as const,
-      content: [{
-        object: 'content' as const,
-        type: 'text' as const,
-        text: m.text,
-        msg_id: id,
-        status: 'completed' as const,
+      id: `hist-${i}`,
+      role: 'assistant',
+      cards: [{
+        code: 'AgentScopeRuntimeResponseCard',
+        data: {
+          id: `hist-${i}-resp`,
+          object: 'response',
+          status: 'completed',
+          created_at: now,
+          output: [{
+            id: msgId,
+            role: 'assistant',
+            type: 'message',
+            status: 'completed',
+            content: [{ object: 'content', type: 'text', text: m.text, msg_id: msgId, status: 'completed' }],
+          }],
+        },
       }],
     };
   });
