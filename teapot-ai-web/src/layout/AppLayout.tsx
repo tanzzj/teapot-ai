@@ -120,7 +120,7 @@ export default function AppLayout() {
               </span>
             )}
             {!isMobile && (
-              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0814e</span>
+              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0814f</span>
             )}
           </div>
 
@@ -134,6 +134,9 @@ export default function AppLayout() {
           )}
 
           <div style={{ flex: 1 }} />
+
+          {/* 移动端会话历史入口的 Portal 挂载点（Chat 页注入，见 Chat.tsx） */}
+          <div id="topbar-history-slot" style={{ display: 'flex', alignItems: 'center' }} />
 
           {/* 对话页顶栏 Agent 选择器（原聊天区右上角，移至全局 header） */}
           <AgentSelector />

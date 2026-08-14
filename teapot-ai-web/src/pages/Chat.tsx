@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { Empty } from 'antd';
 import { Drawer, IconButton } from '@agentscope-ai/design';
@@ -84,6 +85,8 @@ export default function Chat() {
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BP);
   const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
+  /** 顶栏历史入口 Portal 挂载点（AppLayout header 内的空 div） */
+  const [historySlot, setHistorySlot] = useState<HTMLElement | null>(null);
 
   /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
@@ -95,6 +98,10 @@ export default function Chat() {
     const onResize = () => setIsMobile(window.innerWidth < MOBILE_BP);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    setHistorySlot(document.getElementById('topbar-history-slot'));
   }, []);
 
   // 加载可用 Agent 列表；未指定时默认选第一个
@@ -122,34 +129,7 @@ export default function Chat() {
   const options = useMemo<IAgentScopeRuntimeWebUIOptions | null>(() => {
     if (!currentAgent) return null;
 
-    const rightHeader = (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {isMobile && (
-          <IconButton
-            bordered={false}
-            icon={<SparkHistoryLine />}
-            onClick={() => setSessionDrawerOpen(true)}
-          />
-        )}
-        <ChatBridge register={registerSessionGetter} />
-        {isMobile && (
-          <Drawer
-            open={sessionDrawerOpen}
-            onClose={() => setSessionDrawerOpen(false)}
-            placement="left"
-            width="80vw"
-            title={null}
-            closable={false}
-            styles={{ body: { padding: 0, height: '100%' } }}
-          >
-            <SessionPanel
-              title={activeAgent?.name || 'Teapot AI'}
-              onNavigate={() => setSessionDrawerOpen(false)}
-            />
-          </Drawer>
-        )}
-      </div>
-    );
+    const rightHeader = <ChatBridge register={registerSessionGetter} />;
 
     return {
       api: {
@@ -194,7 +174,7 @@ export default function Chat() {
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
       },
     };
-  }, [currentAgent, activeAgent, agents, isMobile, sessionDrawerOpen, registerSessionGetter, setSearchParams]);
+  }, [currentAgent, activeAgent, agents, isMobile, registerSessionGetter, setSearchParams]);
 
   if (loadingAgents) {
     return null;
@@ -223,6 +203,33 @@ export default function Chat() {
     <div style={{ height: '100%' }}>
       {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
       <AgentScopeRuntimeWebUI key={currentAgent} options={options} />
+      {/* 移动端：会话历史入口 Portal 到全局顶栏（Agent 选择器左侧） */}
+      {isMobile &&
+        historySlot &&
+        createPortal(
+          <>
+            <IconButton
+              bordered={false}
+              icon={<SparkHistoryLine />}
+              onClick={() => setSessionDrawerOpen(true)}
+            />
+            <Drawer
+              open={sessionDrawerOpen}
+              onClose={() => setSessionDrawerOpen(false)}
+              placement="left"
+              width="80vw"
+              title={null}
+              closable={false}
+              styles={{ body: { padding: 0, height: '100%' } }}
+            >
+              <SessionPanel
+                title={activeAgent?.name || 'Teapot AI'}
+                onNavigate={() => setSessionDrawerOpen(false)}
+              />
+            </Drawer>
+          </>,
+          historySlot,
+        )}
     </div>
   );
 }

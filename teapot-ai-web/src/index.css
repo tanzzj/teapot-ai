@@ -78,12 +78,10 @@ body {
   background: transparent !important;
 }
 
-/* Agent 选择器已移至全局顶栏，模板自带毛玻璃头部在桌面端已空，直接隐藏
-   （断点 992 与模板 narrowMode 对齐；窄屏保留：内含会话历史入口按钮） */
-@media (min-width: 992px) {
-  [class*='chat-anywhere-header'] {
-    display: none !important;
-  }
+/* Agent 选择器与会话历史入口（移动端 Portal）均已移至全局顶栏，
+   模板自带毛玻璃头部在所有断点下皆空，直接隐藏 */
+[class*='chat-anywhere-header'] {
+  display: none !important;
 }
 
 /* ── Spark Chat 浅紫呼吸光效（桌面端）──
