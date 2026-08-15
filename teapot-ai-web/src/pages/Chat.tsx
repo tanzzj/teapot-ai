@@ -27,9 +27,19 @@ const MOBILE_BP = 992;
  * 桥接组件：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽，桌面/移动均常驻挂载）。
  * 1) 把模板当前的 sessionId getter 暴露给外层 fetch 闭包（作 AG-UI threadId）；
  * 2) 懒创建会话接线：上报当前会话、注册建会话能力；
- * 3) 揭示时机：AI 首条回复完成（loading true→false）后把隐藏会话放入列表。
+ * 3) 揭示时机：AI 首条回复完成（loading true→false）后把隐藏会话放入列表；
+ * 4) 移动端会话历史入口：经 Portal 挂到全局顶栏。
+ *    注意：Portal 必须从本组件（Provider 内部）发起——SessionPanel 依赖
+ *    ChatAnywhere 的 React Context，若放到 Provider 外部渲染会拿不到会话状态。
  */
-function ChatBridge(props: { register: (getter: () => string | undefined) => void }) {
+function ChatBridge(props: {
+  register: (getter: () => string | undefined) => void;
+  isMobile: boolean;
+  slot: HTMLElement | null;
+  drawerOpen: boolean;
+  onDrawerOpen: (open: boolean) => void;
+  agentName: string;
+}) {
   const { getCurrentSessionId, createSession } = useChatAnywhereSessions();
   const { currentSessionId, setSessions } = useChatAnywhereSessionsState();
   const loading = useChatAnywhereInput((v) => ({ loading: v.loading })).loading;
@@ -69,7 +79,32 @@ function ChatBridge(props: { register: (getter: () => string | undefined) => voi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return null;
+  return props.isMobile && props.slot
+    ? createPortal(
+        <>
+          <IconButton
+            bordered={false}
+            icon={<SparkHistoryLine />}
+            onClick={() => props.onDrawerOpen(true)}
+          />
+          <Drawer
+            open={props.drawerOpen}
+            onClose={() => props.onDrawerOpen(false)}
+            placement="left"
+            width="80vw"
+            title={null}
+            closable={false}
+            styles={{ body: { padding: 0, height: '100%' } }}
+          >
+            <SessionPanel
+              title={props.agentName}
+              onNavigate={() => props.onDrawerOpen(false)}
+            />
+          </Drawer>
+        </>,
+        props.slot,
+      )
+    : null;
 }
 
 /**
@@ -129,7 +164,16 @@ export default function Chat() {
   const options = useMemo<IAgentScopeRuntimeWebUIOptions | null>(() => {
     if (!currentAgent) return null;
 
-    const rightHeader = <ChatBridge register={registerSessionGetter} />;
+    const rightHeader = (
+      <ChatBridge
+        register={registerSessionGetter}
+        isMobile={isMobile}
+        slot={historySlot}
+        drawerOpen={sessionDrawerOpen}
+        onDrawerOpen={setSessionDrawerOpen}
+        agentName={activeAgent?.name || 'Teapot AI'}
+      />
+    );
 
     return {
       api: {
@@ -174,7 +218,7 @@ export default function Chat() {
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
       },
     };
-  }, [currentAgent, activeAgent, agents, isMobile, registerSessionGetter, setSearchParams]);
+  }, [currentAgent, activeAgent, agents, isMobile, historySlot, sessionDrawerOpen, registerSessionGetter, setSearchParams]);
 
   if (loadingAgents) {
     return null;
@@ -203,33 +247,6 @@ export default function Chat() {
     <div style={{ height: '100%' }}>
       {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
       <AgentScopeRuntimeWebUI key={currentAgent} options={options} />
-      {/* 移动端：会话历史入口 Portal 到全局顶栏（Agent 选择器左侧） */}
-      {isMobile &&
-        historySlot &&
-        createPortal(
-          <>
-            <IconButton
-              bordered={false}
-              icon={<SparkHistoryLine />}
-              onClick={() => setSessionDrawerOpen(true)}
-            />
-            <Drawer
-              open={sessionDrawerOpen}
-              onClose={() => setSessionDrawerOpen(false)}
-              placement="left"
-              width="80vw"
-              title={null}
-              closable={false}
-              styles={{ body: { padding: 0, height: '100%' } }}
-            >
-              <SessionPanel
-                title={activeAgent?.name || 'Teapot AI'}
-                onNavigate={() => setSessionDrawerOpen(false)}
-              />
-            </Drawer>
-          </>,
-          historySlot,
-        )}
     </div>
   );
 }
