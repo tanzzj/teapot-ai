@@ -42,7 +42,7 @@ export default function SessionPanel(props: { title: string; onNavigate?: () => 
         flexDirection: 'column',
         height: '100%',
         minHeight: 0,
-        padding: '12px 10px',
+        padding: '12px 14px',
         gap: 10,
       }}
     >
@@ -67,7 +67,9 @@ export default function SessionPanel(props: { title: string; onNavigate?: () => 
           overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
-          gap: 4,
+          gap: 6,
+          // 给选中态白卡 + 阴影留出呼吸空间，避免贴边/被裁剪的观感
+          padding: '2px 2px',
         }}
       >
         {list.length === 0 && (
