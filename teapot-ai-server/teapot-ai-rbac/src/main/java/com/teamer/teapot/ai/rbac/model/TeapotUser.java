@@ -29,6 +29,8 @@ public class TeapotUser implements Serializable {
     private String roles;
     /** 1 启用 0 停用 */
     private Integer status;
+    /** 头像 OSS 直链（SPEC §23；NULL = 未设置） */
+    private String avatar;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 

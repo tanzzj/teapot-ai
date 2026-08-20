@@ -129,25 +129,33 @@ export default function Agents() {
                   style={{ padding: 20, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minWidth: 0 }}
                   onClick={() => navigate(`/agents/${agent.agentKey}`)}
                 >
-                  {/* 卡片头：头像 + 名称/key + 类型标签 */}
+                  {/* 卡片头：头像（SPEC §23：有头像图则展示，否则首字母占位） + 名称/key + 类型标签 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <span
-                      style={{
-                        width: 44,
-                        height: 44,
-                        borderRadius: 999,
-                        background: 'linear-gradient(135deg, #2b2b31, #1a1a1d)',
-                        color: '#fff',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 18,
-                        fontWeight: 700,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {(agent.name || agent.agentKey).charAt(0).toUpperCase()}
-                    </span>
+                    {agent.avatar ? (
+                      <img
+                        src={agent.avatar}
+                        alt={agent.name}
+                        style={{ width: 44, height: 44, borderRadius: 999, objectFit: 'cover', flexShrink: 0 }}
+                      />
+                    ) : (
+                      <span
+                        style={{
+                          width: 44,
+                          height: 44,
+                          borderRadius: 999,
+                          background: 'linear-gradient(135deg, #2b2b31, #1a1a1d)',
+                          color: '#fff',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 18,
+                          fontWeight: 700,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {(agent.name || agent.agentKey).charAt(0).toUpperCase()}
+                      </span>
+                    )}
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontWeight: 600, fontSize: 15, color: 'rgba(26, 26, 29, 0.92)' }}>
                         {agent.name}

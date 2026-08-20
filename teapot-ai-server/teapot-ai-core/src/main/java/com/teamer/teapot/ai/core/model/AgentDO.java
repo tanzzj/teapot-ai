@@ -16,6 +16,8 @@ public class AgentDO implements Serializable {
     private String agentKey;
     private String name;
     private String description;
+    /** 头像 OSS 直链（SPEC §23；NULL = 未设置） */
+    private String avatar;
     private String sysPrompt;
     /** provider:model，如 dashscope:qwen-plus */
     private String modelId;

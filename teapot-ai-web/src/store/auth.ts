@@ -6,6 +6,8 @@ interface AuthState {
   user: TeapotUser | null;
   loggedIn: boolean;
   setSession: (accessToken: string, refreshToken: string, user: TeapotUser) => void;
+  /** 局部更新当前用户信息（如头像上传后回填，SPEC §23） */
+  setUserPatch: (patch: Partial<TeapotUser>) => void;
   logout: () => void;
   hasRole: (...roles: string[]) => boolean;
 }
@@ -19,6 +21,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
     localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
     set({ user, loggedIn: true });
+  },
+
+  setUserPatch: (patch) => {
+    const current = get().user;
+    if (current) {
+      set({ user: { ...current, ...patch } });
+    }
   },
 
   logout: () => {

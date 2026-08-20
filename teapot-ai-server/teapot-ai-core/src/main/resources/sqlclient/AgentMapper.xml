@@ -8,6 +8,7 @@
         <result property="agentKey" column="agent_key"/>
         <result property="name" column="name"/>
         <result property="description" column="description"/>
+        <result property="avatar" column="avatar"/>
         <result property="sysPrompt" column="sys_prompt"/>
         <result property="modelId" column="model_id"/>
         <result property="compactionTrigger" column="compaction_trigger"/>
@@ -20,7 +21,7 @@
     </resultMap>
 
     <sql id="cols">
-        id, agent_key, name, description, sys_prompt, model_id,
+        id, agent_key, name, description, avatar, sys_prompt, model_id,
         compaction_trigger, compaction_keep, feature, status, created_by, created_at, updated_at
     </sql>
 
@@ -65,7 +66,7 @@
     <!-- 全字段更新（service 侧先合并原值），支持软删行复活 -->
     <update id="update">
         UPDATE t_agent
-        SET name = #{name}, description = #{description}, sys_prompt = #{sysPrompt},
+        SET name = #{name}, description = #{description}, avatar = #{avatar}, sys_prompt = #{sysPrompt},
             model_id = #{modelId}, compaction_trigger = #{compactionTrigger},
             compaction_keep = #{compactionKeep}, feature = #{feature},
             status = #{status}, created_by = #{createdBy}

@@ -30,7 +30,22 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public Result<Void> handleOther(Exception e) {
+        if (isClientAbort(e)) {
+            // 客户端主动断开（切换会话/关页/网络抖动），非服务端故障，降噪处理
+            log.debug("客户端提前断开连接：{}", e.toString());
+            return null;
+        }
         log.error("未预期异常", e);
         return Result.fail("系统异常，请稍后重试");
+    }
+
+    private static boolean isClientAbort(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t.getClass().getSimpleName().equals("ClientAbortException")
+                    || t instanceof java.io.EOFException) {
+                return true;
+            }
+        }
+        return false;
     }
 }

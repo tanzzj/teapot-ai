@@ -12,6 +12,8 @@ import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.AgentSkillBind;
+import com.teamer.teapot.ai.core.model.SandboxConfigDO;
+import com.teamer.teapot.ai.core.model.StorageConfigDO;
 import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
 import com.teamer.teapot.ai.core.model.dto.AgentUpdateRequest;
 import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
@@ -54,12 +56,16 @@ public class AgentService {
     private final AuditService auditService;
     private final TeapotAiProperties properties;
     private final AgentRunConnection agentRunConnection;
+    private final SandboxConfigService sandboxConfigService;
+    private final StorageConfigService storageConfigService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                         AgentRegistry agentRegistry, TeapotAguiAgentRegistrar aguiRegistrar,
                         AuditService auditService, TeapotAiProperties properties,
-                        AgentRunConnection agentRunConnection) {
+                        AgentRunConnection agentRunConnection,
+                        SandboxConfigService sandboxConfigService,
+                        StorageConfigService storageConfigService) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.agentRegistry = agentRegistry;
@@ -67,6 +73,8 @@ public class AgentService {
         this.auditService = auditService;
         this.properties = properties;
         this.agentRunConnection = agentRunConnection;
+        this.sandboxConfigService = sandboxConfigService;
+        this.storageConfigService = storageConfigService;
     }
 
     public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled) {
@@ -162,6 +170,16 @@ public class AgentService {
         return agent;
     }
 
+    /** 更新 Agent 头像（SPEC §23：头像 URL 由上传端点产出，此处仅落库） */
+    @Transactional(rollbackFor = Exception.class)
+    public AgentDO updateAvatar(String agentKey, String avatarUrl) {
+        AgentDO agent = requireAgent(agentKey);
+        agent.setAvatar(avatarUrl);
+        agentMapper.update(agent);
+        auditService.log("agent.avatar", agentKey, null);
+        return agent;
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void delete(String agentKey) {
         AgentDO agent = requireAgent(agentKey);
@@ -226,19 +244,51 @@ public class AgentService {
     }
 
     /**
-     * feature 保存前强校验（SPEC §16.6）：枚举/范围/前缀/全局接入，不合法直接拒绝；
+     * feature 保存前强校验（SPEC §16.6/§22）：枚举/范围/前缀/记录引用完整性，不合法直接拒绝；
      * 返回入库 JSON（空命名空间返回 null）。
      */
     private String validateFeature(Map<String, Object> featureMap) {
         try {
             AgentFeature feature = AgentFeature.parse(objectMapper.writeValueAsString(featureMap));
             feature.validate(agentRunConnection.anyConfigured());
+            validateFeatureRecords(feature);
             return feature.toJson();
         } catch (BizException e) {
             throw e;
         } catch (Exception e) {
             throw new BizException("feature 序列化失败：" + e.getMessage());
         }
+    }
+
+    /** 记录引用完整性（§22）：sandbox/storage 引用的记录必须存在且对应链路凭证齐备 */
+    private void validateFeatureRecords(AgentFeature feature) {
+        AgentFeature.Sandbox sb = feature.getSandbox();
+        if (sb != null && sb.isEnabled() && sb.getSandboxRecord() != null && !sb.getSandboxRecord().isBlank()) {
+            SandboxConfigDO rec = sandboxConfigService.getPlain(sb.getSandboxRecord().trim());
+            if (rec == null) {
+                throw new BizException("沙箱记录不存在：" + sb.getSandboxRecord());
+            }
+            if (!SandboxConfigService.linkConfigured(rec)) {
+                throw new BizException("沙箱记录 " + rec.getName() + " 的 " + rec.getLinkType()
+                        + " 链路凭证不齐，请在系统配置 - 沙箱中补全");
+            }
+        }
+        AgentFeature.Storage st = feature.getStorage();
+        if (st != null && "oss".equals(st.getMode())
+                && st.getStorageRecord() != null && !st.getStorageRecord().isBlank()) {
+            StorageConfigDO rec = storageConfigService.getPlain(st.getStorageRecord().trim());
+            if (rec == null) {
+                throw new BizException("OSS 连接记录不存在：" + st.getStorageRecord());
+            }
+            if (isBlank(rec.getAccessKeyId()) || isBlank(rec.getAccessKeySecret())
+                    || isBlank(rec.getRegion()) || isBlank(rec.getBucket())) {
+                throw new BizException("OSS 记录 " + rec.getName() + " 凭证不齐（需 AK/Secret/Region/Bucket）");
+            }
+        }
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     /** 整体替换绑定集合（skillNames 为 null 时不动） */

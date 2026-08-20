@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { Empty } from 'antd';
+import { Empty, message, Upload } from 'antd';
 import { Drawer, IconButton } from '@agentscope-ai/design';
 import { SparkHistoryLine } from '@agentscope-ai/icons';
 import {
@@ -12,10 +12,18 @@ import {
 } from '@agentscope-ai/chat';
 import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
 import { agentList } from '../api/agent';
+import { modelCapabilities } from '../api/model';
 import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
 import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
 import { newChatCoordinator } from '../chat/newChatCoordinator';
+import {
+  ACCEPT_ATTR,
+  ACCEPTED_IMAGE_MIME,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES_PER_MESSAGE,
+  imageCustomRequestFor,
+} from '../chat/imageUpload';
 import type { Agent } from '../types';
 
 // 必须与模板内置 narrowMode 断点一致（ahooks useResponsive 的 lg=992px）：
@@ -122,6 +130,8 @@ export default function Chat() {
   const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
   /** 顶栏历史入口 Portal 挂载点（AppLayout header 内的空 div） */
   const [historySlot, setHistorySlot] = useState<HTMLElement | null>(null);
+  /** 启用模型的能力位 modelId → capabilities（SPEC §19 多模态 gating） */
+  const [modelCaps, setModelCaps] = useState<Record<string, string>>({});
 
   /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
@@ -139,7 +149,7 @@ export default function Chat() {
     setHistorySlot(document.getElementById('topbar-history-slot'));
   }, []);
 
-  // 加载可用 Agent 列表；未指定时默认选第一个
+  // 加载可用 Agent 列表；未指定时优先 localStorage 上次选择，否则选第一个
   useEffect(() => {
     (async () => {
       try {
@@ -147,7 +157,10 @@ export default function Chat() {
         const list = page.list || [];
         setAgents(list);
         if (!currentAgent && list.length > 0) {
-          setSearchParams({ agent: list[0].agentKey }, { replace: true });
+          const lastAgent = localStorage.getItem('teapot:lastAgent') || '';
+          const defaultKey =
+            lastAgent && list.some((a) => a.agentKey === lastAgent) ? lastAgent : list[0].agentKey;
+          setSearchParams({ agent: defaultKey }, { replace: true });
         }
       } finally {
         setLoadingAgents(false);
@@ -156,10 +169,31 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 拉取启用模型的能力位（失败不阻断，退化为纯文本）
+  useEffect(() => {
+    modelCapabilities()
+      .then((list) => {
+        const caps: Record<string, string> = {};
+        for (const e of list) {
+          caps[`${e.provider}:${e.modelName}`] = e.capabilities || '';
+        }
+        setModelCaps(caps);
+      })
+      .catch(() => {
+        // 已统一提示
+      });
+  }, []);
+
   const activeAgent = useMemo(
     () => agents.find((a) => a.agentKey === currentAgent),
     [agents, currentAgent],
   );
+
+  // 当前 Agent 的模型是否支持图片（capabilities 含 image；无配置/拉取失败则隐藏入口）
+  const imageCapable = useMemo(() => {
+    if (!activeAgent) return false;
+    return (modelCaps[activeAgent.modelId] || '').split(',').includes('image');
+  }, [activeAgent, modelCaps]);
 
   const options = useMemo<IAgentScopeRuntimeWebUIOptions | null>(() => {
     if (!currentAgent) return null;
@@ -213,12 +247,32 @@ export default function Chat() {
         placeholder: '输入消息，Enter 发送',
         maxLength: 10000,
         disclaimer: '内容由 AI 生成，请注意甄别',
+        // 多模态 gating：仅模型能力位含 image 时开启附件入口（SPEC §19）
+        attachments: imageCapable
+          ? {
+              accept: ACCEPT_ATTR,
+              maxCount: MAX_IMAGES_PER_MESSAGE,
+              beforeUpload: (file: File) => {
+                if (!ACCEPTED_IMAGE_MIME.includes(file.type)) {
+                  message.error('仅支持 JPEG/PNG/WebP/GIF 图片');
+                  return Upload.LIST_IGNORE;
+                }
+                if (file.size > MAX_IMAGE_BYTES) {
+                  message.error('单张图片不超过 5MB');
+                  return Upload.LIST_IGNORE;
+                }
+                return true;
+              },
+              // 按当前 Agent 探测/上传载体（SPEC §22.1：feature.storage 决定 base64/oss）
+              customRequest: imageCustomRequestFor(currentAgent) as never,
+            }
+          : undefined,
         // 懒创建会话：提交前无会话则先创建（含等待 loader 冲刷），规避模板内部竞态
         beforeSubmit: () =>
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
       },
     };
-  }, [currentAgent, activeAgent, agents, isMobile, historySlot, sessionDrawerOpen, registerSessionGetter, setSearchParams]);
+  }, [currentAgent, activeAgent, agents, isMobile, historySlot, sessionDrawerOpen, registerSessionGetter, setSearchParams, imageCapable]);
 
   if (loadingAgents) {
     return null;

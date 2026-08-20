@@ -5,6 +5,7 @@ import com.teamer.teapot.ai.core.dao.ModelEntryMapper;
 import com.teamer.teapot.ai.core.model.ModelEntryDO;
 import io.agentscope.core.model.Model;
 import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.EndpointType;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -62,11 +63,16 @@ public class ModelRegistry {
                 if (dashscopeApiKey.isBlank()) {
                     throw new BizException("未配置 DASHSCOPE_API_KEY，无法使用 " + modelId);
                 }
-                yield DashScopeChatModel.builder()
+                DashScopeChatModel.Builder builder = DashScopeChatModel.builder()
                         .apiKey(dashscopeApiKey)
                         .modelName(modelName)
-                        .stream(true)
-                        .build();
+                        .stream(true);
+                // 能力位含 image 时显式走 multimodal-generation 端点，不依赖模型名启发式（SPEC §19）
+                if (entry != null && entry.getCapabilities() != null
+                        && entry.getCapabilities().contains("image")) {
+                    builder.endpointType(EndpointType.MULTIMODAL);
+                }
+                yield builder.build();
             }
             case "openai" -> {
                 if (openaiApiKey.isBlank()) {

@@ -9,6 +9,7 @@
         <result property="modelName" column="model_name"/>
         <result property="displayName" column="display_name"/>
         <result property="baseUrl" column="base_url"/>
+        <result property="capabilities" column="capabilities"/>
         <result property="status" column="status"/>
         <result property="createdBy" column="created_by"/>
         <result property="createdAt" column="created_at"/>
@@ -16,7 +17,7 @@
     </resultMap>
 
     <sql id="cols">
-        id, provider, model_name, display_name, base_url, status, created_by, created_at, updated_at
+        id, provider, model_name, display_name, base_url, capabilities, status, created_by, created_at, updated_at
     </sql>
 
     <select id="selectAll" resultMap="modelEntryMap">
@@ -37,14 +38,14 @@
     </select>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO t_model_entry (provider, model_name, display_name, base_url, status, created_by)
-        VALUES (#{provider}, #{modelName}, #{displayName}, #{baseUrl}, #{status}, #{createdBy})
+        INSERT INTO t_model_entry (provider, model_name, display_name, base_url, capabilities, status, created_by)
+        VALUES (#{provider}, #{modelName}, #{displayName}, #{baseUrl}, #{capabilities}, #{status}, #{createdBy})
     </insert>
 
     <update id="update">
         UPDATE t_model_entry
         SET provider = #{provider}, model_name = #{modelName}, display_name = #{displayName},
-            base_url = #{baseUrl}, status = #{status}
+            base_url = #{baseUrl}, capabilities = #{capabilities}, status = #{status}
         WHERE id = #{id}
     </update>
 

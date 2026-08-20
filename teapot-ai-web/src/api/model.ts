@@ -8,6 +8,8 @@ export interface ModelEntry {
   modelName: string;
   displayName?: string | null;
   baseUrl?: string | null;
+  /** 能力位逗号分隔：image,audio,video；空=纯文本（SPEC §19） */
+  capabilities?: string | null;
   status?: number;
   createdBy?: string;
   createdAt?: string;
@@ -15,6 +17,11 @@ export interface ModelEntry {
 
 export function modelList() {
   return unwrap<ModelEntry[]>(http.get<Result<ModelEntry[]>>('/api/model/list'));
+}
+
+/** 启用入口的能力位（多模态 gating，任意登录用户可读） */
+export function modelCapabilities() {
+  return unwrap<ModelEntry[]>(http.get<Result<ModelEntry[]>>('/api/model/capabilities'));
 }
 
 export function modelCreate(payload: Omit<ModelEntry, 'id'>) {

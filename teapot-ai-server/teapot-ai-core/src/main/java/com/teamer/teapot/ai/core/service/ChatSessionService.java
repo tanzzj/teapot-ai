@@ -7,16 +7,21 @@ import com.teamer.teapot.ai.core.dao.ChatSessionMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.ChatSessionDO;
 import com.teamer.teapot.ai.core.model.dto.SessionCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.SessionDateCount;
 import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.dto.SessionRenameRequest;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
+import io.agentscope.core.message.Base64Source;
 import io.agentscope.core.message.ContentBlock;
+import io.agentscope.core.message.ImageBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
+import io.agentscope.core.message.Source;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ThinkingBlock;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
+import io.agentscope.core.message.URLSource;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.util.JsonUtils;
 import io.agentscope.extensions.mysql.state.MysqlAgentStateStore;
@@ -25,6 +30,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -57,6 +63,21 @@ public class ChatSessionService {
     /** 当前用户在某 Agent 下的会话列表（agentKey 可空 = 全部） */
     public List<ChatSessionDO> list(String agentKey) {
         return chatSessionMapper.selectByUser(requireUserId(), agentKey);
+    }
+
+    /** 某 Agent 近 280 天的会话按日统计（Profile 热力图，跨用户聚合） */
+    public List<SessionDateCount> stats(String agentKey) {
+        String since = java.time.LocalDate.now().minusDays(279)
+                .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE);
+        List<SessionDateCount> result = new ArrayList<>();
+        for (Map<String, Object> row : chatSessionMapper.countByAgentAndDate(agentKey, since)) {
+            Object d = row.get("d");
+            Object c = row.get("c");
+            if (d != null && c instanceof Number n) {
+                result.add(new SessionDateCount(String.valueOf(d), n.longValue()));
+            }
+        }
+        return result;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -99,28 +120,37 @@ public class ChatSessionService {
      * 注意：AG-UI 异步链路 ContextUtil ThreadLocal 丢失，写入侧 userId 兜底为
      * "anonymous"（见 TeapotRuntimeContextResolver），故先查 anonymous 槽位，
      * 再兜底当前用户槽位。
+     * 图片不内联 base64（单张可达数百 KB，内联会让响应体膨胀导致弱网下传输被掐断），
+     * 而是返回独立取图端点引用，前端带鉴权单独拉取。
      */
     public List<SessionMessageItem> messages(String sessionId) {
-        String userId = requireUserId();
-        ChatSessionDO session = chatSessionMapper.selectByUserSession(userId, sessionId);
-        if (session == null) {
-            throw new BizException("会话不存在：" + sessionId);
-        }
-        Optional<AgentState> state = stateStore.get("anonymous", sessionId, AGENT_STATE_KEY, AgentState.class);
-        if (state.isEmpty()) {
-            state = stateStore.get(userId, sessionId, AGENT_STATE_KEY, AgentState.class);
-        }
-        List<Msg> context = state.map(AgentState::getContext).orElse(null);
-        if (context == null || context.isEmpty()) {
-            return List.of();
-        }
+        List<Msg> context = loadContext(sessionId);
         List<SessionMessageItem> items = new ArrayList<>();
+        int imageSeq = 0;
         for (Msg msg : context) {
             MsgRole role = msg.getRole();
             if (role == MsgRole.USER) {
-                String text = msg.getTextContent();
-                if (text != null && !text.isBlank()) {
-                    items.add(new SessionMessageItem("user", "text", text, null, null, null, null));
+                // 跳过 Runtime 压缩（compaction）注入的摘要消息，不当作用户发言回显
+                String name = msg.getName();
+                if (name != null && name.startsWith("__compaction_summary__")) {
+                    continue;
+                }
+                // 按内容块拆分：文本与图片各自成条，前端同一用户轮次合并为一张请求卡片
+                for (ContentBlock block : msg.getContent()) {
+                    if (block instanceof TextBlock textBlock) {
+                        String text = textBlock.getText();
+                        if (text != null && !text.isBlank()) {
+                            items.add(new SessionMessageItem("user", "text", text, null, null, null, null, null));
+                        }
+                    } else if (block instanceof ImageBlock imageBlock) {
+                        String imageUrl = imageRef(sessionId, imageBlock.getSource(), imageSeq);
+                        if (imageUrl != null) {
+                            if (imageBlock.getSource() instanceof Base64Source) {
+                                imageSeq++;
+                            }
+                            items.add(new SessionMessageItem("user", "image", null, null, null, null, null, imageUrl));
+                        }
+                    }
                 }
                 continue;
             }
@@ -132,23 +162,90 @@ public class ChatSessionService {
                 if (block instanceof ThinkingBlock thinking) {
                     String thinkingText = thinking.getThinking();
                     if (thinkingText != null && !thinkingText.isBlank()) {
-                        items.add(new SessionMessageItem("assistant", "reasoning", thinkingText, null, null, null, null));
+                        items.add(new SessionMessageItem("assistant", "reasoning", thinkingText, null, null, null, null, null));
                     }
                 } else if (block instanceof ToolUseBlock toolUse) {
                     items.add(new SessionMessageItem("assistant", "tool_call", null,
-                            toolUse.getId(), toolUse.getName(), toolArgs(toolUse), null));
+                            toolUse.getId(), toolUse.getName(), toolArgs(toolUse), null, null));
                 } else if (block instanceof ToolResultBlock toolResult) {
                     items.add(new SessionMessageItem("assistant", "tool_call_output", null,
-                            toolResult.getId(), toolResult.getName(), null, toolResultText(toolResult)));
+                            toolResult.getId(), toolResult.getName(), null, toolResultText(toolResult), null));
                 } else if (block instanceof TextBlock textBlock) {
                     String text = textBlock.getText();
                     if (text != null && !text.isBlank()) {
-                        items.add(new SessionMessageItem("assistant", "text", text, null, null, null, null));
+                        items.add(new SessionMessageItem("assistant", "text", text, null, null, null, null, null));
                     }
                 }
             }
         }
         return items;
+    }
+
+    /** 会话内历史图片二进制：按 base64 图片出现顺序取第 imageIndex 张（仅本人会话） */
+    public ImageData image(String sessionId, int imageIndex) {
+        List<Msg> context = loadContext(sessionId);
+        int seq = 0;
+        for (Msg msg : context) {
+            if (msg.getRole() != MsgRole.USER) {
+                continue;
+            }
+            String name = msg.getName();
+            if (name != null && name.startsWith("__compaction_summary__")) {
+                continue;
+            }
+            for (ContentBlock block : msg.getContent()) {
+                if (block instanceof ImageBlock imageBlock
+                        && imageBlock.getSource() instanceof Base64Source base64Source) {
+                    if (seq == imageIndex) {
+                        String data = base64Source.getData();
+                        if (data == null || data.isEmpty()) {
+                            throw new BizException("图片数据为空：" + sessionId + "#" + imageIndex);
+                        }
+                        byte[] bytes = Base64.getMimeDecoder().decode(data);
+                        String mediaType = base64Source.getMediaType();
+                        return new ImageData(bytes,
+                                mediaType == null || mediaType.isBlank() ? "image/jpeg" : mediaType);
+                    }
+                    seq++;
+                }
+            }
+        }
+        throw new BizException("图片不存在：" + sessionId + "#" + imageIndex);
+    }
+
+    /** 图片原始字节 + MIME（供 Controller 以二进制响应返回） */
+    public record ImageData(byte[] data, String mediaType) {
+    }
+
+    /** 校验会话归属并加载消息上下文（先 anonymous 槽位，后当前用户槽位） */
+    private List<Msg> loadContext(String sessionId) {
+        String userId = requireUserId();
+        ChatSessionDO session = chatSessionMapper.selectByUserSession(userId, sessionId);
+        if (session == null) {
+            throw new BizException("会话不存在：" + sessionId);
+        }
+        Optional<AgentState> state = stateStore.get("anonymous", sessionId, AGENT_STATE_KEY, AgentState.class);
+        if (state.isEmpty()) {
+            state = stateStore.get(userId, sessionId, AGENT_STATE_KEY, AgentState.class);
+        }
+        return state.map(AgentState::getContext).orElse(List.of());
+    }
+
+    /**
+     * 图片源 → 历史回显地址：base64 源返回独立取图端点引用（序号按 base64 图片出现顺序，
+     * 与 image() 遍历逻辑一致）；URL 源体积小直接原样返回。
+     */
+    private static String imageRef(String sessionId, Source source, int imageSeq) {
+        if (source instanceof Base64Source base64Source) {
+            if (base64Source.getData() == null || base64Source.getData().isEmpty()) {
+                return null;
+            }
+            return "/api/chat/session/image/" + sessionId + "/" + imageSeq;
+        }
+        if (source instanceof URLSource urlSource) {
+            return urlSource.getUrl();
+        }
+        return null;
     }
 
     /** 工具调用参数：优先原始 JSON 串，否则序列化解析后的入参 */

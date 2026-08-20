@@ -308,12 +308,31 @@ export function createAguiFetch(opts: AguiFetchOptions) {
 
     const last = input[input.length - 1] as {
       role?: string;
-      content?: { type?: string; text?: string }[];
+      content?: { type?: string; text?: string; image_url?: string }[];
     } | undefined;
-    const text = (last?.content ?? [])
-      .filter((c) => c?.type === 'text')
-      .map((c) => String(c.text ?? ''))
-      .join('');
+    // 按 AG-UI InputContent 协议转 parts（SPEC §19 多模态）：
+    //   text 段照旧；图片转 {type:'image', source:{type:'data'|'url', ...}}
+    // 模板 RequestBuilder 产出的图片 part 形如 {type:'image', image_url}，
+    // image_url 为前端本地压缩后的 data URL（云模型无法回访问内网，故不用 url 源）
+    const parts: Record<string, unknown>[] = [];
+    for (const c of last?.content ?? []) {
+      if (c?.type === 'text') {
+        parts.push({ type: 'text', text: String(c.text ?? '') });
+      } else if (c?.type === 'image' && c.image_url) {
+        const dataUrl = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(c.image_url);
+        if (dataUrl) {
+          parts.push({
+            type: 'image',
+            source: { type: 'data', mimeType: dataUrl[1], value: dataUrl[2] },
+          });
+        } else {
+          parts.push({ type: 'image', source: { type: 'url', value: c.image_url } });
+        }
+      }
+    }
+    if (parts.length === 0) {
+      parts.push({ type: 'text', text: '' });
+    }
 
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const threadId = opts.getSessionId() || `thread-${Date.now()}`;
@@ -328,7 +347,7 @@ export function createAguiFetch(opts: AguiFetchOptions) {
       body: JSON.stringify({
         threadId,
         runId,
-        messages: [{ id: `msg-${Date.now()}`, role: 'user', content: text }],
+        messages: [{ id: `msg-${Date.now()}`, role: 'user', content: parts }],
       }),
       signal,
     });

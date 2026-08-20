@@ -13,12 +13,13 @@
         <result property="email" column="email"/>
         <result property="roles" column="roles"/>
         <result property="status" column="status"/>
+        <result property="avatar" column="avatar"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
 
     <sql id="cols">
-        id, user_id, username, password, real_name, mobile, email, roles, status, created_at, updated_at
+        id, user_id, username, password, real_name, mobile, email, roles, status, avatar, created_at, updated_at
     </sql>
 
     <select id="selectByUsername" resultMap="userMap">
@@ -51,6 +52,7 @@
             <if test="roles != null">roles = #{roles},</if>
             <if test="status != null">status = #{status},</if>
             <if test="password != null">password = #{password},</if>
+            <if test="avatar != null">avatar = #{avatar},</if>
         </set>
         WHERE user_id = #{userId}
     </update>

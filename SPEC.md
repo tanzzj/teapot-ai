@@ -376,7 +376,8 @@ agentscope:
   agui:
     path-prefix: /agui
     cors-enabled: true
-    run-timeout: 10m
+    run-timeout: 30m
+    sse-timeout: 1800000
     enable-path-routing: false
     agent-id-header: X-Agent-Id        # 前端请求头携带目标 agent key
     emit-state-events: true
@@ -1018,10 +1019,12 @@ teapot:
       local-path: ${GIT_SKILL_LOCAL_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/git-skills}
       source:     git                                 # 列表/详情展示的 source 标识
       auto-sync:  true                                # 读操作轻量 ls-remote，HEAD 变化才 pull
+      skills-root: ${GIT_SKILL_SKILLS_ROOT:}          # 仓内 skill 目录根（相对仓库根）；空=自动探测（§15.10）
 ```
 
 服务器侧（§11/§13 约定）：`app.env` 增加 `GIT_SKILL_ENABLED=true`、`GIT_SKILL_REMOTE=…`、
-`GIT_SKILL_LOCAL_PATH=/main/apps/teapot-ai/git-skills`；clone 目录可再生，**不纳入备份清单**。
+`GIT_SKILL_LOCAL_PATH=/main/apps/teapot-ai/git-skills`、`GIT_SKILL_SKILLS_ROOT=…`（嵌套布局必填）；
+clone 目录可再生，**不纳入备份清单**。
 
 ### 15.6 Bean 装配（AgentScopeConfig 改造）
 
@@ -1030,11 +1033,15 @@ teapot:
 @ConditionalOnProperty(prefix = "teapot.ai.skill-git", name = "enabled", havingValue = "true")
 public GitSkillRepository gitSkillRepository(TeapotAiProperties props) {
     SkillGit cfg = props.getSkillGit();
-    return new GitSkillRepository(cfg.getRemoteUrl(), cfg.getBranch(),
-            Path.of(cfg.getLocalPath()), cfg.getSource(), cfg.isAutoSync());
+    return new RootSkillAwareGitSkillRepository(cfg.getRemoteUrl(), cfg.getBranch(),
+            Path.of(cfg.getLocalPath()), cfg.getSource(), cfg.isAutoSync(),
+            cfg.getSkillsRoot());                     // 6 参构造器：仓内 skill 目录根（§15.10）
 }
 ```
 
+- 装配的是兜底子类 `RootSkillAwareGitSkillRepository`（core/config）：官方扫描之外补识根级
+SKILL.md（单 skill 仓布局），覆盖 getAllSkills/getAllSkillNames/getSkill/skillExists 四个读路径，
+写操作沿用官方只读语义；声明类型仍为 `GitSkillRepository`，消费方无感知；
 - `remote-url` 为空时启动报配置错误（fail-fast，避免静默降级）；
 - 消费方一律 `ObjectProvider<GitSkillRepository>` 注入，`enabled=false` 时自然缺席；
 - BOM 增加 `agentscope-extensions-skill-git-repository`（版本随 `${agentscope.version}`），core 模块加依赖。
@@ -1090,8 +1097,13 @@ repo-root/
 └── README.md               # 无 SKILL.md 的目录/文件被忽略
 ```
 
-- 扫描规则以官方实现为准（含 `SKILL.md` 的目录识别为 skill）；集成测试用 fixture 仓库核实，
-  若官方支持其他布局（如根级 SKILL.md）再修订本节约定（§18 风险 15）；
+- **扫描规则（2.0.1 源码实测，已核实）**：只扫 skillsRoot 下**第一层**子目录（`Files.list`，非递归），
+  子目录含 `SKILL.md` 即识别为 skill；默认 skillsRoot = 仓库根的 `skills/` 子目录（存在则用），否则仓库根；
+- **根级 SKILL.md（单 skill 仓布局）官方不识别**，由平台兜底子类 `RootSkillAwareGitSkillRepository` 补识：
+  有效 skillsRoot 下直接存在 `SKILL.md` 时按单 skill 加载（资源递归并入，`.git`/隐藏目录自动跳过），
+  与官方扫描结果按 name 去重合并；2026-08-18 已用 gitee 单 skill 仓（rising-sun-rules，20 个 references）实测通过；
+- 嵌套布局（如 Qoder 的 `.qoder/skills/<name>/SKILL.md`）需经 6 参构造器的 `skillsRoot` 显式指定
+  （配置 `skills-root`，如 `.qoder/skills`）；`skillsRoot` 拒绝绝对路径与 `..` 段；
 - CI 建议（仓库侧）：校验 frontmatter `name` 与目录名一致、description 非空、体积上限。
 
 ### 15.11 同步与降级矩阵
@@ -1496,6 +1508,457 @@ Redis 状态存储/多副本、角色权限入库动态化、Plan Mode HITL 审�
 | 16 | AgentRun 官方文档包名与 2.0.1 构件不符（文档写 harness 内置 `impl.agentrun`，实测为独立扩展 `agentscope-extensions-sandbox-agentrun`，包名 `io.agentscope.extensions.sandbox.agentrun`） | 已 javap 核实，以构件为准（§16.3） |
 | 17 | SandboxState 反序列化需 ObjectMapper 注册 `AgentRunHarnessSandboxJacksonModule`，否则跨 call 沙箱状态恢复失败 | 实施期按官方自检清单落实，集成测试覆盖（§16.6） |
 | 18 | AgentRun 按沙箱实例计费（FC 按量），实例数随活跃会话数增长 | 闲置 1800s 回收 + 账单巡检（§16.10）；规格按任务选型（代码解释器 2C4G 起步） |
+| 19 | 多模态一期（§19）：DashScope multimodal-generation 端点对 base64 data URL 的实际接受度未运行时验证（源码支持不等于端点兼容）；qwen-vl 系列需开通模型入口 | §19.8 T5 验收首项；失败降级为 URL 源（需 OSS，二期方案提前） |
+
+---
+
+## 19. 多模态接入（图片先行，AgentScope 2.0.1 能力已核实）
+
+目标：用户在对话台可随消息上传图片，绑定多模态模型的 Agent 能看图作答；
+一期只做**图片**（audio/video 协议与 SDK 已就绪，留二期），不新增任何模型供应商。
+
+### 19.1 现状与差距
+
+| 环节 | 现状 | 差距 |
+|------|------|------|
+| SDK 消息模型 | `ImageBlock/AudioBlock/VideoBlock` + `Source`（URL / Base64+mediaType） | 无 |
+| AG-UI 入站 | `AguiMessageConverter.toMsg` 已支持 user 消息结构化 content（`ImageInputContent` 等，url/data 双源）；非 user 消息结构化块直接拒绝 | 无 |
+| DashScope 扩展 | `EndpointType.AUTO` 按模型名路由多模态端点（`qvq*` / 含 `-vl` / 含 `-asr` / `qwen3.5、qwen3.6` 前缀），可 `endpointType(MULTIMODAL)` 强制；`DashScopeMessageConverter/MediaConverter` 支持图/音/视频 | ModelRegistry 未透传 endpointType |
+| OpenAI 兼容扩展 | `OpenAIMessageConverter` 支持 ImageBlock→image_url（data URL 可用），图片处理失败降级占位文本 | 无 |
+| 状态持久化 | MysqlAgentStateStore 序列化 Msg（ImageBlock 带 Jackson 注解） | 无（历史多模态消息天然可存） |
+| 前端发送 | `aguiBridge.createAguiFetch` 只取 text 拼成纯文本 content，附件被丢弃 | **主要缺口** |
+| 模型配置 | `t_model_entry` 无能力位；Agent 选到纯文本模型时发图会被供应商 400 | 需 capabilities + 前端 gating |
+
+### 19.2 端到端链路（目标态）
+
+```
+前端选图/粘贴 → 压缩限尺 → base64 data URL
+→ AG-UI messages[0].content = [ {type:'text',text}, {type:'image', source:{type:'data', mimeType, value}} ]
+→ POST /agui/run/{agentKey}（AguiMessageConverter → Msg[TextBlock, ImageBlock]）
+→ HarnessAgent → ModelRegistry.resolve 的 DashScope/OpenAI Model
+→ formatter 转供应商多模态报文 → 流式回复照旧（TEXT_MESSAGE_CHUNK 等）
+```
+
+### 19.3 附件承载方式（决策）
+
+候选：A 前端直传 base64；B 上传平台后传 URL。
+**选 A（base64 data URL）**，理由：
+- DashScope/OpenAI 云 API 无法回访问平台内网 URL，B 需额外接 OSS，一期不值；
+- AG-UI `data` 源与 SDK `Base64Source` 原生对接，零后端改动；
+- 成本是请求体膨胀（约 4/3 倍）与会话存储体积，用限额控制（§19.5）。
+二期如需大图/音视频，再引入 OSS 预签名 URL（切 `url` 源，协议不变）。
+（已落地为 §20：OSS 承载已实现，因多轮回放需 URL 永久有效，改用对象 public-read 直链而非预签名。）
+
+### 19.4 变更清单
+
+**DB（V6__model_multimodal.sql，幂等）**
+```sql
+ALTER TABLE t_model_entry
+  ADD COLUMN capabilities VARCHAR(64) NULL COMMENT '能力位逗号分隔：image,audio,video；NULL=纯文本' AFTER base_url;
+-- 预置：qwen-vl 系列按需由管理员界面添加，脚本不预置多模态模型
+```
+- `capabilities` 含 `image` 时前端展示上传入口；NULL/不含则隐藏并拦截。
+- 模型管理页（Models.tsx + ModelService）表单增「多模态能力」多选（一期仅 image 可选）。
+
+**后端**
+- `ModelEntryDO` / ModelService / ModelController 出入参增 `capabilities`（向后兼容，缺省 null）；
+- `ModelRegistry.create`：dashscope 分支读 entry.capabilities，含 `image` 时
+  `.endpointType(EndpointType.MULTIMODAL)`（避免依赖模型名启发式，兼容自建端点别名）；不含则维持 AUTO；openai 分支无需改（同一 chat completions 端点）；entry 变更后照旧 `evict`；
+- 运行期守卫（可选，低成本）：AG-UI 入口无需改；若用户绕过前端 gating 对纯文本模型发图，供应商 400 由现有 RUN_ERROR 链路展示，可接受。
+
+**前端（主要工作量）**
+- `aguiBridge.createAguiFetch`：content 改为 parts 数组——text 段照旧；附件转
+  `{type:'image', source:{type:'data', mimeType, value: base64}}`（与 `ImageInputContent` 对齐）；
+- 输入区（SessionPanel / Spark Design Sender）：回形针按钮 + 粘贴 + 拖拽，缩略图预览可移除；
+- 发送前压缩：canvas 缩到长边 ≤ 2048px、JPEG quality 0.85（PNG 透明图保留 png）；
+- gating：当前会话 Agent 的 modelId 查 `/api/model/list` 的 capabilities，不含 image 时隐藏上传入口并 toast 说明；
+- 历史回显：一期用户消息中的图片**不回显**（模板历史仅文本），附件仅影响当轮模型输入，记入限制说明。
+
+**nginx / 部署**
+- `client_max_body_size` 提至 20m（base64 膨胀后余量）；SSE 相关配置不动。
+
+### 19.5 限额与安全
+
+| 项 | 限额 | 执行点 |
+|------|------|--------|
+| 单图原始体积 | ≤ 5 MB | 前端选择时拦截 |
+| 单条消息图片数 | ≤ 4 | 前端拦截 |
+| 压缩后长边 | ≤ 2048 px | 前端 canvas |
+| MIME 白名单 | image/jpeg、image/png、image/webp、image/gif | 前端 + AG-UI 入口可选校验 |
+| 请求体 | nginx 20m | §19.4 |
+- 图片经模型供应商云端处理，**不额外落平台磁盘/库**（base64 随 Msg 进 state store，属既有会话数据，备份策略不变）；
+- 提示词注入风险（图内恶意指令）等同既有用户输入面，RBAC 已限定登录用户，不额外处理。
+
+### 19.6 兼容与降级
+
+| 场景 | 行为 |
+|------|------|
+| 纯文本模型收到图 | 供应商 400 → RUN_ERROR 卡片；前端 gating 正常时不可达 |
+| AUTO 误判（自建端点别名） | capabilities 显式 MULTIMODAL 规避（§19.4） |
+| 图片解码/下载失败（OpenAI 链路） | 官方 formatter 降级占位文本 `[Image - processing failed...]`，不中断对话 |
+| 旧前端 + 新后端 | 纯文本链路不变，零影响 |
+| 回滚 | 前端隐藏入口即下线；DB 列可留不改 |
+
+### 19.7 验收标准
+
+1. Models 页给某 Agent 配 `dashscope:qwen-vl-plus`（capabilities=image）；
+2. 对话台上传一张截图 + 提问 → 流式回复正确描述图内内容；
+3. 同一会话追问「刚才图里…」→ 多模态历史生效（state store 回放）；
+4. 纯文本模型 Agent 的输入区无上传入口；强发（接口直调）得 RUN_ERROR 不崩服务；
+5. 超 5MB / 第 5 张图被前端拦截并提示；
+6. 重启进程后续聊，含图轮次不报错（可继续文本对话，图不回显）。
+
+### 19.8 实施任务分解
+
+| # | 任务 | 模块 | 预估 |
+|---|------|------|------|
+| T1 | V6 迁移 + ModelEntryDO/Service/Controller/前端表单 capabilities | 后端+前端 | 0.5d |
+| T2 | ModelRegistry endpointType 透传 | 后端 | 0.2d |
+| T3 | aguiBridge parts 化 + 上传/压缩/预览/gating | 前端 | 1d |
+| T4 | nginx body 限额 + 部署验证 | 运维 | 0.2d |
+| T5 | §19.7 全量验收（含 qwen-vl 入口开通） | 全员 | 0.5d |
+
+实施状态（2026-08-19）：T1–T4 已完成并部署（V6 迁移、`/api/model/capabilities` gating 端点、
+`imageUpload.ts` 本地压缩 customRequest、nginx `client_max_body_size 20m`）；待 T5 浏览器验收：
+admin 在 Models 页新增 `dashscope:qwen-vl-plus`（勾选 image）并绑定 Agent 后发图验证。
+
+二期延伸（不在本节范围）：音频/视频块接入（协议已通，需验证 DashScope omni/asr 模型与限额）、
+~~OSS 预签名 URL 承载大图~~（已由 §20 实现：OSS 对象直链 + 存储策略切换）、模型出图（OpenAIMultiModalTool）。
+
+---
+
+## 20. 图片存储策略：base64 内联 vs 阿里云 OSS（策略模式，管理员可配）
+
+目标：图片承载从“base64 内联唯一解”升级为**可配置的双策略**：
+`base64`（现状，默认）与 `oss`（阿里云对象存储，OSS Java SDK V2）。
+管理员在 Teapot 页面填 AK/Bucket 等配置并切换策略；凭证不齐/上传失败时安全回落，存量数据零迁移。
+
+### 20.1 背景与动机
+
+| 痛点（§19 base64 内联实测） | 数据 |
+|------|------|
+| 会话状态膨胀 | 单图 base64 ≈270KB，含图会话 state_data ≈340KB，每轮全量序列化/传输 |
+| 请求体膨胀 | AG-UI run 请求携 base64，约 4/3 倍原始体积，弱网下易超时/被掐断 |
+| 历史回放成本 | messages JSON 曾内联 base64 导致传输中断（后改独立取图端点缓解，但 state 仍存全量 base64） |
+
+OSS 策略下 state 只存 URL（几十字节），模型供应商直接回源 OSS 公网 URL，请求体与存储体积同步下降。
+
+### 20.2 总体方案（已决策）
+
+```
+【base64 策略（默认，即 §19 现状）】
+前端压缩 → data URL → AG-UI part source:{type:'data'} → ImageBlock(Base64Source) → state 存 base64
+
+【oss 策略】
+前端压缩 → POST /api/chat/image/upload（multipart）
+→ ImageStorageRouter → OssImageStorageStrategy → OSSClient.putObject（对象 ACL public-read）→ 返回 URL
+→ antd Upload response.url = OSS URL → aguiBridge 既有 url 源分支（零改动）
+→ AG-UI part source:{type:'url'} → AguiMessageConverter → ImageBlock(URLSource) → state 只存 URL
+→ DashScope/OpenAI 推理时回源 OSS 公网 URL；跨设备历史回显直接用 URL
+```
+
+关键决策：
+1. **介入点选前端预上传**（而非后端改写 Msg）：AG-UI `ImageInputContent` 原生支持 url/data 双源（§19.1 已核实），
+   前端 `aguiBridge` 的 url 源分支已就绪（非 data URL 自动转 `{type:'url', value}`），后端零协议改动；
+2. **访问模式选对象级 public-read + 随机 UUID key**（bucket 保持私有），不用预签名 URL：
+   多轮追问会重放历史 Msg 中的 URL，预签名过期即废；public-read 直链永久有效，模型回源与历史回显零维护。
+   等价于 unguessable URL（key 含 UUID），敏感性风险见 §20.8；
+3. **策略解析带回落**（同 AgentRegistry 双链路模式）：strategy=oss 但凭证不齐/OSS 开关关闭 →
+   生效策略自动回落 base64 并 warn；前端按 `effectiveStrategy` 走链路，不感知回落细节。
+
+### 20.3 策略模式设计（后端）
+
+```java
+/** 图片存储策略（SPEC §20）：store 返回可直接作为 AG-UI url 源的引用 */
+public interface ImageStorageStrategy {
+    String name();                                  // base64 | oss
+    StoredImage store(byte[] data, String mediaType); // 返回值含 url（data URL 或 OSS URL）与策略名
+}
+
+// InlineBase64StorageStrategy：bytes → data:{mediaType};base64,{...}（与现状产物一致）
+// OssImageStorageStrategy：OSSClient.putObject，key = {keyPrefix}{yyyyMMdd}/{uuid}.{ext}，
+//                          对象 ACL public-read + Cache-Control 一年；返回 {customDomain|bucket域}/{key}
+
+// ImageStorageRouter：解析生效策略 = yml 开关 ∧ t_sys_config strategy ∧ OSS 凭证齐备；
+//                      持有两策略实现，上传端点统一入口；配置变更（PUT /api/config/storage）后重建 OSSClient
+```
+
+- `OssClientManager`：单例 `OSSClient`（AutoCloseable，@PreDestroy close，SDK 要求）；
+  `StaticCredentialsProvider`（AK 对）+ region；配置了 customDomain 时 `.endpoint(domain).useCName(true)`；
+- OSS Java SDK V2 依赖（bom 锁版）：`com.aliyun:alibabacloud-oss-v2:0.5.x`（preview 期 SDK，锁版本不浮动；
+  包名 `com.aliyun.sdk.service.oss2.*`，注意其传递引入 jackson-dataformat-xml，与现有 Jackson 版本对齐验证）。
+
+### 20.4 配置项（t_sys_config，复用 §16.5.1 加密体系；env 优先覆盖）
+
+| config_key | 加密 | env 覆盖 | 说明 |
+|------|------|------|------|
+| `storage.image.strategy` | 明文 | `STORAGE_IMAGE_STRATEGY` | `base64`（默认）/ `oss` |
+| `oss.access_key_id` | **密文** | `OSS_ACCESS_KEY_ID` | RAM 用户 AK（建议仅授目标 bucket 的 PutObject/GetObject） |
+| `oss.access_key_secret` | **密文** | `OSS_ACCESS_KEY_SECRET` | 同上 |
+| `oss.region` | 明文 | `OSS_REGION` | 如 `cn-beijing` |
+| `oss.bucket` | 明文 | `OSS_BUCKET` | 目标 bucket 名 |
+| `oss.endpoint` | 明文（可选） | `OSS_ENDPOINT` | 显式 endpoint；与 customDomain 二选一，customDomain 优先 |
+| `oss.custom_domain` | 明文（可选） | `OSS_CUSTOM_DOMAIN` | 自定义域名（含 https://），作 URL 前缀 + SDK useCName |
+| `oss.key_prefix` | 明文 | — | 对象 key 前缀，默认 `teapot-ai/chat-images/` |
+
+- yml 行为开关：`teapot.ai.storage.oss.enabled`（默认 true；false 时即使凭证齐备也不启用）；
+- 凭证齐备判定：`access_key_id ∧ access_key_secret ∧ region ∧ bucket`（同 `AgentRunConnection.configured()` 模式）；
+- 读回显一律脱敏：AK/Secret 仅 `configured` 布尔 + 末 4 位掩码（`ConfigCryptoService.mask`）。
+
+### 20.5 REST API
+
+| 接口 | 权限 | 说明 |
+|------|------|------|
+| `GET /api/config/storage-options` | developer+ | `{strategy, effectiveStrategy, ossEnabled, ossConfigured, region, bucket, endpoint, customDomain, keyPrefix, accessKeyIdMasked, accessKeySecretMasked}` |
+| `PUT /api/config/storage` | admin | 写 strategy + OSS 各项；密文字段 AES-GCM 入库；非 null 才更新（留空不修改，同 `/api/config/sandbox`） |
+| `POST /api/chat/image/upload` | 登录用户（/api/chat/* 覆盖） | multipart `file`；服务端复检 ≤5MB + MIME 白名单（§19.5）+ magic number；经 `ImageStorageRouter` 返回 `{url, strategy}`。base64 策略下亦可用（返回 data URL），供统一入口与联调 |
+
+### 20.6 变更清单
+
+**后端（teapot-ai-core）**
+- bom + core pom：新增 `alibabacloud-oss-v2`（§20.3）；
+- 新增 `storage` 包：`ImageStorageStrategy` / `InlineBase64StorageStrategy` / `OssImageStorageStrategy`
+  / `ImageStorageRouter` / `OssClientManager` / `OssConnection`（env+DB 合并解析，同 AgentRunConnection 结构）；
+- `TeapotAiProperties` 增 `storage` 嵌套配置（oss.enabled、keyPrefix 默认值）；
+- `ConfigController` 增 `storage-options` / `storage` 两端点（§20.5）；
+- 新增 `ChatImageController`（`/api/chat/image/upload`）或并入 ChatSessionController；
+- `ChatSessionService` **无需改**：URLSource 分支已原样返回 URL（本期图片外置修复已铺路），历史回显天然兼容。
+
+**前端（teapot-ai-web）**
+- `imageUpload.ts`：`imageCustomRequest` 启动时拉一次 `storage-options` 并缓存：
+  `effectiveStrategy=oss` → 压缩产物改 Blob 直传 `/api/chat/image/upload`，`response.url` = OSS URL；
+  `base64` → 维持现链路（零往返）；压缩参数与限额不变（§19.5）；
+- `aguiBridge.ts` / `sessionBridge.ts` **零改动**：url 源发送分支与 http URL 直渲染分支均已就绪；
+- `api/config.ts`：增 `storageOptions()` / `saveStorageConfig()`；
+- 存储配置 UI 落在 **系统配置页的「存储」分区**（§21.3，不再放 AgentDetail）：策略 Radio（base64 内联 / OSS 对象存储）
+  + OSS 凭证表单（AK/Secret `Input.Password` 留空不修改、region、bucket、endpoint、customDomain、keyPrefix）
+  + 状态横幅（OSS：已接入/未接入 · Key 掩码，交互同 E2B 凭证区，§16.11）。
+
+**DB**：无新表（复用 t_sys_config）。
+
+**nginx/部署**：无改动（上传走既有 /api/ 块，20m body 限额已足）。
+
+### 20.7 兼容与降级
+
+| 场景 | 行为 |
+|------|------|
+| strategy=oss 但凭证不齐/开关关闭 | 生效策略回落 base64 + warn 日志；前端按 effectiveStrategy 走内联链路 |
+| OSS 上传失败（网络/权限/域名不通） | 上传端点报错，前端 onError 提示用户；**不静默改发 base64**（避免两种承载混杂于同一会话语义不清），由用户重试或管理员切策略 |
+| 存量 base64 会话 | 零迁移：Base64Source 走既有取图端点，URLSource 直链渲染，两者并存 |
+| 运行中切换策略 | 仅影响新消息；历史消息按各自 source 类型回放 |
+| 会话删除/清空 | 一期不联动清理 OSS 对象；建议 OSS 控制台配生命周期规则（如 90 天前缀过期），联动清理列二期 |
+| 旧前端 + 新后端 | 旧前端不感知 storage-options，永远走 base64 链路，零影响 |
+| 回滚 | 策略切回 base64 即下线 OSS 链路；依赖与表结构可留 |
+
+### 20.8 安全与合规
+
+- AK 密文入库（AES-GCM，主密钥 TEAPOT_SECRET_KEY 仅环境变量，§16.5.1）；GET 回显脱敏；审计只记 key 名；
+- RAM 最小权限：建议仅授目标 bucket `oss:PutObject/GetObject`，不用 AliyunOSSFullAccess；
+- bucket 保持私有，仅对象级 public-read；key 含 UUID 不可枚举；
+  **敏感性告知**：获得 URL 即可读取图片，涉密场景应保持 base64 策略（配置页需提示文案）；
+- 上传端点服务端复检体积/MIME/magic number，防绕过前端限额；
+- **阿里云合规（重要）**：2025-03-20 起新开通 OSS 的中国内地地域 bucket，默认外网域名禁用数据面 API，
+  必须自定义域名（CNAME + HTTPS 证书）访问 → `oss.custom_domain` 为一等配置项；
+  若目标 bucket 属此类，未配 customDomain 时上传将失败，需在配置页提示引导。
+
+### 20.9 验收标准
+
+1. 存储配置页填齐 OSS 凭证并切 `oss`：发图对话成功，模型能看图作答；DB 中该会话 state 内图片为 `URLSource`（url 指向 OSS，无 base64）；
+2. OSS 控制台可见对象（前缀正确、public-read）；消息 JSON/AG-UI 请求体不含 base64；
+3. 跨设备/刷新后历史回显正常（图片直链加载）；同会话追问“刚才图里…”正常；
+4. 删除 AK 配置后发图：自动回落 base64，对话不中断（日志有 warn）；
+5. 切回 base64：新消息恢复内联，历史 OSS 图片仍可回显；
+6. 无凭证时 `/api/chat/image/upload` 在 oss 策略下返回明确业务错误；越权（未登录）401；
+7. 超 5MB/非白名单 MIME 被服务端拦截。
+
+### 20.10 实施任务分解
+
+| # | 任务 | 模块 | 预估 |
+|---|------|------|------|
+| T1 | bom/core 引入 oss-v2 依赖 + OssClientManager + OssConnection（env+DB 合并） | 后端 | 0.5d |
+| T2 | 策略接口 + 两实现 + ImageStorageRouter + 上传端点 | 后端 | 0.5d |
+| T3 | ConfigController storage-options/storage 端点 + 脱敏回显 | 后端 | 0.3d |
+| T4 | imageUpload 双链路 + storage-options 缓存 | 前端 | 0.5d |
+| T5 | 存储配置 UI（随 §21 系统配置页「存储」分区落地） | 前端 | 0.5d |
+| T6 | 阿里云侧准备（RAM 用户/bucket/CNAME 域名与证书）+ 部署验证 | 运维 | 0.5d |
+| T7 | §20.9 全量验收 | 全员 | 0.5d |
+
+### 20.11 风险与待确认
+
+| # | 风险 | 缓解 |
+|---|------|------|
+| 1 | oss-v2 SDK 处 preview 期，API 可能变动 | bom 锁版本；实现前以构件 javap 核实 PutObjectRequest/ACL 设置 API |
+| 2 | 内地新 bucket 默认域名数据面禁用（§20.8） | customDomain 一等配置 + 配置页提示；运维清单含 CNAME/证书 |
+| 3 | DashScope 回源 OSS URL 的连通性/频率 | 验收项 1 实测；同地域公网直链，预期无碍 |
+| 4 | public-read 敏感性 | 配置页明示；涉密保持 base64；二期可加预签名模式（重新签名回放 URL） |
+| 5 | OSS 对象无清理 → 存储成本累积 | 生命周期规则建议值写入配置页提示；二期联动 clear |
+
+### 20.12 OSS 多记录管理（2026-08-19 追加，已实施）
+
+背景：单套 OSS 凭证无法满足多环境/多 bucket 场景（如生产与测试分桶、不同账号），改为多条连接记录 + 激活其一。
+
+**数据模型**：新表 `t_storage_config`（V7 迁移）——name 唯一键 + AK/Secret（AES-GCM 密文）+ region/bucket/endpoint/custom_domain/key_prefix/remark；激活记录名存 `t_sys_config.storage.image.active`，策略仍存 `storage.image.strategy`。
+
+**三级解析（OssConnection）**：env 应急覆盖 > 激活记录（StorageConfigService.getActivePlain，带轻量缓存，变更即失效）> 旧 `oss.*` 单键（向后兼容）；`configured()` 语义不变，OssClientManager 指纹缓存/上传端点/aguiBridge 均零改动。
+
+**REST API（写仅 admin，读同 §20.5 授权）**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/config/storage-list | 记录列表（AK/Secret 只回 accessKeyConfigured 布尔）+ active |
+| POST | /api/config/storage-record | 新建（name 唯一，AK/Secret/Region/Bucket 四项必填，凭证加密入库） |
+| PUT | /api/config/storage-record | 按 name 更新（AK/Secret 留空不修改） |
+| DELETE | /api/config/storage-record/{name} | 删除（激活中的记录禁删，先切换再删） |
+| PUT | /api/config/storage | 增 `active` 字段：切换激活记录（Service 校验凭证齐备）；兼容旧单键字段写入 |
+
+storage-options 出参增 `active`。审计只记记录名不记凭证（§14.6）。
+
+**前端（系统配置-存储分区）**：策略 Radio + 激活记录 Select（选 oss 时必选）；下方记录表（名称/Region/Bucket/凭证/更新时间 + 激活/编辑/删除），新建/编辑走 Modal（编辑态 AK/Secret 留空不修改）。imageUpload 双链路无感知（仍只看 effectiveStrategy）。
+
+**降级**：未设激活记录且无旧单键 → ossConfigured=false → 回落 base64（同 §20.7）。
+
+---
+
+## 21. 系统配置菜单（admin 一站式管理台）
+
+目标：新增顶导航「系统配置」入口（admin 专属），集中管理模型 / 用户 / 存储（OSS）/ 沙箱凭证；
+Agent 配置页（AgentDetail）不再内嵌全局凭证表单，改为**下拉选择 + 状态摘要 + 跳转链接**。
+
+### 21.1 菜单与路由
+
+- 顶栏 Segmented 导航：原「模型」「用户」两个 admin 入口合并为单一「系统配置」项；
+- 路由 `/system/:section`，section ∈ `models | users | storage | sandbox`，默认 `models`；
+  旧路由 `/models`、`/users` 保留为重定向（书签兼容）；
+- 页面布局复刻 AgentDetail 左侧胶囊菜单风格（glass-card），移动端为顶部切换；
+- RBAC：前端 `RequireRole admin` 包裹 `/system/*`；后端权限不变
+  （GET `sandbox-options`/`storage-options` developer+，写 `/api/config/*` admin 独占，既有规则覆盖）。
+
+### 21.2 分区内容
+
+| 分区 | 内容 | 复用 |
+|------|------|------|
+| 模型 | 现有模型管理页整体迁入 | `Models.tsx` 组件不动 |
+| 用户 | 现有用户管理页整体迁入 | `Users.tsx` 组件不动 |
+| 存储 | §20 策略 Radio + OSS 凭证表单 + 接入状态 | 新增 |
+| 沙箱 | 全局接入凭证表单（E2B + AgentRun 双链路），自 AgentDetail 平移 | 逻辑复用 `sandboxOptions`/`updateSandboxConfig` |
+
+### 21.3 AgentDetail 下拉化改造
+
+- Sandbox 分区：删除「全局接入凭证（admin）」表单卡片，替换为接入状态摘要
+  （已接入/未接入 · 链路 · Key 掩码）+「前往系统配置」按钮（admin 可见）；
+- 新增 **沙箱链路下拉**（feature.sandbox.link）：`自动（跟随全局）` / `e2b` / `agentrun`，
+  选项可用性由 `sandbox-options` 的 e2bConfigured / agentrun 凭证状态标注禁用态；
+- Model 已是下拉（modelPresets），保持不变；
+- 存储策略为全局配置，不出现在 AgentDetail（由系统配置页管理）。
+
+### 21.4 后端配套（Agent 级沙箱链路覆盖）
+
+- `AgentFeature.Sandbox` 增 `link` 字段（auto/e2b/agentrun，缺省 auto）；
+- `AgentRegistry.resolveSandboxLink` 增 agent 级参数：agent 显式指定的链路可用则用之，
+  不可用回落自动路由（优先级：agent 级 link > 全局 `teapot.ai.sandbox.link`）；
+- 其余端点零改动（写 feature 走既有 AgentService update 通道，无新表无迁移）。
+
+### 21.5 验收
+
+1. admin 顶栏见「系统配置」，四个分区均可达；developer/普通用户不可见且直访路由 403；
+2. 旧 `/models`、`/users` 重定向到对应分区；
+3. AgentDetail Sandbox 分区无凭证表单，链路下拉可选且保存后 feature.sandbox.link 落库；
+4. agent 指定 e2b 而 e2b 凭证缺失 → 回落自动路由并 warn（日志可见）。
+
+---
+
+## 22. 存储/沙箱载体按 Agent 选择（记录化 + feature 落库，2026-08-19 修订 §20/§21）
+
+目标：把「图片存储载体」与「沙箱承载」从全局策略下放为 **Agent 级选择**，全部落在
+`t_agent.feature` 中；系统配置页只维护连接记录（OSS / 沙箱均多记录 CRUD），不再有全局策略单选与全局激活概念。
+
+### 22.1 图片存储载体按 Agent 选择（修订 §20）
+
+- 系统配置-存储分区：移除「图片存储策略」Radio（§20.1 全局策略入口废弃，存量字段保留仅作文本兼容），
+  仅保留 **OSS 连接记录表**（§20.12 多记录，AK/Secret AES-GCM 加密入库，列表只回凭证布尔）；
+- AgentDetail **Basic Info** 新增「图片存储载体」下拉：`默认 Base64` + 各条 OSS 记录；
+  落库 `feature.storage = { mode: 'base64' }` 或 `{ mode: 'oss', storageRecord: <记录名> }`；
+- 上传链路按 Agent 路由：前端 `imageCustomRequestFor(agentKey)` →
+  `GET /api/chat/image/strategy?agentKey=` 探测 / `POST /api/chat/image/upload?agentKey=` 上传（探测结果按 agentKey 缓存）；
+- `ImageStorageRouter.effectiveStrategy(agentKey)`：feature.storage 存在 → mode=oss 且记录存在+凭证齐备+yml 开关开才生效 oss，否则 base64 并 warn；
+  feature.storage 缺省（存量 Agent）→ 回落全局策略（§20.7 原语义）；
+- 会话消息中已存的 base64 图片不受影响，渲染端照常展示；
+- RBAC：新增轻量名单端点 `GET /api/config/storage-record-names`（name/region/bucket）入 developer/viewer resource-list；写接口仍 admin 独占。
+
+### 22.2 沙箱连接记录 + Agent 必选承载（修订 §16/§21）
+
+- 新表 `t_sandbox_config`（迁移 `V8__sandbox_config.sql`）：name 唯一键，`link_type ∈ e2b|agentrun`，
+  e2b 链路列（api_key/api_base_url/domain/default_template）与 agentrun 链路列（api_key/account_id/region/default_template/mcp_server_url）；敏感列 AES-GCM 加密；
+- 系统配置-沙箱分区：由全局凭证表单改为 **沙箱连接记录表**（多记录 CRUD，链路 Tag + 凭证布尔，编辑留空不修改敏感列）；
+  E2B 链路仅填 Region（唯一变量），前端派生 API Base URL（`https://api.<region>.e2b.fc.aliyuncs.com`）与 Domain（`<region>.e2b.fc.aliyuncs.com`）入库，库内仍存完整 URL；
+  新增端点 `GET /api/config/sandbox-list`、`POST/PUT /api/config/sandbox-record`、`DELETE /api/config/sandbox-record/{name}`、`GET /api/config/sandbox-record-names`；
+- AgentDetail Sandbox 分区：启用开关开启后 **必选**一条沙箱记录（`feature.sandbox.sandboxRecord`），原「沙箱链路」下拉废弃——链路由所选记录的 `linkType` 决定；
+- `AgentRegistry.applySandbox` 记录优先：引用记录且凭证齐备 → 按记录链路装配（模板解析链：feature.templateName > 记录默认模板 > 全局默认）；记录不存在/凭证不齐 → 降级无 shell 并 error；
+  存量 Agent（无 sandboxRecord）回落全局链路原语义（`feature.sandbox.link` + `agentRunConfigured` 门控）；
+- 记录删除不阻止：引用它的 Agent 运行期降级无 shell 并 warn（前端 Popconfirm 已提示）；
+- `AgentFeature.validate` + `AgentService.validateFeatureRecords` 双重校验：oss 模式记录存在且 AK/Secret/Region/Bucket 齐备；sandbox 记录存在且对应链路凭证齐备。
+
+### 22.3 Skill 同步按钮下沉到 git 卡片级
+
+- Skill 列表页顶部 Git 状态条移除全局「立即同步」按钮；
+- 「立即同步」出现在每个 `source=git` 的 skill 卡片上（同 git 来源卡片均可见，如 rising-sun-rules）；
+- 接口不变：`POST /api/skill/git/sync` 仍为仓库级同步（git 来源同仓，卡片级仅是入口位置变化），权限 developer+。
+
+### 22.4 验收
+
+1. 存储页无策略 Radio，仅 OSS 记录表；沙箱页为记录表（双链路 CRUD，凭证不回显）；
+2. AgentDetail Basic Info 可选 base64/某条 OSS 记录，保存后 feature.storage 落库；上传按所选载体生效；
+3. Agent 启用沙箱不选记录无法保存；选记录后按记录链路装配，模板回落链正确；
+4. 存量 Agent（未配 storage/sandboxRecord）行为不变，回落全局链路；
+5. Skill 页全局同步按钮消失，git 卡片上可见「立即同步」且同步后列表刷新。
+
+### 22.5 AG-UI 沙箱兼容修复（2026-08-19 线上故障）
+
+故障：启用沙箱的 Agent 对话报错 `AGUI_INTERRUPT_CONTRACT_ERROR: Thread already has an active run`，同会话后续消息全部被拒。
+
+根因链：
+1. harness 的 `SessionSandboxStateStore` 用带 `/` 的 slot（如 `sandbox/user/<uid>`）作为 sessionId 读写沙箱状态；
+   而 `MysqlAgentStateStore.validateSessionId` 拒绝含路径分隔符的 ID（文件型 Store 语义）→ 沙箱状态读写抛异常，打断 run 收尾，
+   `AguiResumeCoordinator.activeRunsByThread` 残留僵尸 run，同 thread 后续请求全部被合约拦截；
+2. AG-UI starter 在异步线程池回调 `AguiRuntimeContextResolver`，`ContextUtil`（ThreadLocal）不传播 → userId 恒为 anonymous，
+   沙箱 USER 隔离与会话状态归属失真。
+
+修复：
+- `LenientMysqlAgentStateStore`（core config 包，继承官方类重写 protected `validateSessionId`）：仅保留空值/长度校验，
+  允许路径分隔符（MySQL 键为不透明字符串，无路径语义）；`AgentScopeConfig.agentStateStore` 改用该子类；
+- `TeapotRuntimeContextResolver` 注入 JwtService：ContextUtil 无值时从请求头 `Authorization: Bearer` 补解析 uid（/agui/** 已经过滤器验签）；
+- 残留僵尸 run 为内存态，重启服务即清除。
+
+---
+
+## §23 头像上传（Agent + 用户，OSS 记录承载）
+
+### 23.1 设计
+
+- Agent 头像与用户头像均为 OSS 对象直链，分别落 `t_agent.avatar` / `t_user.avatar`（V9 迁移，VARCHAR(512)）；NULL = 未设置，前端回落首字母占位。
+- 承载记录固定为 yml 配置 `teapot.ai.storage.avatar-record`（默认 `oss-cn-beijing.aliyuncs.com`，引用 t_storage_config.name）；不参与 §22.1 的按 Agent 选择。记录不存在/凭证不齐/OSS 总开关关闭时明确报错，不回退 base64（列长不允）。
+- 对象 key：`teapot-ai/avatars/{agent|user}/{id}-{时间戳}.{ext}`（avatar-key-prefix 可配）；时间戳使换头像后不命中旧缓存；对象级 public-read + 一年缓存头，同 §20.8。
+
+### 23.2 接口与权限
+
+| 端点 | 说明 | 权限 |
+|---|---|---|
+| `POST /api/avatar/agent/{agentKey}` | multipart file → 校验 → OSS → t_agent.avatar | developer/admin |
+| `POST /api/avatar/user` | multipart file → 校验 → OSS → t_user.avatar（仅本人） | 全部登录角色 |
+
+服务端复检：≤2MB、MIME 白名单（JPEG/PNG/WebP/GIF）+ magic number，与 §20.5 对话图片上传一致；审计 `agent.avatar` / `user.avatar`。
+
+### 23.3 前端
+
+- 用户头像：顶栏用户菜单「更换头像」（含移动端 Drawer），上传后 zustand setUserPatch 回填；`LoginResponse.user` 携带 avatar。
+- Agent 头像：AgentDetail Profile 大头像卡点击更换（底部遮罩提示），页头与 Agents 列表卡片有头像图则展示。
+
+### 23.4 验收
+
+1. AgentDetail 上传头像后 Agents 卡片/页头/Profile 卡均展示；刷新后仍在（落库）；
+2. 顶栏更换用户头像后即时生效，重新登录仍在；
+3. viewer 可传本人头像、不可传 Agent 头像（RBAC 403）；非图片/超 2MB 被拒；
+4. OSS 对象位于 `teapot-ai/avatars/` 前缀，直链 200 可访。
 
 ---
 
@@ -1503,5 +1966,6 @@ Redis 状态存储/多副本、角色权限入库动态化、Plan Mode HITL 审�
 
 - **HarnessAgent**：AgentScope 2.0 推荐的长时运行 agent 入口，整合 workspace / 记忆 / 持久化 / subagent / 沙箱。
 - **AG-UI**：agent ↔ 前端 UI 的开放事件协议，经 SSE 传输，支持流式文本、工具调用、HITL 中断。
+- **多模态块**：AgentScope 消息模型中的 ImageBlock/AudioBlock/VideoBlock，源为 URL 或 Base64+mediaType（§19）。
 - **Skill**：`SKILL.md`（frontmatter + 指令）+ 可选 references/scripts 的打包能力单元；Agent 推理时按 name+description 决策加载。
 - **RuntimeContext**：每次调用的上下文（`userId`/`sessionId` 等），是无状态引擎多用户隔离的钥匙。

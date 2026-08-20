@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.SandboxConfigMapper">
+
+    <resultMap id="sandboxMap" type="com.teamer.teapot.ai.core.model.SandboxConfigDO">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="linkType" column="link_type"/>
+        <result property="e2bApiKey" column="e2b_api_key"/>
+        <result property="e2bApiBaseUrl" column="e2b_api_base_url"/>
+        <result property="e2bDomain" column="e2b_domain"/>
+        <result property="e2bDefaultTemplate" column="e2b_default_template"/>
+        <result property="apiKey" column="ar_api_key"/>
+        <result property="accountId" column="ar_account_id"/>
+        <result property="region" column="ar_region"/>
+        <result property="defaultTemplate" column="ar_default_template"/>
+        <result property="mcpServerUrl" column="ar_mcp_server_url"/>
+        <result property="remark" column="remark"/>
+        <result property="updatedBy" column="updated_by"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="allColumns">
+        id, name, link_type, e2b_api_key, e2b_api_base_url, e2b_domain, e2b_default_template,
+        ar_api_key, ar_account_id, ar_region, ar_default_template, ar_mcp_server_url,
+        remark, updated_by, created_at, updated_at
+    </sql>
+
+    <select id="selectAll" resultMap="sandboxMap">
+        SELECT <include refid="allColumns"/> FROM t_sandbox_config ORDER BY id
+    </select>
+
+    <select id="selectByName" resultMap="sandboxMap">
+        SELECT <include refid="allColumns"/> FROM t_sandbox_config WHERE name = #{name} LIMIT 1
+    </select>
+
+    <insert id="insert">
+        INSERT INTO t_sandbox_config
+            (name, link_type, e2b_api_key, e2b_api_base_url, e2b_domain, e2b_default_template,
+             ar_api_key, ar_account_id, ar_region, ar_default_template, ar_mcp_server_url,
+             remark, updated_by)
+        VALUES
+            (#{name}, #{linkType}, #{e2bApiKey}, #{e2bApiBaseUrl}, #{e2bDomain}, #{e2bDefaultTemplate},
+             #{apiKey}, #{accountId}, #{region}, #{defaultTemplate}, #{mcpServerUrl},
+             #{remark}, #{updatedBy})
+    </insert>
+
+    <update id="updateByName">
+        UPDATE t_sandbox_config
+        <set>
+            <if test="linkType != null">link_type = #{linkType},</if>
+            <if test="e2bApiKey != null">e2b_api_key = #{e2bApiKey},</if>
+            <if test="e2bApiBaseUrl != null">e2b_api_base_url = #{e2bApiBaseUrl},</if>
+            <if test="e2bDomain != null">e2b_domain = #{e2bDomain},</if>
+            <if test="e2bDefaultTemplate != null">e2b_default_template = #{e2bDefaultTemplate},</if>
+            <if test="apiKey != null">ar_api_key = #{apiKey},</if>
+            <if test="accountId != null">ar_account_id = #{accountId},</if>
+            <if test="region != null">ar_region = #{region},</if>
+            <if test="defaultTemplate != null">ar_default_template = #{defaultTemplate},</if>
+            <if test="mcpServerUrl != null">ar_mcp_server_url = #{mcpServerUrl},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            updated_by = #{updatedBy}
+        </set>
+        WHERE name = #{name}
+    </update>
+
+    <delete id="deleteByName">
+        DELETE FROM t_sandbox_config WHERE name = #{name}
+    </delete>
+</mapper>

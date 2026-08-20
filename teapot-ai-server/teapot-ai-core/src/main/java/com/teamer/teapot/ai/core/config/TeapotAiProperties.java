@@ -21,6 +21,9 @@ public class TeapotAiProperties {
     /** 沙箱全局配置（SPEC §16.5 修订：e2b / agent-run 双链路；凭证走 t_sys_config） */
     private Sandbox sandbox = new Sandbox();
 
+    /** 图片存储策略（SPEC §20：base64 / oss；凭证走 t_sys_config） */
+    private Storage storage = new Storage();
+
     /** 管理台模型下拉白名单（provider:model，yml 维护不改代码，SPEC §6.4） */
     private List<String> modelPresets = new ArrayList<>();
 
@@ -56,6 +59,9 @@ public class TeapotAiProperties {
         private String source = "git";
         /** 读操作轻量 ls-remote，HEAD 变化才 pull */
         private boolean autoSync = true;
+        /** 仓内 skill 目录根（相对仓库根，如 .qoder/skills）；空 = 自动探测（skills/ 子目录或仓库根）。
+         *  官方扫描只认 skillsRoot 下第一层子目录，嵌套布局（如 .qoder/skills/<name>/SKILL.md）必须显式指定 */
+        private String skillsRoot;
     }
 
     /**
@@ -94,6 +100,27 @@ public class TeapotAiProperties {
             private String defaultWorkspaceRoot = "/home/agentscope/workspace";
             /** 全局默认闲置超时（秒），feature 未指定时用 */
             private int defaultIdleTimeoutSeconds = 1800;
+        }
+    }
+
+    /**
+     * 图片存储行为开关（SPEC §20.4）：策略与凭证在 t_sys_config（可被 env 覆盖），
+     * 此处仅 yml 行为开关与默认值。
+     */
+    @Data
+    public static class Storage {
+        private Oss oss = new Oss();
+        /** 头像承载 OSS 记录名（SPEC §23：引用 t_storage_config.name） */
+        private String avatarRecord = "oss-cn-beijing.aliyuncs.com";
+        /** 头像对象 key 前缀（与对话图片分开存放） */
+        private String avatarKeyPrefix = "teapot-ai/avatars/";
+
+        @Data
+        public static class Oss {
+            /** 总开关：false 时即使凭证齐备也不启用 OSS 策略 */
+            private boolean enabled = true;
+            /** 对象 key 前缀默认值（t_sys_config oss.key_prefix 可覆盖） */
+            private String keyPrefix = "teapot-ai/chat-images/";
         }
     }
 }

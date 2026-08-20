@@ -34,6 +34,12 @@ public class ModelController {
         return Result.ok(modelService.listEnabledModelIds());
     }
 
+    /** 启用入口的能力位（SPEC §19：前端多模态 gating，任意登录用户可读） */
+    @GetMapping("/capabilities")
+    public Result<List<ModelEntryDO>> capabilities() {
+        return Result.ok(modelService.listEnabledCapabilities());
+    }
+
     /** 全部模型入口（admin，含停用） */
     @GetMapping("/list")
     public Result<List<ModelEntryDO>> list() {

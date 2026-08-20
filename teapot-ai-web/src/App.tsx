@@ -10,8 +10,7 @@ import Agents from './pages/Agents';
 import AgentDetailPage from './pages/AgentDetail';
 import Skills from './pages/Skills';
 import SkillDetailPage from './pages/SkillDetail';
-import Users from './pages/Users';
-import Models from './pages/Models';
+import SystemConfigPage from './pages/SystemConfig';
 
 /** 登录守卫：无 token 跳登录；有 token 但刷新丢失用户态时拉 profile 恢复 */
 function RequireAuth() {
@@ -65,8 +64,11 @@ export default function App() {
             <Route path="/skills/:name" element={<SkillDetailPage />} />
           </Route>
           <Route element={<RequireRole roles={['admin']} />}>
-            <Route path="/users" element={<Users />} />
-            <Route path="/models" element={<Models />} />
+            {/* 系统配置一站式管理台（SPEC §21）；旧 /models /users 保留重定向兼容书签 */}
+            <Route path="/system" element={<Navigate to="/system/models" replace />} />
+            <Route path="/system/:section" element={<SystemConfigPage />} />
+            <Route path="/users" element={<Navigate to="/system/users" replace />} />
+            <Route path="/models" element={<Navigate to="/system/models" replace />} />
           </Route>
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Route>
