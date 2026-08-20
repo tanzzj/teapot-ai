@@ -23,6 +23,8 @@
         <agentscope.version>2.0.1</agentscope.version>
         <mybatis-starter.version>3.0.5</mybatis-starter.version>
         <java-jwt.version>4.5.0</java-jwt.version>
+        <!-- OSS Java SDK V2（SPEC §20）：preview 期 SDK，锁版本不浮动 -->
+        <alibabacloud-oss-v2.version>0.5.1</alibabacloud-oss-v2.version>
     </properties>
 
     <dependencyManagement>
@@ -101,6 +103,12 @@
                 <groupId>com.auth0</groupId>
                 <artifactId>java-jwt</artifactId>
                 <version>${java-jwt.version}</version>
+            </dependency>
+            <!-- 阿里云 OSS Java SDK V2（SPEC §20.3，图片存储 oss 策略） -->
+            <dependency>
+                <groupId>com.aliyun</groupId>
+                <artifactId>alibabacloud-oss-v2</artifactId>
+                <version>${alibabacloud-oss-v2.version}</version>
             </dependency>
 
             <!-- 内部模块互引同样经 bom 管理版本，避免硬编码 -->

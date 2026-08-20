@@ -5,10 +5,11 @@ import type { Result } from '../types';
 export const ACCESS_TOKEN_KEY = 'teapot-ai-access-token';
 export const REFRESH_TOKEN_KEY = 'teapot-ai-refresh-token';
 
-/** 统一 HTTP 客户端（SPEC §12.1：401 自动 refresh，统一 Result 解包） */
+/** 统一 HTTP 客户端（SPEC §12.1：401 自动 refresh，统一 Result 解包）；
+ * 超时放宽到 120s：会话历史回放含图片 base64 时响应体可达数百 KB，弱网下需足够余量 */
 export const http = axios.create({
   baseURL: '/',
-  timeout: 60000,
+  timeout: 120000,
 });
 
 http.interceptors.request.use((config) => {

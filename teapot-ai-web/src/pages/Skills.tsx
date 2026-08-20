@@ -7,7 +7,7 @@ import { skillDelete, skillGitStatus, skillGitSync, skillList } from '../api/ski
 import { useAuthStore } from '../store/auth';
 import type { SkillGitStatus, SkillListItem } from '../types';
 
-/** Skill 工坊列表（SPEC §12.2 + §15.13：双来源 source 标签 / git 只读 / 同步状态条） */
+/** Skill 工坊列表（SPEC §12.2 + §15.13 + §22.3：双来源 source 标签 / git 只读 / 同步按钮在 git 卡片级） */
 export default function Skills() {
   const navigate = useNavigate();
   const [list, setList] = useState<SkillListItem[]>([]);
@@ -81,12 +81,6 @@ export default function Skills() {
               <span>上次手动同步 {gitStatus.lastSyncAt.replace('T', ' ').slice(0, 19)}</span>
             </>
           )}
-          <div style={{ flex: 1 }} />
-          {canSync && (
-            <Button size="small" icon={<SyncOutlined spin={syncing} />} onClick={onSync} loading={syncing}>
-              立即同步
-            </Button>
-          )}
         </div>
       )}
       <Spin spinning={loading}>
@@ -118,10 +112,22 @@ export default function Skills() {
                       <Space onClick={(e) => e.stopPropagation()}>
                         <Tag color={fromGit ? 'green' : undefined}>{skill.source || 'platform'}</Tag>
                         {fromGit ? (
-                          /* Git 来源只读（SPEC §15.13）：修改走 PR，隐藏编辑/删除 */
-                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            Git 管控 · 只读
-                          </Typography.Text>
+                          <>
+                            {/* Git 来源只读（SPEC §15.13）：修改走 PR；同步按钮下沉到卡片级（§22.3，仍为仓库级同步） */}
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              Git 管控 · 只读
+                            </Typography.Text>
+                            {canSync && (
+                              <Button
+                                size="small"
+                                icon={<SyncOutlined spin={syncing} />}
+                                onClick={onSync}
+                                loading={syncing}
+                              >
+                                立即同步
+                              </Button>
+                            )}
+                          </>
                         ) : (
                           <>
                             <Button size="small" onClick={() => navigate(`/skills/${skill.name}`)}>

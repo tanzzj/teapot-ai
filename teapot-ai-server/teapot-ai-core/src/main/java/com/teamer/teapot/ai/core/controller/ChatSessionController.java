@@ -3,10 +3,14 @@ package com.teamer.teapot.ai.core.controller;
 import com.teamer.teapot.ai.common.model.Result;
 import com.teamer.teapot.ai.core.model.ChatSessionDO;
 import com.teamer.teapot.ai.core.model.dto.SessionCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.SessionDateCount;
 import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.dto.SessionRenameRequest;
 import com.teamer.teapot.ai.core.service.ChatSessionService;
 import jakarta.validation.Valid;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -38,6 +42,12 @@ public class ChatSessionController {
         return Result.ok(chatSessionService.list(agentKey));
     }
 
+    /** 会话按日统计（Profile 热力图数据源） */
+    @GetMapping("/stats")
+    public Result<List<SessionDateCount>> stats(@RequestParam String agentKey) {
+        return Result.ok(chatSessionService.stats(agentKey));
+    }
+
     @PostMapping("/create")
     public Result<ChatSessionDO> create(@Valid @RequestBody SessionCreateRequest request) {
         return Result.ok(chatSessionService.create(request));
@@ -54,6 +64,16 @@ public class ChatSessionController {
     @GetMapping("/messages/{sessionId}")
     public Result<List<SessionMessageItem>> messages(@PathVariable String sessionId) {
         return Result.ok(chatSessionService.messages(sessionId));
+    }
+
+    /** 会话内历史图片二进制（避免 base64 内联进消息 JSON 导致响应体膨胀） */
+    @GetMapping("/image/{sessionId}/{imageIndex}")
+    public ResponseEntity<byte[]> image(@PathVariable String sessionId, @PathVariable int imageIndex) {
+        ChatSessionService.ImageData imageData = chatSessionService.image(sessionId, imageIndex);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(imageData.mediaType()))
+                .cacheControl(CacheControl.maxAge(java.time.Duration.ofDays(1)).cachePrivate())
+                .body(imageData.data());
     }
 
     /** 清空会话（删状态 + 删索引） */

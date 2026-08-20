@@ -41,4 +41,11 @@
     <delete id="delete">
         DELETE FROM t_chat_session WHERE user_id = #{userId} AND session_id = #{sessionId}
     </delete>
+
+    <select id="countByAgentAndDate" resultType="java.util.Map">
+        SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS d, COUNT(*) AS c
+        FROM t_chat_session
+        WHERE agent_key = #{agentKey} AND created_at &gt;= #{since}
+        GROUP BY d ORDER BY d
+    </select>
 </mapper>

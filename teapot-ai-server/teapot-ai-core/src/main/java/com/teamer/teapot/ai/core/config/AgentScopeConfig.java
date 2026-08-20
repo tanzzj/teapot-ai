@@ -74,11 +74,11 @@ public class AgentScopeConfig {
         return ds;
     }
 
-    /** 会话状态存储（createIfNotExist 自动建表，SPEC §6.2） */
+    /** 会话状态存储（createIfNotExist 自动建表，SPEC §6.2；宽校验子类允许沙箱 slot 带斜杠，§22.5） */
     @Bean
     public MysqlAgentStateStore agentStateStore(@Qualifier("agentscopeDataSource") DataSource ds,
                                                 TeapotAiProperties properties) {
-        return new MysqlAgentStateStore(ds, properties.getAgentscope().isCreateIfNotExist());
+        return new LenientMysqlAgentStateStore(ds, properties.getAgentscope().isCreateIfNotExist());
     }
 
     /** 平台管理实例：writeable=true，Skill 工坊 CRUD 专用（SPEC §8.1） */
@@ -112,7 +112,11 @@ public class AgentScopeConfig {
         if (cfg.getRemoteUrl() == null || cfg.getRemoteUrl().isBlank()) {
             throw new BizException("teapot.ai.skill-git.remote-url 未配置：Git Skill 已启用但仓库地址为空");
         }
-        return new GitSkillRepository(cfg.getRemoteUrl(), cfg.getBranch(),
-                Path.of(cfg.getLocalPath()), cfg.getSource(), cfg.isAutoSync());
+        // 兜底子类：官方扫描只认 skillsRoot 下第一层子目录，
+        // 根级 SKILL.md（单 skill 仓库布局）由 RootSkillAwareGitSkillRepository 补充识别
+        return new RootSkillAwareGitSkillRepository(cfg.getRemoteUrl(), cfg.getBranch(),
+                Path.of(cfg.getLocalPath()), cfg.getSource(), cfg.isAutoSync(),
+                // 仓内 skill 目录根（如 .qoder/skills）；空串/null 由官方归一为自动探测
+                cfg.getSkillsRoot());
     }
 }

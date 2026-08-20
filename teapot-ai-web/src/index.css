@@ -138,6 +138,18 @@ body {
   visibility: visible;
 }
 
+/* 工具调用 / Thinking 行（OperateCard）：模板里图标是行内 SVG 坐在 28px 行高的
+   基线上，视觉中心比垂直居中的标题文字偏高约 3px。
+   图标容器改 flex 居中（与模板 Accordion 图标同款处理），文字即与图标对齐 */
+[class*='-operate-card-header-icon'] {
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+[class*='-operate-card-header-icon'] svg {
+  display: block;
+}
+
 /* Barley 式用户气泡：黑底白字（模板默认是浅灰底） */
 .agentscope-runtime-webui-bubble-user .agentscope-runtime-webui-bubble-content-filled,
 .agentscope-runtime-webui-bubble-end .agentscope-runtime-webui-bubble-content-filled {

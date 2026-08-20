@@ -4,17 +4,18 @@ import type {
 } from '@agentscope-ai/chat';
 import { sessionClear, sessionCreate, sessionList, sessionMessages, sessionRename } from '../api/session';
 import type { SessionMessageItem } from '../api/session';
+import { http } from '../api/http';
 import { useAuthStore } from '../store/auth';
 
 /**
  * 会话桥接（sparkdesign chat template ↔ Teapot 后端）：
  * - 会话索引（列表/创建/删除）走后端 /api/chat/session（SPEC §9）
- * - 消息体以后端 agentscope_sessions（StateStore）为事实源；模板渲染所需的消息快照
- *   优先用 localStorage 缓存（按 sessionId 隔离），缓存缺失（跨设备/清缓存）时
- *   兜底拉后端历史接口 /api/chat/session/messages/{sessionId}
+ * - 消息体以后端 agentscope_sessions（StateStore）为事实源：每次打开会话都拉
+ *   后端历史接口 /api/chat/session/messages/{sessionId}（保证跨设备同步），
+ *   localStorage 仅作离线/后端故障兜底与首屏加速缓存（按 sessionId 隔离）
  */
 
-const MSG_CACHE_PREFIX = 'teapot-chat-msgs:v3:';
+const MSG_CACHE_PREFIX = 'teapot-chat-msgs:v5:';
 const MAX_CACHED_MESSAGES = 100;
 /** 会话标题入库截断长度 */
 const MAX_TITLE_LEN = 50;
@@ -45,6 +46,19 @@ const hiddenSessionIds = new Set<string>();
 const visibleOf = (list: SessionItem[]) =>
   list.filter((s) => !hiddenSessionIds.has(s.id as string));
 
+// 一次性清理 v4 缓存：旧版把图片 base64 内联存进 localStorage，
+// 单条可达数百 KB，已被 v5（取图端点引用）取代，直接删掉释放配额
+try {
+  const staleKeys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('teapot-chat-msgs:v4:')) staleKeys.push(k);
+  }
+  staleKeys.forEach((k) => localStorage.removeItem(k));
+} catch {
+  // ignore
+}
+
 /**
  * 揭示隐藏的懒创建会话（回复完成时调用），
  * 返回其所属 agent 的全量列表供 setSessions 刷新；无隐藏会话时返回 null。
@@ -65,11 +79,70 @@ function cacheMessages(sessionId: string, messages: IAgentScopeRuntimeWebUISessi
   try {
     localStorage.setItem(
       MSG_CACHE_PREFIX + currentUid() + ':' + sessionId,
-      JSON.stringify((messages || []).slice(-MAX_CACHED_MESSAGES)),
+      JSON.stringify(normalizeForCache((messages || []).slice(-MAX_CACHED_MESSAGES) as never)),
     );
   } catch {
     // localStorage 配额满时忽略，不影响主链路
   }
+}
+
+/**
+ * 入缓存前把无法持久化的图片地址置空：blob: 是页面生命周期内的临时 URL，
+ * 刷新后失效，留着会造成破图；data:（实时发送链路产物）保留，作本机
+ * 离线兜底。下次打开会话后端优先拉取会重建正确引用，此处丢失不影响主链路。
+ */
+function normalizeForCache(messages: Record<string, unknown>[]) {
+  return messages.map((m) => {
+    const cards = m?.cards as { data?: { input?: { content?: { type?: string; image_url?: string }[] }[] } }[] | undefined;
+    for (const card of cards ?? []) {
+      for (const i of card?.data?.input ?? []) {
+        for (const c of i?.content ?? []) {
+          if (c?.type === 'image' && typeof c.image_url === 'string'
+            && c.image_url.startsWith('blob:')) {
+            c.image_url = '';
+          }
+        }
+      }
+    }
+    return m;
+  });
+}
+
+/** 取图端点引用 → blob URL：图片接口需 Bearer 鉴权，<img> 无法带头，
+ * 故用 http 客户端拉二进制再转 object URL（模块级缓存，同图不重复拉取） */
+const objectUrlCache = new Map<string, string>();
+
+async function resolveImageUrls(messages: Record<string, unknown>[]) {
+  const parts: { type?: string; image_url?: string }[] = [];
+  for (const m of messages) {
+    const cards = (m as { cards?: { data?: { input?: { content?: unknown[] }[] } }[] })?.cards;
+    for (const card of cards ?? []) {
+      for (const i of card?.data?.input ?? []) {
+        for (const c of (i?.content ?? []) as { type?: string; image_url?: string }[]) {
+          if (c?.type === 'image' && typeof c.image_url === 'string') parts.push(c);
+        }
+      }
+    }
+  }
+  await Promise.all(parts.map(async (c) => {
+    const url = c.image_url as string;
+    if (!url.startsWith('/api/chat/session/image/')) {
+      // http(s) URL 源、data URL、空串均无需处理；blob: 已在入缓存时清理
+      return;
+    }
+    let obj = objectUrlCache.get(url);
+    if (!obj) {
+      try {
+        const resp = await http.get(url, { responseType: 'blob' });
+        obj = URL.createObjectURL(resp.data as Blob);
+        objectUrlCache.set(url, obj);
+      } catch {
+        c.image_url = '';
+        return;
+      }
+    }
+    c.image_url = obj;
+  }));
 }
 
 function loadCachedMessages(sessionId: string) {
@@ -90,7 +163,8 @@ function dropCachedMessages(sessionId: string) {
 
 /**
  * 后端历史条目（按内容块拆分）→ 模板消息卡片结构：
- * - user/text：AgentScopeRuntimeRequestCard（data.input）
+ * - user/text+image：同一用户轮次的连续条目合并为一张 AgentScopeRuntimeRequestCard
+ *   （data.input 的 content parts 含 text 与 image，与实时发送链路一致）
  * - assistant 轮的 reasoning/tool_call/tool_call_output/text 块合并进同一张
  *   AgentScopeRuntimeResponseCard 的 output 数组，与实时回放渲染完全一致；
  * 直接塞裸消息体会被渲染成 [object Object]。
@@ -100,6 +174,7 @@ function toTemplateMessages(items: SessionMessageItem[]) {
   const messages: Record<string, unknown>[] = [];
   let seq = 0;
   let output: Record<string, unknown>[] | null = null;
+  let userContent: Record<string, unknown>[] | null = null;
 
   // 把当前积累的助手轮次块封装为一张响应卡片
   const flushAssistant = () => {
@@ -117,9 +192,9 @@ function toTemplateMessages(items: SessionMessageItem[]) {
     output = null;
   };
 
-  for (const m of items) {
-    if (m.role === 'user' && m.type === 'text' && m.text) {
-      flushAssistant();
+  // 把当前积累的用户轮次内容块封装为一张请求卡片
+  const flushUser = () => {
+    if (userContent && userContent.length) {
       const id = `hist-${seq++}`;
       messages.push({
         id,
@@ -128,16 +203,26 @@ function toTemplateMessages(items: SessionMessageItem[]) {
           code: 'AgentScopeRuntimeRequestCard',
           data: {
             created_at: now,
-            input: [{
-              role: 'user',
-              type: 'message',
-              content: [{ type: 'text', text: m.text, status: 'created' }],
-            }],
+            input: [{ role: 'user', type: 'message', content: userContent }],
           },
         }],
       });
+    }
+    userContent = null;
+  };
+
+  for (const m of items) {
+    if (m.role === 'user') {
+      flushAssistant();
+      if (!userContent) userContent = [];
+      if (m.type === 'image' && m.imageUrl) {
+        userContent.push({ type: 'image', image_url: m.imageUrl, status: 'created' });
+      } else if (m.type === 'text' && m.text) {
+        userContent.push({ type: 'text', text: m.text, status: 'created' });
+      }
       continue;
     }
+    flushUser();
     if (!output) output = [];
     const mid = `hist-${seq++}-m`;
     if (m.type === 'reasoning' && m.text) {
@@ -170,6 +255,7 @@ function toTemplateMessages(items: SessionMessageItem[]) {
       });
     }
   }
+  flushUser();
   flushAssistant();
   return messages;
 }
@@ -202,19 +288,22 @@ export function createSessionBridge(agentKey: string): IAgentScopeRuntimeWebUISe
     async getSession(sessionId: string) {
       const found = getMirror().find((s) => s.id === sessionId);
       if (!found) return undefined as unknown as IAgentScopeRuntimeWebUISession;
+      // 后端 agentscope_sessions 为唯一事实源：每次打开都拉后端，保证跨设备/多标签页
+      // 能看到其他端发的最新消息（旧实现仅缓存缺失时才回源，导致本地缓存永久过期）；
+      // 后端拉取失败/为空时才退回本地缓存兜底
       let messages = loadCachedMessages(sessionId);
-      if (!messages.length) {
-        // 本地无缓存（跨设备/清过缓存）：兜底读后端 agentscope_sessions 历史
-        try {
-          const items = await sessionMessages(sessionId);
-          messages = toTemplateMessages(items || []);
-          if (messages.length) {
-            cacheMessages(sessionId, messages);
-          }
-        } catch {
-          // 后端历史拉取失败不阻塞主链路，维持空会话画面
+      try {
+        const items = await sessionMessages(sessionId);
+        const fresh = toTemplateMessages(items || []);
+        if (fresh.length) {
+          messages = fresh;
+          // 先缓存（JSON.stringify 同步快照，存的是取图端点引用），再转 blob URL 供渲染
+          cacheMessages(sessionId, fresh as never);
         }
+      } catch {
+        // 后端历史拉取失败不阻塞主链路，用本地缓存兜底
       }
+      await resolveImageUrls(messages);
       return { ...found, messages };
     },
 

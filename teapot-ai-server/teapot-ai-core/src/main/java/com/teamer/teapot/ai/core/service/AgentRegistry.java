@@ -7,6 +7,7 @@ import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
+import com.teamer.teapot.ai.core.model.SandboxConfigDO;
 import io.agentscope.core.skill.SkillFilter;
 import io.agentscope.core.skill.repository.AgentSkillRepository;
 import io.agentscope.core.skill.repository.GitSkillRepository;
@@ -56,13 +57,15 @@ public class AgentRegistry {
     /** Git skill 来源（enabled=false 时缺席，SPEC §15.6） */
     private final ObjectProvider<GitSkillRepository> gitRepoProvider;
     private final AgentRunConnection agentRunConnection;
+    private final SandboxConfigService sandboxConfigService;
 
     public AgentRegistry(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                          ModelRegistry modelRegistry, MysqlAgentStateStore stateStore,
                          @Qualifier("skillRepositoryAgent") MysqlSkillRepository skillRepositoryAgent,
                          TeapotAiProperties properties,
                          ObjectProvider<GitSkillRepository> gitRepoProvider,
-                         AgentRunConnection agentRunConnection) {
+                         AgentRunConnection agentRunConnection,
+                         SandboxConfigService sandboxConfigService) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.modelRegistry = modelRegistry;
@@ -71,6 +74,7 @@ public class AgentRegistry {
         this.properties = properties;
         this.gitRepoProvider = gitRepoProvider;
         this.agentRunConnection = agentRunConnection;
+        this.sandboxConfigService = sandboxConfigService;
     }
 
     /** 惰性构建（AG-UI registerFactory 的 supplier 入口） */
@@ -136,9 +140,10 @@ public class AgentRegistry {
     }
 
     /**
-     * 按 feature.sandbox 装配沙箱（SPEC §16.7 / 修订）：
+     * 按 feature.sandbox 装配沙箱（SPEC §16.7 / §22.2 修订）：
      * 未启用 → disableShellTool（脚本仅分发不执行）；
-     * 启用 → 按 sandbox.link 配置路由（e2b / agentrun），首选不可用时自动回落。
+     * 启用且指定 sandboxRecord → 链路与凭证由记录决定（§22.2）；
+     * 启用无记录（存量）→ 按 sandbox.link 全局路由（e2b / agentrun），首选不可用时自动回落。
      */
     private void applySandbox(HarnessAgent.Builder builder, String agentKey, AgentDO agentDO) {
         AgentFeature.Sandbox sb = AgentFeature.parse(agentDO.getFeature()).getSandbox();
@@ -147,7 +152,19 @@ public class AgentRegistry {
             builder.disableShellTool();
             return;
         }
-        String link = resolveSandboxLink();
+        // §22.2 记录优先：指定 sandboxRecord 时链路与凭证由记录决定
+        SandboxConfigDO record = null;
+        if (sb.getSandboxRecord() != null && !sb.getSandboxRecord().isBlank()) {
+            record = sandboxConfigService.getPlain(sb.getSandboxRecord().trim());
+            if (!SandboxConfigService.linkConfigured(record)) {
+                // 防御：正常已在保存时拦截（AgentService 校验），此处兜底降级不阻断对话
+                log.error("沙箱记录不可用（不存在或凭证不齐）record={} agentKey={}，降级为无 shell",
+                        sb.getSandboxRecord(), agentKey);
+                builder.disableShellTool();
+                return;
+            }
+        }
+        String link = record != null ? record.getLinkType() : resolveSandboxLink(sb.getLink());
         if (link == null) {
             // 防御：正常已在保存时拦截（AgentService 校验），此处兜底降级不阻断对话
             log.error("沙箱链路未接入但 Agent 已启用沙箱，降级为无 shell agentKey={}", agentKey);
@@ -155,17 +172,18 @@ public class AgentRegistry {
             return;
         }
         if ("e2b".equals(link)) {
-            applyE2b(builder, agentKey, sb);
+            applyE2b(builder, agentKey, sb, record);
             return;
         }
         TeapotAiProperties.Sandbox.Agentrun defaults = properties.getSandbox().getAgentrun();
         String persistence = sb.getPersistence() == null ? "LOCAL_SNAPSHOT" : sb.getPersistence();
         AgentRunFilesystemSpec spec = new AgentRunFilesystemSpec()
-                .apiKey(agentRunConnection.getApiKey())
-                .accountId(agentRunConnection.getAccountId())
-                .region(agentRunConnection.getRegion())
-                .templateName(resolveTemplate(sb))
-                .mcpServerUrl(agentRunConnection.getMcpServerUrl())
+                .apiKey(record != null ? record.getApiKey() : agentRunConnection.getApiKey())
+                .accountId(record != null ? record.getAccountId() : agentRunConnection.getAccountId())
+                .region(record != null && notBlank(record.getRegion())
+                        ? record.getRegion() : agentRunConnection.getRegion())
+                .templateName(resolveTemplate(sb, record))
+                .mcpServerUrl(record != null ? record.getMcpServerUrl() : agentRunConnection.getMcpServerUrl())
                 .workspaceRoot(sb.getWorkspaceRoot() != null
                         ? sb.getWorkspaceRoot() : defaults.getDefaultWorkspaceRoot())
                 .sandboxIdleTimeoutSeconds(sb.getIdleTimeoutSeconds() != null
@@ -184,19 +202,29 @@ public class AgentRegistry {
                     Path.of(defaults.getSnapshotPath()).resolve(agentKey).toString()));
         }
         builder.filesystem(spec);
-        log.info("Agent 沙箱已启用 agentKey={} isolation={} persistence={} template={}",
-                agentKey, spec.getIsolationScope(), persistence, resolveTemplate(sb));
+        log.info("Agent 沙箱已启用 agentKey={} record={} isolation={} persistence={} template={}",
+                agentKey, record == null ? "-" : record.getName(),
+                spec.getIsolationScope(), persistence, resolveTemplate(sb, record));
     }
 
     /**
-     * 链路路由（sandbox.link 配置项）：首选链路 enabled 且凭证齐备则用之，
+     * 链路路由（SPEC §21.4）：优先级 agent 级 feature.sandbox.link > 全局 sandbox.link 配置；
+     * agent 显式指定的链路不可用时回落自动路由；首选链路 enabled 且凭证齐备则用之，
      * 否则回落另一链路；两者都不可用返回 null（降级无 shell）。
      */
-    private String resolveSandboxLink() {
+    private String resolveSandboxLink(String agentLink) {
         TeapotAiProperties.Sandbox cfg = properties.getSandbox();
-        String preferred = cfg.getLink() == null ? "e2b" : cfg.getLink().trim().toLowerCase();
         boolean e2bUsable = cfg.getE2b().isEnabled() && agentRunConnection.e2bConfigured();
         boolean agentrunUsable = cfg.getAgentrun().isEnabled() && agentRunConnection.configured();
+        // agent 级覆盖：显式指定且可用则直接生效
+        if (agentLink != null && !agentLink.isBlank() && !"auto".equalsIgnoreCase(agentLink)) {
+            String wanted = agentLink.trim().toLowerCase();
+            if (("e2b".equals(wanted) && e2bUsable) || ("agentrun".equals(wanted) && agentrunUsable)) {
+                return wanted;
+            }
+            log.warn("Agent 指定沙箱链路 {} 不可用，回落全局自动路由", wanted);
+        }
+        String preferred = cfg.getLink() == null ? "e2b" : cfg.getLink().trim().toLowerCase();
         boolean preferE2b = !"agentrun".equals(preferred);
         if (preferE2b) {
             if (e2bUsable) {
@@ -221,17 +249,19 @@ public class AgentRegistry {
     /**
      * E2B 兼容链路装配（AgentRun E2B 端点，CLI 实测 template list/spawn 均可用）。
      * NAS 挂载为 AgentRun MCP 专属能力，E2B 链路降级为 no-op 快照并告警。
+     * record 非空时凭证取记录（§22.2），否则取全局 AgentRunConnection（存量兼容）。
      */
-    private void applyE2b(HarnessAgent.Builder builder, String agentKey, AgentFeature.Sandbox sb) {
+    private void applyE2b(HarnessAgent.Builder builder, String agentKey, AgentFeature.Sandbox sb,
+                          SandboxConfigDO record) {
         TeapotAiProperties.Sandbox.E2b defaults = properties.getSandbox().getE2b();
         String persistence = sb.getPersistence() == null ? "LOCAL_SNAPSHOT" : sb.getPersistence();
         String workspaceRoot = sb.getWorkspaceRoot() != null
                 ? sb.getWorkspaceRoot() : defaults.getDefaultWorkspaceRoot();
         E2bFilesystemSpec spec = new E2bFilesystemSpec()
-                .apiKey(agentRunConnection.getE2bApiKey())
-                .apiBaseUrl(agentRunConnection.getE2bApiBaseUrl())
-                .domain(agentRunConnection.getE2bDomain())
-                .templateId(resolveE2bTemplate(sb))
+                .apiKey(record != null ? record.getE2bApiKey() : agentRunConnection.getE2bApiKey())
+                .apiBaseUrl(record != null ? record.getE2bApiBaseUrl() : agentRunConnection.getE2bApiBaseUrl())
+                .domain(record != null ? record.getE2bDomain() : agentRunConnection.getE2bDomain())
+                .templateId(resolveE2bTemplate(sb, record))
                 .workspaceRoot(workspaceRoot)
                 .sandboxTimeoutSeconds(sb.getIdleTimeoutSeconds() != null
                         ? sb.getIdleTimeoutSeconds() : defaults.getDefaultIdleTimeoutSeconds())
@@ -255,35 +285,51 @@ public class AgentRegistry {
                     Path.of(defaults.getSnapshotPath()).resolve(agentKey).toString()));
         }
         builder.filesystem(spec);
-        log.info("Agent 沙箱已启用(E2B) agentKey={} isolation={} persistence={} template={}",
-                agentKey, spec.getIsolationScope(), persistence, resolveE2bTemplate(sb));
+        log.info("Agent 沙箱已启用(E2B) agentKey={} record={} isolation={} persistence={} template={}",
+                agentKey, record == null ? "-" : record.getName(),
+                spec.getIsolationScope(), persistence, resolveE2bTemplate(sb, record));
     }
 
-    /** E2B 模板解析：feature 覆盖 → E2B 全局默认 → AgentRun 全局默认（同账号模板互通） */
-    private String resolveE2bTemplate(AgentFeature.Sandbox sb) {
+    /** E2B 模板解析：feature 覆盖 → 记录默认 → E2B 全局默认 → AgentRun 全局默认（同账号模板互通） */
+    private String resolveE2bTemplate(AgentFeature.Sandbox sb, SandboxConfigDO record) {
         if (sb.getTemplateName() != null && !sb.getTemplateName().isBlank()) {
             return sb.getTemplateName();
+        }
+        if (record != null) {
+            if (notBlank(record.getE2bDefaultTemplate())) {
+                return record.getE2bDefaultTemplate();
+            }
+            if (notBlank(record.getDefaultTemplate())) {
+                return record.getDefaultTemplate();
+            }
         }
         String t = agentRunConnection.getE2bDefaultTemplate();
         if (t == null || t.isBlank()) {
             t = agentRunConnection.getDefaultTemplate();
         }
         if (t == null || t.isBlank()) {
-            throw new BizException("沙箱模板未配置：请在 Agent 配置 templateName 或全局默认模板");
+            throw new BizException("沙箱模板未配置：请在 Agent 配置 templateName 或记录/全局默认模板");
         }
         return t;
     }
 
-    /** feature 模板覆盖全局默认（SPEC §16.6 templateName） */
-    private String resolveTemplate(AgentFeature.Sandbox sb) {
+    /** feature 模板覆盖记录/全局默认（SPEC §16.6 templateName） */
+    private String resolveTemplate(AgentFeature.Sandbox sb, SandboxConfigDO record) {
         if (sb.getTemplateName() != null && !sb.getTemplateName().isBlank()) {
             return sb.getTemplateName();
         }
+        if (record != null && notBlank(record.getDefaultTemplate())) {
+            return record.getDefaultTemplate();
+        }
         String defaultTemplate = agentRunConnection.getDefaultTemplate();
         if (defaultTemplate == null || defaultTemplate.isBlank()) {
-            throw new BizException("沙箱模板未配置：请在 Agent 配置 templateName 或全局默认模板");
+            throw new BizException("沙箱模板未配置：请在 Agent 配置 templateName 或记录/全局默认模板");
         }
         return defaultTemplate;
+    }
+
+    private static boolean notBlank(String s) {
+        return s != null && !s.isBlank();
     }
 
     private AgentRunNasMountConfig toNasConfig(AgentFeature.Sandbox.Nas nas) {

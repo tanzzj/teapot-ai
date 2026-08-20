@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Col, Row, Spin, theme } from 'antd';
 import {
   Button,
@@ -10,10 +10,12 @@ import {
   Switch,
 } from '@agentscope-ai/design';
 import {
+  CameraOutlined,
   CloudServerOutlined,
   EditOutlined,
   IdcardOutlined,
   ProfileOutlined,
+  SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -23,24 +25,68 @@ import {
   agentUnbindSkill,
   agentUpdate,
   modelPresets,
-  sandboxOptions,
-  updateSandboxConfig,
 } from '../api/agent';
+import { sandboxOptions, sandboxRecordNames, storageRecordNames } from '../api/config';
+import { uploadAgentAvatar } from '../api/avatar';
 import { skillList } from '../api/skill';
+import { sessionStats } from '../api/session';
 import { useAuthStore } from '../store/auth';
-import type { AgentSandboxConfig, SandboxOptions, SkillListItem } from '../types';
+import type {
+  AgentSandboxConfig,
+  SandboxOptions,
+  SandboxRecordName,
+  SkillListItem,
+  StorageRecordName,
+} from '../types';
 
 type Section = 'profile' | 'basic' | 'sandbox' | 'skills';
 
-/** 装饰性贡献热力图（Barley 视觉复刻，零数据灰格） */
-function Heatmap() {
-  const weeks = 40;
-  const cells = useMemo(() => Array.from({ length: weeks * 7 }, () => 0), []);
+/** 贡献热力图：按 session by date 渲染该 Agent 近 280 天会话量（列=周，周一对齐） */
+function Heatmap({ agentKey }: { agentKey: string }) {
+  const [counts, setCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let alive = true;
+    sessionStats(agentKey)
+      .then((rows) => {
+        if (!alive) return;
+        const m: Record<string, number> = {};
+        rows.forEach((r) => { m[r.date] = r.count; });
+        setCounts(m);
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [agentKey]);
+
+  const cells = useMemo(() => {
+    const today = new Date();
+    const start = new Date();
+    start.setDate(today.getDate() - 279);
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); // 回退到周一
+    const out: { date: string; count: number }[] = [];
+    for (const d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      out.push({ date: iso, count: counts[iso] ?? 0 });
+    }
+    return out;
+  }, [counts]);
+
+  const color = (n: number) =>
+    n <= 0 ? 'rgba(0, 0, 0, 0.07)'
+      : n === 1 ? 'rgba(91, 185, 139, 0.3)'
+        : n === 2 ? 'rgba(91, 185, 139, 0.5)'
+          : n <= 4 ? 'rgba(91, 185, 139, 0.7)'
+            : 'rgba(91, 185, 139, 0.9)';
+
   return (
     <div style={{ overflowX: 'auto', paddingTop: 8 }}>
       <div style={{ display: 'grid', gridAutoFlow: 'column', gridTemplateRows: 'repeat(7, 10px)', gap: 3, width: 'max-content' }}>
-        {cells.map((_, i) => (
-          <span key={i} style={{ width: 10, height: 10, borderRadius: 2, background: 'rgba(0, 0, 0, 0.07)' }} />
+        {cells.map((c) => (
+          <span
+            key={c.date}
+            title={`${c.date} · ${c.count} 个会话`}
+            style={{ width: 10, height: 10, borderRadius: 2, background: color(c.count) }}
+          />
         ))}
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'center', marginTop: 8, fontSize: 11, color: 'rgba(26, 26, 29, 0.45)' }}>
@@ -63,61 +109,97 @@ export default function AgentDetailPage() {
   const navigate = useNavigate();
   const { token } = theme.useToken();
   const [form] = Form.useForm();
-  const [credForm] = Form.useForm();
   const [section, setSection] = useState<Section>('profile');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [boundSkills, setBoundSkills] = useState<string[]>([]);
   const [allSkills, setAllSkills] = useState<SkillListItem[]>([]);
-  const [detail, setDetail] = useState<{ name: string; description?: string; status: number; createdAt?: string } | null>(null);
+  const [detail, setDetail] = useState<{ name: string; description?: string; status: number; createdAt?: string; avatar?: string } | null>(null);
   const [sbOptions, setSbOptions] = useState<SandboxOptions | null>(null);
-  const [credSaving, setCredSaving] = useState(false);
+  const [storageNames, setStorageNames] = useState<StorageRecordName[]>([]);
+  const [sandboxNames, setSandboxNames] = useState<SandboxRecordName[]>([]);
+  /** 已加载的原始 feature 命名空间：分区保存时合并，避免单分区覆盖另一分区（§22） */
+  const [loadedFeature, setLoadedFeature] = useState<Record<string, unknown>>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
   const sbEnabled = Form.useWatch(['sandbox', 'enabled'], form);
   const sbPersistence = Form.useWatch(['sandbox', 'persistence'], form);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
-  /** 全局凭证表单回填：仅非敏感字段（敏感字段一律留空，留空不修改） */
-  const backfillCredForm = useCallback((o: SandboxOptions) => {
-    credForm.setFieldsValue({
-      e2bApiBaseUrl: o.e2bApiBaseUrl,
-      e2bDomain: o.e2bDomain,
-      e2bDefaultTemplate: o.e2bDefaultTemplate,
-      region: o.region,
-      defaultTemplate: o.defaultTemplate,
-      mcpServerUrl: o.mcpServerUrl,
-    });
-  }, [credForm]);
+  /** Agent 头像上传（SPEC §23）：客户端预检 2MB/图片类型，服务端复检后落 OSS + t_agent.avatar */
+  const onAvatarFile = useCallback(
+    async (file: File | undefined) => {
+      if (!file || avatarUploading) {
+        return;
+      }
+      if (!file.type.startsWith('image/')) {
+        message.error('仅支持图片格式头像');
+        return;
+      }
+      if (file.size > 2 * 1024 * 1024) {
+        message.error('头像超过 2MB 限制');
+        return;
+      }
+      setAvatarUploading(true);
+      try {
+        const { url } = await uploadAgentAvatar(agentKey, file);
+        setDetail((d) => (d ? { ...d, avatar: url } : d));
+        message.success('头像已更新');
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '头像上传失败');
+      } finally {
+        setAvatarUploading(false);
+        if (avatarInputRef.current) {
+          avatarInputRef.current.value = '';
+        }
+      }
+    },
+    [agentKey, avatarUploading],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [d, presets, skills, sbOpts] = await Promise.all([
+      const [d, presets, skills, sbOpts, ossNames, sbRecordNames] = await Promise.all([
         agentDetail(agentKey),
         modelPresets(),
         skillList(),
         sandboxOptions(),
+        storageRecordNames().catch(() => [] as StorageRecordName[]),
+        sandboxRecordNames().catch(() => [] as SandboxRecordName[]),
       ]);
       setSbOptions(sbOpts);
-      backfillCredForm(sbOpts);
+      setStorageNames(ossNames);
+      setSandboxNames(sbRecordNames);
       setDetail({
         name: d.agent.name,
         description: d.agent.description,
         status: d.agent.status,
         createdAt: d.agent.createdAt,
+        avatar: d.agent.avatar,
       });
-      // feature.sandbox 回显（SPEC §16.11）
+      // feature.sandbox / feature.storage 回显（SPEC §16.11/§22）
       let sb: Partial<AgentSandboxConfig> = {};
+      let storageTarget = 'base64';
+      let parsedFeature: Record<string, unknown> = {};
       if (d.agent.feature) {
         try {
           const f = JSON.parse(d.agent.feature);
-          if (f && typeof f === 'object' && f.sandbox) {
-            sb = f.sandbox;
+          if (f && typeof f === 'object') {
+            parsedFeature = f;
+            if (f.sandbox) {
+              sb = f.sandbox;
+            }
+            if (f.storage && f.storage.mode === 'oss' && f.storage.storageRecord) {
+              storageTarget = f.storage.storageRecord;
+            }
           }
         } catch {
           // 非法 JSON 忽略回显
         }
       }
+      setLoadedFeature(parsedFeature);
       form.setFieldsValue({
         name: d.agent.name,
         description: d.agent.description,
@@ -125,8 +207,10 @@ export default function AgentDetailPage() {
         compactionTrigger: d.agent.compactionTrigger,
         compactionKeep: d.agent.compactionKeep,
         sysPrompt: d.agent.sysPrompt,
+        storageTarget,
         sandbox: {
           enabled: !!sb.enabled,
+          sandboxRecord: sb.sandboxRecord,
           isolationScope: sb.isolationScope ?? 'SESSION',
           persistence: sb.persistence ?? 'LOCAL_SNAPSHOT',
           templateName: sb.templateName,
@@ -143,7 +227,7 @@ export default function AgentDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [agentKey, form, backfillCredForm]);
+  }, [agentKey, form]);
 
   useEffect(() => {
     load();
@@ -151,11 +235,24 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, ...rest } = values as Record<string, unknown> & { sandbox?: Partial<AgentSandboxConfig> };
+    const { sandbox, storageTarget, ...rest } = values as Record<string, unknown> & {
+      sandbox?: Partial<AgentSandboxConfig>;
+      storageTarget?: string;
+    };
     const payload: Record<string, unknown> = { ...rest };
-    if (sandbox) {
+    // feature：在已加载命名空间基础上合并本次分区提交，避免单分区覆盖另一分区（§22）
+    const feature: Record<string, unknown> = { ...loadedFeature };
+    if (storageTarget !== undefined) {
+      feature.storage = storageTarget === 'base64'
+        ? { mode: 'base64' }
+        : { mode: 'oss', storageRecord: storageTarget };
+    }
+    if (sandbox !== undefined) {
       // enabled=false 时仅提交 {enabled:false}，保持 feature 精简（SPEC §16.11）
-      payload.feature = { sandbox: sandbox.enabled ? sandbox : { enabled: false } };
+      feature.sandbox = sandbox.enabled ? sandbox : { enabled: false };
+    }
+    if (Object.keys(feature).length > 0) {
+      payload.feature = feature;
     }
     setSaving(true);
     try {
@@ -164,33 +261,6 @@ export default function AgentDetailPage() {
       load();
     } finally {
       setSaving(false);
-    }
-  };
-
-  /** 全局沙箱接入凭证保存（仅 admin，SPEC §16.5.1 修订：e2b·agentrun 双链路，留空不修改） */
-  const onSaveCredentials = async (vals: {
-    apiKey?: string; accountId?: string; region?: string; mcpServerUrl?: string; defaultTemplate?: string;
-    e2bApiKey?: string; e2bApiBaseUrl?: string; e2bDomain?: string; e2bDefaultTemplate?: string;
-  }) => {
-    setCredSaving(true);
-    try {
-      const opts = await updateSandboxConfig({
-        apiKey: vals.apiKey || '',
-        accountId: vals.accountId || '',
-        region: vals.region || '',
-        mcpServerUrl: vals.mcpServerUrl || '',
-        defaultTemplate: vals.defaultTemplate || '',
-        e2bApiKey: vals.e2bApiKey || '',
-        e2bApiBaseUrl: vals.e2bApiBaseUrl || '',
-        e2bDomain: vals.e2bDomain || '',
-        e2bDefaultTemplate: vals.e2bDefaultTemplate || '',
-      });
-      setSbOptions(opts);
-      credForm.resetFields();
-      backfillCredForm(opts);
-      message.success('全局接入凭证已保存');
-    } finally {
-      setCredSaving(false);
     }
   };
 
@@ -205,22 +275,30 @@ export default function AgentDetailPage() {
     <div style={{ padding: '20px 28px' }}>
       {/* 页头：头像 + 名称 + Save */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <span
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 999,
-            background: 'linear-gradient(135deg, #2b2b31, #1a1a1d)',
-            color: '#fff',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 17,
-            fontWeight: 700,
-          }}
-        >
-          {(detail?.name || agentKey).charAt(0).toUpperCase()}
-        </span>
+        {detail?.avatar ? (
+          <img
+            src={detail.avatar}
+            alt={detail.name || agentKey}
+            style={{ width: 40, height: 40, borderRadius: 999, objectFit: 'cover', flexShrink: 0 }}
+          />
+        ) : (
+          <span
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 999,
+              background: 'linear-gradient(135deg, #2b2b31, #1a1a1d)',
+              color: '#fff',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 17,
+              fontWeight: 700,
+            }}
+          >
+            {(detail?.name || agentKey).charAt(0).toUpperCase()}
+          </span>
+        )}
         <div>
           <div style={{ fontWeight: 700, fontSize: 17, color: 'rgba(26, 26, 29, 0.92)' }}>
             {detail?.name || agentKey}
@@ -275,7 +353,7 @@ export default function AgentDetailPage() {
             {section === 'profile' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 <div className="glass-card" style={{ padding: 24, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-                  {/* 大头像卡 */}
+                  {/* 大头像卡（SPEC §23：点击换头像） */}
                   <div
                     style={{
                       background: '#fff',
@@ -286,6 +364,8 @@ export default function AgentDetailPage() {
                     }}
                   >
                     <div
+                      onClick={() => avatarInputRef.current?.click()}
+                      title="点击更换头像"
                       style={{
                         width: 140,
                         height: 140,
@@ -297,10 +377,41 @@ export default function AgentDetailPage() {
                         justifyContent: 'center',
                         fontSize: 56,
                         fontWeight: 700,
+                        cursor: 'pointer',
+                        overflow: 'hidden',
+                        position: 'relative',
                       }}
                     >
-                      {(detail?.name || agentKey).charAt(0).toUpperCase()}
+                      {detail?.avatar ? (
+                        <img src={detail.avatar} alt={detail.name || agentKey} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        (detail?.name || agentKey).charAt(0).toUpperCase()
+                      )}
+                      <span
+                        style={{
+                          position: 'absolute',
+                          inset: 'auto 0 0 0',
+                          background: 'rgba(0, 0, 0, 0.55)',
+                          fontSize: 11,
+                          fontWeight: 400,
+                          padding: '4px 0',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        <CameraOutlined /> {avatarUploading ? '上传中…' : '更换头像'}
+                      </span>
                     </div>
+                    {/* 头像选择器（SPEC §23） */}
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      style={{ display: 'none' }}
+                      onChange={(e) => onAvatarFile(e.target.files?.[0])}
+                    />
                     <div style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 11, color: 'rgba(26, 26, 29, 0.55)', marginTop: 10 }}>
                       ID: {agentKey}
                     </div>
@@ -346,7 +457,7 @@ export default function AgentDetailPage() {
                       </Col>
                     ))}
                   </Row>
-                  <Heatmap />
+                  <Heatmap agentKey={agentKey} />
                 </div>
               </div>
             )}
@@ -369,6 +480,30 @@ export default function AgentDetailPage() {
                   <Form.Item name="modelId" label="Model" rules={[{ required: true }]}>
                     <Select options={models.map((m) => ({ label: m, value: m }))} placeholder="e.g. qwen-max" />
                   </Form.Item>
+                  <Form.Item
+                    name="storageTarget"
+                    label="图片存储载体"
+                    tooltip="对话台图片附件的存储方式（§22.1）；OSS 记录在系统配置 - 存储中维护"
+                  >
+                    <Select
+                      options={[
+                        { value: 'base64', label: 'Base64 内联（默认，图片随消息体传输）' },
+                        ...storageNames.map((r) => ({
+                          value: r.name,
+                          label: `OSS 记录：${r.name}（${r.region ?? ''} / ${r.bucket ?? ''}）`,
+                        })),
+                      ]}
+                      placeholder="Base64 内联（默认）"
+                    />
+                  </Form.Item>
+                  {storageNames.length === 0 && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                      message="尚无 OSS 连接记录，当前仅可使用 Base64 内联；如需 OSS，请在系统配置 - 存储中新建记录。"
+                    />
+                  )}
                   <Row gutter={16}>
                     <Col xs={24} sm={12}>
                       <Form.Item name="compactionTrigger" label="压缩触发轮数" tooltip="会话历史超过该轮数时触发记忆压缩">
@@ -387,12 +522,12 @@ export default function AgentDetailPage() {
 
             {section === 'sandbox' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {sbOptions && !sbOptions.configured && (
+                {sandboxNames.length === 0 && (
                   <Alert
                     type="warning"
                     showIcon
-                    message="AgentRun 未接入"
-                    description="请联系管理员在下方「全局接入凭证」配置 API Key / 账号 ID / MCP 地址后再启用沙箱。"
+                    message="沙箱未接入"
+                    description="请联系管理员在「系统配置 - 沙箱」中新建沙箱连接记录后再启用沙箱。"
                   />
                 )}
                 <div className="glass-card" style={{ padding: 24 }}>
@@ -401,13 +536,29 @@ export default function AgentDetailPage() {
                       name={['sandbox', 'enabled']}
                       label="启用沙箱"
                       valuePropName="checked"
-                      tooltip="启用后 Agent 获得 shell_execute 与文件读写能力，全部在阿里云隔离容器内执行"
+                      tooltip="启用后 Agent 获得 shell_execute 与文件读写能力，全部在隔离容器内执行"
                     >
-                      <Switch disabled={!(sbOptions?.configured ?? false)} />
+                      <Switch disabled={sandboxNames.length === 0} />
                     </Form.Item>
                     {sbEnabled && (
                       <>
                         <Row gutter={16}>
+                          <Col xs={24} sm={12}>
+                            <Form.Item
+                              name={['sandbox', 'sandboxRecord']}
+                              label="沙箱承载记录"
+                              tooltip="启用沙箱必选其一（§22.2）；链路由记录的 linkType 决定，记录在系统配置 - 沙箱中维护"
+                              rules={[{ required: true, message: '启用沙箱必须选择一条沙箱记录' }]}
+                            >
+                              <Select
+                                placeholder="选择沙箱连接记录"
+                                options={sandboxNames.map((r) => ({
+                                  value: r.name,
+                                  label: `${r.name}（${r.linkType === 'e2b' ? 'E2B 兼容' : 'AgentRun MCP'}）`,
+                                }))}
+                              />
+                            </Form.Item>
+                          </Col>
                           <Col xs={24} sm={12}>
                             <Form.Item name={['sandbox', 'isolationScope']} label="隔离维度" tooltip="SESSION=每会话独立沙箱（推荐）">
                               <Select
@@ -420,6 +571,8 @@ export default function AgentDetailPage() {
                               />
                             </Form.Item>
                           </Col>
+                        </Row>
+                        <Row gutter={16}>
                           <Col xs={24} sm={12}>
                             <Form.Item name={['sandbox', 'persistence']} label="持久化">
                               <Select
@@ -488,81 +641,18 @@ export default function AgentDetailPage() {
 
                 {isAdmin && (
                   <div className="glass-card" style={{ padding: 24 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>全局接入凭证（admin）</div>
-                    <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginBottom: 16 }}>
-                      <div>
-                        接入状态：{sbOptions?.configured ? '已接入' : '未接入'}
-                        {sbOptions?.link ? ` · 首选链路 ${sbOptions.link === 'agentrun' ? 'AgentRun MCP' : 'E2B 兼容'}` : ''}
-                      </div>
-                      <div>
-                        E2B 兼容：{sbOptions?.e2bConfigured ? '已接入' : '未接入'}
-                        {sbOptions?.e2bApiKeyMasked ? ` · Key ${sbOptions.e2bApiKeyMasked}` : ''}
-                        {sbOptions?.e2bDomain ? ` · ${sbOptions.e2bDomain}` : ''}
-                      </div>
-                      <div>
-                        AgentRun MCP：{sbOptions?.apiKeyMasked && sbOptions?.accountIdMasked && sbOptions?.mcpServerUrl ? '已接入' : '未接入'}
-                        {sbOptions?.apiKeyMasked ? ` · Key ${sbOptions.apiKeyMasked}` : ''}
-                        {sbOptions?.accountIdMasked ? ` · 账号 ${sbOptions.accountIdMasked}` : ''}
-                      </div>
-                    </div>
-                    <Form form={credForm} layout="vertical">
-                      <div style={{ fontWeight: 600, fontSize: 13, margin: '4px 0 10px' }}>E2B 兼容链路</div>
-                      <Row gutter={16}>
-                        <Col xs={24} sm={12}>
-                          <Form.Item name="e2bApiKey" label="E2B API Key" tooltip="留空不修改；AES-GCM 加密入库">
-                            <Input.Password placeholder="留空不修改" />
-                          </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={12}>
-                          <Form.Item name="e2bApiBaseUrl" label="API Base URL">
-                            <Input placeholder="https://api.cn-beijing.e2b.fc.aliyuncs.com" />
-                          </Form.Item>
-                        </Col>
-                      </Row>
-                      <Row gutter={16}>
-                        <Col xs={24} sm={12}>
-                          <Form.Item name="e2bDomain" label="Domain">
-                            <Input placeholder="cn-beijing.e2b.fc.aliyuncs.com" />
-                          </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={12}>
-                          <Form.Item name="e2bDefaultTemplate" label="默认模板">
-                            <Input placeholder="如 code-interpreter-v1" />
-                          </Form.Item>
-                        </Col>
-                      </Row>
-                      <div style={{ fontWeight: 600, fontSize: 13, margin: '12px 0 10px' }}>AgentRun MCP 链路</div>
-                      <Row gutter={16}>
-                        <Col xs={24} sm={12}>
-                          <Form.Item name="apiKey" label="API Key" tooltip="留空不修改；AES-GCM 加密入库">
-                            <Input.Password placeholder="留空不修改" />
-                          </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={12}>
-                          <Form.Item name="accountId" label="阿里云账号 ID" tooltip="留空不修改">
-                            <Input.Password placeholder="留空不修改" />
-                          </Form.Item>
-                        </Col>
-                      </Row>
-                      <Row gutter={16}>
-                        <Col xs={24} sm={8}>
-                          <Form.Item name="region" label="region">
-                            <Input placeholder="cn-hangzhou" />
-                          </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={8}>
-                          <Form.Item name="defaultTemplate" label="默认模板">
-                            <Input placeholder="如 teapot-ci-2c4g" />
-                          </Form.Item>
-                        </Col>
-                      </Row>
-                      <Form.Item name="mcpServerUrl" label="MCP 服务地址">
-                        <Input placeholder="https://<账号ID>.agentrun-data.<region>.aliyuncs.com/templates/<模板>/mcp" />
-                      </Form.Item>
-                      <Button type="primary" loading={credSaving} onClick={() => credForm.validateFields().then(onSaveCredentials)}>
-                        保存凭证
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>沙箱连接记录</div>
+                      <div style={{ flex: 1 }} />
+                      {/* 记录统一在系统配置管理（SPEC §22.2） */}
+                      <Button icon={<SettingOutlined />} onClick={() => navigate('/system/sandbox')}>
+                        前往系统配置
                       </Button>
-                    </Form>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginTop: 12 }}>
+                      当前共 {sandboxNames.length} 条沙箱连接记录；启用沙箱时必选其一作为承载，
+                      链路与凭证由记录决定。
+                    </div>
                   </div>
                 )}
               </div>

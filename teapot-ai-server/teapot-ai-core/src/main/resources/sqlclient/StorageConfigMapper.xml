@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.StorageConfigMapper">
+
+    <resultMap id="storageMap" type="com.teamer.teapot.ai.core.model.StorageConfigDO">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="accessKeyId" column="access_key_id"/>
+        <result property="accessKeySecret" column="access_key_secret"/>
+        <result property="region" column="region"/>
+        <result property="bucket" column="bucket"/>
+        <result property="endpoint" column="endpoint"/>
+        <result property="customDomain" column="custom_domain"/>
+        <result property="keyPrefix" column="key_prefix"/>
+        <result property="remark" column="remark"/>
+        <result property="updatedBy" column="updated_by"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="selectAll" resultMap="storageMap">
+        SELECT id, name, access_key_id, access_key_secret, region, bucket, endpoint,
+               custom_domain, key_prefix, remark, updated_by, created_at, updated_at
+        FROM t_storage_config ORDER BY id
+    </select>
+
+    <select id="selectByName" resultMap="storageMap">
+        SELECT id, name, access_key_id, access_key_secret, region, bucket, endpoint,
+               custom_domain, key_prefix, remark, updated_by, created_at, updated_at
+        FROM t_storage_config WHERE name = #{name} LIMIT 1
+    </select>
+
+    <insert id="insert">
+        INSERT INTO t_storage_config
+            (name, access_key_id, access_key_secret, region, bucket, endpoint,
+             custom_domain, key_prefix, remark, updated_by)
+        VALUES
+            (#{name}, #{accessKeyId}, #{accessKeySecret}, #{region}, #{bucket}, #{endpoint},
+             #{customDomain}, #{keyPrefix}, #{remark}, #{updatedBy})
+    </insert>
+
+    <update id="updateByName">
+        UPDATE t_storage_config
+        <set>
+            <if test="accessKeyId != null">access_key_id = #{accessKeyId},</if>
+            <if test="accessKeySecret != null">access_key_secret = #{accessKeySecret},</if>
+            <if test="region != null">region = #{region},</if>
+            <if test="bucket != null">bucket = #{bucket},</if>
+            <if test="endpoint != null">endpoint = #{endpoint},</if>
+            <if test="customDomain != null">custom_domain = #{customDomain},</if>
+            <if test="keyPrefix != null">key_prefix = #{keyPrefix},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            updated_by = #{updatedBy}
+        </set>
+        WHERE name = #{name}
+    </update>
+
+    <delete id="deleteByName">
+        DELETE FROM t_storage_config WHERE name = #{name}
+    </delete>
+</mapper>

@@ -20,6 +20,8 @@ public class ModelEntryDO {
     private String displayName;
     /** OpenAI 兼容自定义端点（可选） */
     private String baseUrl;
+    /** 能力位逗号分隔：image,audio,video；null=纯文本（SPEC §19） */
+    private String capabilities;
     /** 1 启用 0 停用 */
     private Integer status;
     private String createdBy;

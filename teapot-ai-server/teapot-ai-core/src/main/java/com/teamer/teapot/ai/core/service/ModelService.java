@@ -23,6 +23,8 @@ import java.util.Set;
 public class ModelService {
 
     private static final Set<String> PROVIDERS = Set.of("dashscope", "openai");
+    /** 能力位白名单（SPEC §19；一期界面仅开放 image） */
+    private static final Set<String> CAPABILITIES = Set.of("image", "audio", "video");
 
     private final ModelEntryMapper modelEntryMapper;
     private final ModelRegistry modelRegistry;
@@ -52,6 +54,11 @@ public class ModelService {
         return modelEntryMapper.selectAll();
     }
 
+    /** 启用入口的能力位（SPEC §19 前端 gating，任意登录用户可读，不含密钥） */
+    public List<ModelEntryDO> listEnabledCapabilities() {
+        return modelEntryMapper.selectAllEnabled();
+    }
+
     public ModelEntryDO create(ModelEntryDO request) {
         requireAdmin();
         validate(request);
@@ -60,10 +67,12 @@ public class ModelService {
             throw new BizException("模型入口已存在：" + request.modelId());
         }
         request.setStatus(request.getStatus() == null ? 1 : request.getStatus());
+        request.setCapabilities(normalizeCapabilities(request.getCapabilities()));
         request.setCreatedBy(ContextUtil.currentUserId());
         modelEntryMapper.insert(request);
         modelRegistry.evict(request.modelId());
-        auditService.log("model.create", request.modelId(), "baseUrl=" + request.getBaseUrl());
+        auditService.log("model.create", request.modelId(), "baseUrl=" + request.getBaseUrl()
+                + ", capabilities=" + request.getCapabilities());
         return request;
     }
 
@@ -86,16 +95,18 @@ public class ModelService {
         if (dup != null && !dup.getId().equals(id)) {
             throw new BizException("模型入口已存在：" + existed.modelId());
         }
-        // 显式传 null 表示清空展示名/baseUrl
+        // 显式传 null 表示清空展示名/baseUrl/能力位
         existed.setDisplayName(request.getDisplayName());
         existed.setBaseUrl(request.getBaseUrl());
+        existed.setCapabilities(normalizeCapabilities(request.getCapabilities()));
         if (request.getStatus() != null) {
             existed.setStatus(request.getStatus());
         }
         modelEntryMapper.update(existed);
         modelRegistry.evict(oldModelId);
         modelRegistry.evict(existed.modelId());
-        auditService.log("model.update", existed.modelId(), "baseUrl=" + existed.getBaseUrl());
+        auditService.log("model.update", existed.modelId(), "baseUrl=" + existed.getBaseUrl()
+                + ", capabilities=" + existed.getCapabilities());
         return existed;
     }
 
@@ -120,6 +131,24 @@ public class ModelService {
         if (entry.getModelName().length() > 64) {
             throw new BizException("模型名长度不超过 64 位");
         }
+    }
+
+    /** 能力位规范化：去空白、校验白名单、去重；null/空 → null（纯文本） */
+    private String normalizeCapabilities(String capabilities) {
+        if (capabilities == null || capabilities.isBlank()) {
+            return null;
+        }
+        List<String> parts = Arrays.stream(capabilities.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .toList();
+        for (String part : parts) {
+            if (!CAPABILITIES.contains(part)) {
+                throw new BizException("能力位仅支持：" + String.join("/", CAPABILITIES));
+            }
+        }
+        return parts.isEmpty() ? null : String.join(",", parts);
     }
 
     private void requireAdmin() {

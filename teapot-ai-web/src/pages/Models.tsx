@@ -9,6 +9,11 @@ const PROVIDER_OPTIONS = [
   { label: 'OpenAI / 兼容端点', value: 'openai' },
 ];
 
+// 多模态能力位（SPEC §19；一期界面仅开放 image）
+const CAPABILITY_OPTIONS = [
+  { label: '图片（image）', value: 'image' },
+];
+
 /** 模型入口管理（SPEC §6.4 修订：界面配置化，admin 专属） */
 export default function Models() {
   const [list, setList] = useState<ModelEntry[]>([]);
@@ -40,6 +45,7 @@ export default function Models() {
       modelName: values.modelName.trim(),
       displayName: values.displayName || null,
       baseUrl: values.baseUrl?.trim() || null,
+      capabilities: values.capabilities?.length ? values.capabilities.join(',') : null,
       status: 1,
     });
     message.success('创建成功');
@@ -56,6 +62,7 @@ export default function Models() {
       modelName: values.modelName.trim(),
       displayName: values.displayName || null,
       baseUrl: values.baseUrl?.trim() || null,
+      capabilities: values.capabilities?.length ? values.capabilities.join(',') : null,
     });
     message.success('保存成功');
     setEditTarget(null);
@@ -111,6 +118,19 @@ export default function Models() {
             render: (v: string | null) => v || '-',
           },
           {
+            title: '多模态能力',
+            dataIndex: 'capabilities',
+            width: 130,
+            render: (v: string | null) =>
+              v
+                ? v.split(',').map((c) => (
+                    <Tag key={c} color="geekblue">
+                      {c}
+                    </Tag>
+                  ))
+                : '-',
+          },
+          {
             title: '状态',
             dataIndex: 'status',
             width: 90,
@@ -132,6 +152,7 @@ export default function Models() {
                       modelName: record.modelName,
                       displayName: record.displayName || '',
                       baseUrl: record.baseUrl || '',
+                      capabilities: record.capabilities ? record.capabilities.split(',') : [],
                     });
                     setEditTarget(record);
                   }}
@@ -181,6 +202,9 @@ export default function Models() {
           <Form.Item name="displayName" label="展示名">
             <Input placeholder="如 通义千问 Plus（留空显示模型标识）" />
           </Form.Item>
+          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放图片上传；DashScope 会改走 multimodal-generation 端点">
+            <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
+          </Form.Item>
           <Form.Item
             noStyle
             shouldUpdate={(prev, cur) => prev.provider !== cur.provider}
@@ -218,6 +242,9 @@ export default function Models() {
           </Form.Item>
           <Form.Item name="displayName" label="展示名">
             <Input placeholder="留空显示模型标识" />
+          </Form.Item>
+          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放图片上传；DashScope 会改走 multimodal-generation 端点">
+            <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
           </Form.Item>
           <Form.Item name="baseUrl" label="baseUrl（仅 OpenAI 生效，可选）">
             <Input placeholder="留空使用环境变量 OPENAI_BASE_URL" />

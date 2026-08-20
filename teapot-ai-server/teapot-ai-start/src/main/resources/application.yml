@@ -12,6 +12,10 @@ spring:
     username: teapot_ai
     password: ${TEAPOT_AI_DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+  servlet:
+    multipart:                                   # 图片上传（SPEC §20）：服务端限额 5MB，留少量余量
+      max-file-size: 6MB
+      max-request-size: 8MB
 
 mybatis:
   mapper-locations: classpath*:sqlclient/*.xml
@@ -32,6 +36,10 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/chat/*
         - /api/model/*
         - /api/config/sandbox-options          # 沙箱选项与接入状态（写 /api/config/sandbox 仅 admin，SPEC §16.5.1）
+        - /api/config/storage-options          # 图片存储策略与 OSS 接入状态（写 /api/config/storage 仅 admin，SPEC §20）
+        - /api/config/storage-record-names     # OSS 记录名单（仅名称，Agent 配置下拉，SPEC §22.1）
+        - /api/config/sandbox-record-names     # 沙箱记录名单（仅名称/linkType，Agent 配置下拉，SPEC §22.2）
+        - /api/avatar/*                        # Agent/用户头像上传（SPEC §23）
         - /api/user/profile
         - /agui/*
     - roleId: viewer
@@ -43,6 +51,10 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/skill/git/status                # Git 来源状态只读（SPEC §15.9）
         - /api/chat/*
         - /api/model/presets
+        - /api/config/storage-options          # 上传前探测生效策略（SPEC §20）
+        - /api/config/storage-record-names     # OSS 记录名单（仅名称，Agent 配置下拉，SPEC §22.1）
+        - /api/config/sandbox-record-names     # 沙箱记录名单（仅名称/linkType，Agent 配置下拉，SPEC §22.2）
+        - /api/avatar/user                     # 仅本人头像上传（SPEC §23）
         - /api/user/profile
         - /agui/*
   jwt:
@@ -66,6 +78,7 @@ teapot:
       local-path: ${GIT_SKILL_LOCAL_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/git-skills}
       source:     git                             # 列表/详情展示的 source 标识
       auto-sync:  true                            # 读操作轻量 ls-remote，HEAD 变化才 pull
+      skills-root: ${GIT_SKILL_SKILLS_ROOT:}      # 仓内 skill 目录根（相对仓库根，如 .qoder/skills）；空=自动探测
     sandbox:                                      # 沙箱双链路配置（SPEC §16.5 修订；凭证在 t_sys_config / env）
       link: ${SANDBOX_LINK:e2b}                   # 首选链路：e2b / agentrun；不可用时自动回落另一链路
       e2b:                                        # E2B 兼容链路（AgentRun E2B 端点，CLI 实测可用）
@@ -79,6 +92,12 @@ teapot:
         snapshot-path: ${AGENT_SNAPSHOT_PATH:${AGENTSCOPE_WORKSPACE:./workspace}/sandbox-snapshots}
         default-workspace-root: /home/agentscope/workspace
         default-idle-timeout-seconds: 1800
+    storage:                                     # 图片存储策略（SPEC §20；凭证在 t_sys_config / env）
+      oss:
+        enabled: ${STORAGE_OSS_ENABLED:true}     # 总开关：false 时即使凭证齐备也不启用 OSS 策略
+        key-prefix: ${STORAGE_OSS_KEY_PREFIX:teapot-ai/chat-images/}
+      avatar-record: ${STORAGE_AVATAR_RECORD:oss-cn-beijing.aliyuncs.com}   # 头像承载 OSS 记录名（SPEC §23）
+      avatar-key-prefix: teapot-ai/avatars/      # 头像对象 key 前缀
     model-presets:                               # 兜底白名单：仅当 t_model_entry 无启用入口时生效（正常由管理界面配置，SPEC §6.4 修订）
       - dashscope:qwen-plus
       - dashscope:qwen-max
@@ -92,7 +111,8 @@ agentscope:                                      # AG-UI starter（SPEC §6.3）
     path-prefix: /agui
     agent-id-header: X-Agent-Id
     cors-enabled: false                          # /agui/** 的 CORS 由 nginx 统一处理
-    run-timeout: 10m
+    run-timeout: 30m
+    sse-timeout: 1800000                          # SSE 连接最长保持 30 分钟（毫秒），防长思考/工具链任务被截断
     emit-state-events: true
     emit-tool-call-args: true
     emit-token-usage: true

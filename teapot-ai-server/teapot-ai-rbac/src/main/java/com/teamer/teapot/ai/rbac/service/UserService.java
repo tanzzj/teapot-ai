@@ -155,6 +155,17 @@ public class UserService {
         return requireUser(userId);
     }
 
+    /** 更新当前登录用户头像（SPEC §23：仅本人，头像 URL 由上传端点产出） */
+    public TeapotUser updateAvatar(String avatarUrl) {
+        String userId = ContextUtil.currentUserId();
+        requireUser(userId);
+        TeapotUser patch = new TeapotUser();
+        patch.setUserId(userId);
+        patch.setAvatar(avatarUrl);
+        userMapper.update(patch);
+        return requireUser(userId);
+    }
+
     /** 停用用户（一期不做物理删除，SPEC §5.4） */
     public void disable(String userId) {
         TeapotUser user = requireUser(userId);
