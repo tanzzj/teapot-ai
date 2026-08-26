@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.ChannelSessionMapper">
+
+    <resultMap id="channelSessionMap" type="com.teamer.teapot.ai.core.model.ChannelSessionDO">
+        <id property="id" column="id"/>
+        <result property="agentKey" column="agent_key"/>
+        <result property="userId" column="user_id"/>
+        <result property="sessionId" column="session_id"/>
+        <result property="channelType" column="channel_type"/>
+        <result property="title" column="title"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="lastActiveAt" column="last_active_at"/>
+    </resultMap>
+
+    <sql id="allColumns">
+        id, agent_key, user_id, session_id, channel_type, title, created_at, last_active_at
+    </sql>
+
+    <!-- 索引 upsert（SPEC §24.9）：title 仅首次写入，活跃时间每次刷新 -->
+    <insert id="upsert">
+        INSERT INTO t_channel_session
+            (agent_key, user_id, session_id, channel_type, title)
+        VALUES
+            (#{agentKey}, #{userId}, #{sessionId}, #{channelType}, #{title})
+        ON DUPLICATE KEY UPDATE
+            last_active_at = CURRENT_TIMESTAMP
+            <if test="title != null">, title = COALESCE(title, #{title})</if>
+    </insert>
+
+    <select id="selectByAgent" resultMap="channelSessionMap">
+        SELECT <include refid="allColumns"/> FROM t_channel_session
+        WHERE agent_key = #{agentKey}
+        ORDER BY last_active_at DESC LIMIT #{limit}
+    </select>
+
+    <select id="selectByUserSession" resultMap="channelSessionMap">
+        SELECT <include refid="allColumns"/> FROM t_channel_session
+        WHERE user_id = #{userId} AND session_id = #{sessionId} LIMIT 1
+    </select>
+
+    <delete id="delete">
+        DELETE FROM t_channel_session WHERE user_id = #{userId} AND session_id = #{sessionId}
+    </delete>
+</mapper>

@@ -76,6 +76,16 @@ public class ChatSessionController {
                 .body(imageData.data());
     }
 
+    /** 会话内历史视频二进制（与取图端点对称，避免 base64 内联进消息 JSON） */
+    @GetMapping("/video/{sessionId}/{videoIndex}")
+    public ResponseEntity<byte[]> video(@PathVariable String sessionId, @PathVariable int videoIndex) {
+        ChatSessionService.ImageData videoData = chatSessionService.video(sessionId, videoIndex);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(videoData.mediaType()))
+                .cacheControl(CacheControl.maxAge(java.time.Duration.ofDays(1)).cachePrivate())
+                .body(videoData.data());
+    }
+
     /** 清空会话（删状态 + 删索引） */
     @DeleteMapping("/clear/{sessionId}")
     public Result<Void> clear(@PathVariable String sessionId) {

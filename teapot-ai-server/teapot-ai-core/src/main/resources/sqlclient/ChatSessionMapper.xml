@@ -26,6 +26,12 @@
         FROM t_chat_session WHERE user_id = #{userId} AND session_id = #{sessionId} LIMIT 1
     </select>
 
+    <select id="selectByAgent" resultMap="sessionMap">
+        SELECT id, user_id, agent_key, session_id, title, created_at, updated_at
+        FROM t_chat_session WHERE agent_key = #{agentKey}
+        ORDER BY updated_at DESC LIMIT #{limit}
+    </select>
+
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO t_chat_session (user_id, agent_key, session_id, title)
         VALUES (#{userId}, #{agentKey}, #{sessionId}, #{title})

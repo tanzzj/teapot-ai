@@ -13,9 +13,9 @@ spring:
     password: ${TEAPOT_AI_DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   servlet:
-    multipart:                                   # 图片上传（SPEC §20）：服务端限额 5MB，留少量余量
-      max-file-size: 6MB
-      max-request-size: 8MB
+    multipart:                                   # 媒体上传（SPEC §20 + 视频多模态）：视频 30MB，留余量
+      max-file-size: 35MB
+      max-request-size: 40MB
 
 mybatis:
   mapper-locations: classpath*:sqlclient/*.xml
@@ -39,6 +39,7 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/config/storage-options          # 图片存储策略与 OSS 接入状态（写 /api/config/storage 仅 admin，SPEC §20）
         - /api/config/storage-record-names     # OSS 记录名单（仅名称，Agent 配置下拉，SPEC §22.1）
         - /api/config/sandbox-record-names     # 沙箱记录名单（仅名称/linkType，Agent 配置下拉，SPEC §22.2）
+        - /api/channel-config/registry         # 连接器记录名单（仅名称/类型，Agent 配置下拉，SPEC §24.4）
         - /api/avatar/*                        # Agent/用户头像上传（SPEC §23）
         - /api/user/profile
         - /agui/*
@@ -54,6 +55,7 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/config/storage-options          # 上传前探测生效策略（SPEC §20）
         - /api/config/storage-record-names     # OSS 记录名单（仅名称，Agent 配置下拉，SPEC §22.1）
         - /api/config/sandbox-record-names     # 沙箱记录名单（仅名称/linkType，Agent 配置下拉，SPEC §22.2）
+        - /api/channel-config/registry         # 连接器记录名单（仅名称/类型，Agent 配置下拉，SPEC §24.4）
         - /api/avatar/user                     # 仅本人头像上传（SPEC §23）
         - /api/user/profile
         - /agui/*
@@ -79,6 +81,11 @@ teapot:
       source:     git                             # 列表/详情展示的 source 标识
       auto-sync:  true                            # 读操作轻量 ls-remote，HEAD 变化才 pull
       skills-root: ${GIT_SKILL_SKILLS_ROOT:}      # 仓内 skill 目录根（相对仓库根，如 .qoder/skills）；空=自动探测
+    skill-oss:                                  # OSS Skill 来源（第三 skill 来源：zip 导入 → OSS 对象挂载）
+      enabled:  ${SKILL_OSS_ENABLED:true}      # 开关：false 时 Bean 不装配，zip 导入入口同步关闭
+      prefix:   ${SKILL_OSS_PREFIX:teapot-ai/skills/}  # skill 对象 key 前缀（{prefix}{name}/SKILL.md + 资源）
+      source:   oss                              # 列表/详情展示的 source 标识
+      cache-ttl-seconds: 60                      # 读缓存 TTL（秒），导入/删除自动失效
     sandbox:                                      # 沙箱双链路配置（SPEC §16.5 修订；凭证在 t_sys_config / env）
       link: ${SANDBOX_LINK:e2b}                   # 首选链路：e2b / agentrun；不可用时自动回落另一链路
       e2b:                                        # E2B 兼容链路（AgentRun E2B 端点，CLI 实测可用）

@@ -13,12 +13,12 @@ import {
   Switch,
 } from '@agentscope-ai/design';
 import {
-  DeleteOutlined,
-  EditOutlined,
-  MessageOutlined,
-  PlusOutlined,
-  SearchOutlined,
-} from '@ant-design/icons';
+  SparkDeleteLine,
+  SparkEditLine,
+  SparkMessageLine,
+  SparkPlusLine,
+  SparkSearchLine,
+} from '@agentscope-ai/icons';
 import { useNavigate } from 'react-router-dom';
 import { agentCreate, agentDelete, agentList, modelPresets } from '../api/agent';
 import type { Agent } from '../types';
@@ -84,7 +84,7 @@ export default function Agents() {
         <div style={{ flex: 1 }} />
         <Input
           placeholder="按名称/标识搜索"
-          prefix={<SearchOutlined />}
+          prefix={<SparkSearchLine />}
           allowClear
           style={{ width: 200 }}
           value={keyword}
@@ -107,7 +107,7 @@ export default function Agents() {
         </span>
         <Button
           type="primary"
-          icon={<PlusOutlined />}
+          icon={<SparkPlusLine />}
           onClick={() => {
             modelPresets().then(setModels).catch(() => undefined);
             setCreateOpen(true);
@@ -211,13 +211,13 @@ export default function Agents() {
                       style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'rgba(26, 26, 29, 0.88)', fontWeight: 500, fontSize: 13, cursor: 'pointer' }}
                       onClick={() => navigate(`/chat?agent=${agent.agentKey}`)}
                     >
-                      <MessageOutlined /> 对话
+                      <SparkMessageLine /> 对话
                     </span>
                     <span
                       style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'rgba(26, 26, 29, 0.55)', fontSize: 13, cursor: 'pointer' }}
                       onClick={() => navigate(`/agents/${agent.agentKey}`)}
                     >
-                      <EditOutlined /> 编辑
+                      <SparkEditLine /> 编辑
                     </span>
                     <Popconfirm
                       title="确认停用并删除该 Agent？"
@@ -228,7 +228,7 @@ export default function Agents() {
                       }}
                     >
                       <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'rgba(26, 26, 29, 0.35)', fontSize: 13, cursor: 'pointer' }}>
-                        <DeleteOutlined /> 删除
+                        <SparkDeleteLine /> 删除
                       </span>
                     </Popconfirm>
                   </div>

@@ -19,6 +19,10 @@ public interface ChatSessionMapper {
     ChatSessionDO selectByUserSession(@Param("userId") String userId,
                                       @Param("sessionId") String sessionId);
 
+    /** 某 Agent 的全部会话（跨用户，admin 会话历史视图，SPEC §24.9），按活跃时间倒序 */
+    List<ChatSessionDO> selectByAgent(@Param("agentKey") String agentKey,
+                                      @Param("limit") int limit);
+
     int insert(ChatSessionDO session);
 
     int touch(@Param("userId") String userId, @Param("sessionId") String sessionId,

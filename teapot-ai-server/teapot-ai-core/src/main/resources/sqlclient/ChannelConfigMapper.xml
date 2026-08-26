@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.ChannelConfigMapper">
+
+    <resultMap id="channelMap" type="com.teamer.teapot.ai.core.model.ChannelConfigDO">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="channelType" column="channel_type"/>
+        <result property="appKey" column="app_key"/>
+        <result property="appSecret" column="app_secret"/>
+        <result property="robotCode" column="robot_code"/>
+        <result property="remark" column="remark"/>
+        <result property="updatedBy" column="updated_by"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="allColumns">
+        id, name, channel_type, app_key, app_secret, robot_code,
+        remark, updated_by, created_at, updated_at
+    </sql>
+
+    <select id="selectAll" resultMap="channelMap">
+        SELECT <include refid="allColumns"/> FROM t_channel_config ORDER BY id
+    </select>
+
+    <select id="selectByName" resultMap="channelMap">
+        SELECT <include refid="allColumns"/> FROM t_channel_config WHERE name = #{name} LIMIT 1
+    </select>
+
+    <insert id="insert">
+        INSERT INTO t_channel_config
+            (name, channel_type, app_key, app_secret, robot_code, remark, updated_by)
+        VALUES
+            (#{name}, #{channelType}, #{appKey}, #{appSecret}, #{robotCode}, #{remark}, #{updatedBy})
+    </insert>
+
+    <update id="updateByName">
+        UPDATE t_channel_config
+        <set>
+            <if test="channelType != null">channel_type = #{channelType},</if>
+            <if test="appKey != null">app_key = #{appKey},</if>
+            <if test="appSecret != null">app_secret = #{appSecret},</if>
+            <if test="robotCode != null">robot_code = #{robotCode},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            updated_by = #{updatedBy}
+        </set>
+        WHERE name = #{name}
+    </update>
+
+    <delete id="deleteByName">
+        DELETE FROM t_channel_config WHERE name = #{name}
+    </delete>
+</mapper>

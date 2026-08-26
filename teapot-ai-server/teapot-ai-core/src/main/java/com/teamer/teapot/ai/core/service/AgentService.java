@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.common.model.PageData;
 import com.teamer.teapot.ai.core.agui.TeapotAguiAgentRegistrar;
+import com.teamer.teapot.ai.core.channel.ChannelHub;
 import com.teamer.teapot.ai.core.config.AgentRunConnection;
 import com.teamer.teapot.ai.core.config.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
@@ -12,6 +13,7 @@ import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.AgentSkillBind;
+import com.teamer.teapot.ai.core.model.ChannelConfigDO;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
 import com.teamer.teapot.ai.core.model.StorageConfigDO;
 import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
@@ -58,6 +60,8 @@ public class AgentService {
     private final AgentRunConnection agentRunConnection;
     private final SandboxConfigService sandboxConfigService;
     private final StorageConfigService storageConfigService;
+    private final ChannelConfigService channelConfigService;
+    private final ChannelHub channelHub;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
@@ -65,7 +69,9 @@ public class AgentService {
                         AuditService auditService, TeapotAiProperties properties,
                         AgentRunConnection agentRunConnection,
                         SandboxConfigService sandboxConfigService,
-                        StorageConfigService storageConfigService) {
+                        StorageConfigService storageConfigService,
+                        ChannelConfigService channelConfigService,
+                        ChannelHub channelHub) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.agentRegistry = agentRegistry;
@@ -75,6 +81,8 @@ public class AgentService {
         this.agentRunConnection = agentRunConnection;
         this.sandboxConfigService = sandboxConfigService;
         this.storageConfigService = storageConfigService;
+        this.channelConfigService = channelConfigService;
+        this.channelHub = channelHub;
     }
 
     public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled) {
@@ -103,6 +111,7 @@ public class AgentService {
         agent.setDescription(request.getDescription());
         agent.setSysPrompt(request.getSysPrompt());
         agent.setModelId(request.getModelId());
+        validateCompaction(request.getCompactionTrigger(), request.getCompactionKeep());
         agent.setCompactionTrigger(request.getCompactionTrigger() == null
                 ? DEFAULT_COMPACTION_TRIGGER : request.getCompactionTrigger());
         agent.setCompactionKeep(request.getCompactionKeep() == null
@@ -119,6 +128,8 @@ public class AgentService {
         replaceBindings(request.getAgentKey(), request.getSkillNames());
         writeAgentsMd(request.getAgentKey(), request.getSysPrompt());
         aguiRegistrar.register(request.getAgentKey());
+        // channel 启用时启动连接器（未启用时 sync 静默跳过，SPEC §24.4）
+        channelHub.sync(request.getAgentKey());
         auditService.log("agent.create", request.getAgentKey(),
                 "modelId=" + request.getModelId());
         return agentMapper.selectByAgentKey(request.getAgentKey());
@@ -156,6 +167,7 @@ public class AgentService {
         if (request.getCompactionKeep() != null) {
             agent.setCompactionKeep(request.getCompactionKeep());
         }
+        validateCompaction(request.getCompactionTrigger(), request.getCompactionKeep());
         // feature 非 null 时整体替换（SPEC §16.6；空对象 {} = 清空）
         if (request.getFeature() != null) {
             agent.setFeature(validateFeature(request.getFeature()));
@@ -166,8 +178,20 @@ public class AgentService {
         }
         writeAgentsMd(agentKey, agent.getSysPrompt());
         agentRegistry.invalidate(agentKey);
+        // channel 改绑/停用即时生效（SPEC §24.7 验收 5）：sync 内部 restart 或 stop
+        channelHub.sync(agentKey);
         auditService.log("agent.update", agentKey, null);
         return agent;
+    }
+
+    /** compaction 取值校验：-1 = 关闭压缩，其余须落既有区间 */
+    private static void validateCompaction(Integer trigger, Integer keep) {
+        if (trigger != null && trigger != -1 && (trigger < 1 || trigger > 200)) {
+            throw new BizException("compactionTrigger 须为 -1（关闭）或 1–200");
+        }
+        if (keep != null && keep != -1 && (keep < 0 || keep > 100)) {
+            throw new BizException("compactionKeep 须为 -1（关闭）或 0–100");
+        }
     }
 
     /** 更新 Agent 头像（SPEC §23：头像 URL 由上传端点产出，此处仅落库） */
@@ -187,6 +211,7 @@ public class AgentService {
         agentSkillMapper.deleteByAgentKey(agentKey);
         aguiRegistrar.unregister(agentKey);
         agentRegistry.invalidate(agentKey);
+        channelHub.stop(agentKey);
         auditService.log("agent.delete", agentKey,
                 "name=" + agent.getName());
     }
@@ -283,6 +308,18 @@ public class AgentService {
             if (isBlank(rec.getAccessKeyId()) || isBlank(rec.getAccessKeySecret())
                     || isBlank(rec.getRegion()) || isBlank(rec.getBucket())) {
                 throw new BizException("OSS 记录 " + rec.getName() + " 凭证不齐（需 AK/Secret/Region/Bucket）");
+            }
+        }
+        AgentFeature.Channel ch = feature.getChannel();
+        if (ch != null && ch.isEnabled()
+                && ch.getChannelRecord() != null && !ch.getChannelRecord().isBlank()) {
+            ChannelConfigDO rec = channelConfigService.getPlain(ch.getChannelRecord().trim());
+            if (rec == null) {
+                throw new BizException("连接器记录不存在：" + ch.getChannelRecord());
+            }
+            if (!ChannelConfigService.configured(rec)) {
+                throw new BizException("连接器记录 " + rec.getName()
+                        + " 凭证不齐，请在系统配置 - 连接器中补全");
             }
         }
     }

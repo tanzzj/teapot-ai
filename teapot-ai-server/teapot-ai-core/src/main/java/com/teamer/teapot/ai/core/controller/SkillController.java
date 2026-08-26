@@ -12,7 +12,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -70,5 +72,31 @@ public class SkillController {
     @PostMapping("/git/sync")
     public Result<Map<String, Object>> gitSync() {
         return Result.ok(skillService.gitSync());
+    }
+
+    /** zip 导入（双落点）：target=oss 写 OSS 对象（同名覆盖）；target=mysql 存平台库（同名 upsert） */
+    @PostMapping(value = "/import", consumes = "multipart/form-data")
+    public Result<Map<String, Object>> importSkill(@RequestParam("file") MultipartFile file,
+                                                   @RequestParam(name = "target", defaultValue = "oss") String target) {
+        return Result.ok(skillService.importSkill(file, target));
+    }
+
+    /** 任意 Git 仓库导入：临时 clone 后按 zip 导入同款规则入库（developer，被 /api/skill/* 通配覆盖） */
+    @PostMapping("/import/git")
+    public Result<Map<String, Object>> importFromGit(@RequestBody Map<String, String> body) {
+        return Result.ok(skillService.importFromGit(
+                body.get("url"), body.get("branch"), body.get("target")));
+    }
+
+    /** OSS 来源状态 */
+    @GetMapping("/oss/status")
+    public Result<Map<String, Object>> ossStatus() {
+        return Result.ok(skillService.ossStatus());
+    }
+
+    /** OSS 来源手动刷新缓存 */
+    @PostMapping("/oss/refresh")
+    public Result<Map<String, Object>> ossRefresh() {
+        return Result.ok(skillService.ossRefresh());
     }
 }

@@ -11,8 +11,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * t_agent.feature 扩展功能配置模型（SPEC §16.6/§22.2）：
- * 通用命名空间容器，消费 sandbox 与 storage；未知顶层命名空间原样保留（不拒不改）。
+ * t_agent.feature 扩展功能配置模型（SPEC §16.6/§22.2/§24.3）：
+ * 通用命名空间容器，消费 sandbox、storage 与 channel；未知顶层命名空间原样保留（不拒不改）。
  */
 @Data
 public class AgentFeature {
@@ -20,12 +20,18 @@ public class AgentFeature {
     public static final String NS_SANDBOX = "sandbox";
     /** 图片存储载体（SPEC §22.1）：base64 默认 / oss 记录引用 */
     public static final String NS_STORAGE = "storage";
+    /** Channel 连接器（SPEC §24.3）：Agent 对外消息通道 */
+    public static final String NS_CHANNEL = "channel";
+    /** 运行期高级配置：thinking/采样参数/工具与迭代开关等（Agent 配置页 Basic Info + Tool & Advanced） */
+    public static final String NS_RUNTIME = "runtime";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
     private static final Set<String> PERSISTENCE_MODES = Set.of("NONE", "LOCAL_SNAPSHOT", "NAS");
     /** 沙箱链路可选值（SPEC §21.4）：auto=跟随全局配置 */
     private static final Set<String> SANDBOX_LINKS = Set.of("auto", "e2b", "agentrun");
+    /** channel 会话粒度可选值（SPEC §24.3） */
+    private static final Set<String> DM_SCOPES = Set.of("MAIN", "PER_PEER", "PER_CHANNEL_PEER");
     private static final List<String> NAS_MOUNT_PREFIXES = List.of("/home/", "/mnt/", "/data/");
     /** 闲置超时合法区间（SPEC §16.6） */
     private static final int IDLE_MIN_SECONDS = 300;
@@ -104,6 +110,46 @@ public class AgentFeature {
         }
     }
 
+    /** channel 命名空间（SPEC §24.3）；未配置返回 null */
+    @SuppressWarnings("unchecked")
+    public Channel getChannel() {
+        Object raw = namespaces.get(NS_CHANNEL);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, Channel.class);
+    }
+
+    /** 写入/替换 channel 命名空间 */
+    public void setChannel(Channel channel) {
+        if (channel == null) {
+            namespaces.remove(NS_CHANNEL);
+        } else {
+            namespaces.put(NS_CHANNEL, MAPPER.convertValue(channel, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
+    /** runtime 命名空间；未配置返回 null */
+    @SuppressWarnings("unchecked")
+    public Runtime getRuntime() {
+        Object raw = namespaces.get(NS_RUNTIME);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, Runtime.class);
+    }
+
+    /** 写入/替换 runtime 命名空间 */
+    public void setRuntime(Runtime runtime) {
+        if (runtime == null) {
+            namespaces.remove(NS_RUNTIME);
+        } else {
+            namespaces.put(NS_RUNTIME, MAPPER.convertValue(runtime, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
     /**
      * 保存时强校验（SPEC §16.6/§22 校验表）：不合法直接抛 BizException 拒绝。
      * 记录存在性由 AgentService 补充校验（模型层不依赖 Service）。
@@ -112,6 +158,8 @@ public class AgentFeature {
      */
     public void validate(boolean agentRunConfigured) {
         validateStorage();
+        validateChannel();
+        validateRuntime();
         Sandbox sb = getSandbox();
         if (sb == null) {
             return;
@@ -173,6 +221,40 @@ public class AgentFeature {
         }
     }
 
+    /** runtime 命名空间校验：采样参数与迭代数区间，越界拒绝保存 */
+    private void validateRuntime() {
+        Runtime rt = getRuntime();
+        if (rt == null) {
+            return;
+        }
+        if (rt.getTemperature() != null && (rt.getTemperature() < 0 || rt.getTemperature() > 2)) {
+            throw new BizException("temperature 超出范围（0–2）");
+        }
+        if (rt.getTopP() != null && (rt.getTopP() <= 0 || rt.getTopP() > 1)) {
+            throw new BizException("topP 超出范围（0–1]）");
+        }
+        if (rt.getMaxTokens() != null && (rt.getMaxTokens() < 1 || rt.getMaxTokens() > 65536)) {
+            throw new BizException("maxTokens 超出范围（1–65536）");
+        }
+        if (rt.getMaxIterations() != null && (rt.getMaxIterations() < 1 || rt.getMaxIterations() > 100)) {
+            throw new BizException("maxIterations 超出范围（1–100）");
+        }
+    }
+
+    /** channel 命名空间校验（SPEC §24.3）：启用必选记录、dmScope 枚举；与沙箱可共存（§24.2 修订） */
+    private void validateChannel() {
+        Channel ch = getChannel();
+        if (ch == null || !ch.isEnabled()) {
+            return;
+        }
+        if (isBlank(ch.getChannelRecord())) {
+            throw new BizException("启用连接器必须选择一条连接器记录（系统配置 - 连接器中维护）");
+        }
+        if (ch.getDmScope() != null && !DM_SCOPES.contains(ch.getDmScope())) {
+            throw new BizException("dmScope 非法，可选值：" + DM_SCOPES);
+        }
+    }
+
     /** storage 命名空间结构（SPEC §22.1：图片存储载体按 Agent 选择，非全局） */
     @Data
     public static class Storage {
@@ -180,6 +262,37 @@ public class AgentFeature {
         private String mode;
         /** mode=oss 时引用的 t_storage_config 记录名 */
         private String storageRecord;
+    }
+
+    /** channel 命名空间结构（SPEC §24.3：Agent 对外消息通道） */
+    @Data
+    public static class Channel {
+        private boolean enabled;
+        /** 引用的 t_channel_config 记录名（启用必填） */
+        private String channelRecord;
+        /** 会话粒度：MAIN / PER_PEER / PER_CHANNEL_PEER，缺省 PER_CHANNEL_PEER */
+        private String dmScope;
+    }
+
+    /** runtime 命名空间结构：字段全部可空（null = 未配置，回落 SDK 默认 / 存量行为） */
+    @Data
+    public static class Runtime {
+        /** 思考模式（DashScope enableThinking；openai 供应商忽略） */
+        private Boolean thinkingMode;
+        /** 采样温度 [0,2] */
+        private Double temperature;
+        /** 核采样 (0,1] */
+        private Double topP;
+        /** 最大生成 tokens [1,65536] */
+        private Integer maxTokens;
+        /** 计划模式 */
+        private Boolean enablePlanMode;
+        /** shell 工具开关；null = 跟随沙箱启用（存量兼容） */
+        private Boolean enableShell;
+        /** 工具白名单（空 = 不限制） */
+        private List<String> allowedTools;
+        /** ReAct 最大迭代轮数 [1,100]；null = SDK 默认 */
+        private Integer maxIterations;
     }
 
     /** sandbox 命名空间结构（字段缺省由 AgentRegistry 构建时回填，SPEC §16.6/§22.2） */

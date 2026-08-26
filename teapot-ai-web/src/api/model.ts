@@ -19,6 +19,11 @@ export function modelList() {
   return unwrap<ModelEntry[]>(http.get<Result<ModelEntry[]>>('/api/model/list'));
 }
 
+/** 供应商在售模型清单（admin；目前仅 dashscope 实现，作模型名下拉数据源） */
+export function modelVendorModels(provider: string) {
+  return unwrap<string[]>(http.get<Result<string[]>>(`/api/model/vendor-models/${provider}`));
+}
+
 /** 启用入口的能力位（多模态 gating，任意登录用户可读） */
 export function modelCapabilities() {
   return unwrap<ModelEntry[]>(http.get<Result<ModelEntry[]>>('/api/model/capabilities'));

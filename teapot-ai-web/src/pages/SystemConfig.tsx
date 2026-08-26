@@ -2,16 +2,24 @@ import { useCallback, useEffect, useState } from 'react';
 import { Col, Row, Spin, theme } from 'antd';
 import { Button, Form, Input, message, Modal, Popconfirm, Radio, Table, Tag } from '@agentscope-ai/design';
 import {
-  ApiOutlined,
-  CloudServerOutlined,
-  DatabaseOutlined,
-  PlusOutlined,
-  SettingOutlined,
-  TeamOutlined,
-} from '@ant-design/icons';
+  SparkApiLine,
+  SparkInternetLine,
+  SparkDataLine,
+  SparkLinkLine,
+  SparkPlusLine,
+  SparkSettingLine,
+  SparkUserGroupLine,
+} from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import Models from './Models';
 import Users from './Users';
+import {
+  channelConfigList,
+  createChannelRecord,
+  deleteChannelRecord,
+  testChannelConnect,
+  updateChannelRecord,
+} from '../api/channelConfig';
 import {
   createSandboxRecord,
   createStorageRecord,
@@ -22,38 +30,46 @@ import {
   updateSandboxRecord,
   updateStorageRecord,
 } from '../api/config';
-import type { SandboxListData, SandboxRecord, StorageListData, StorageRecord } from '../types';
+import type {
+  ChannelListData,
+  ChannelRecord,
+  SandboxListData,
+  SandboxRecord,
+  StorageListData,
+  StorageRecord,
+} from '../types';
 
 /**
- * 系统配置页（SPEC §21/§22，admin 一站式管理台）：
- * 模型 / 用户 / 存储（OSS 连接记录，§20.12）/ 沙箱（沙箱连接记录，§22.2）。
- * 载体选择已下放 Agent 级（AgentConfig feature，§22.1/§22.2），本页只维护记录。
+ * 系统配置页（SPEC §21/§22/§24，admin 一站式管理台）：
+ * 模型 / 用户 / 存储（OSS 连接记录，§20.12）/ 沙箱（沙箱连接记录，§22.2）/ 连接器（渠道记录，§24.4）。
+ * 载体选择已下放 Agent 级（AgentConfig feature，§22.1/§22.2/§24.5），本页只维护记录。
  * 布局复刻 AgentDetail 左侧胶囊菜单。
  */
-type Section = 'models' | 'users' | 'storage' | 'sandbox';
+type Section = 'models' | 'users' | 'storage' | 'sandbox' | 'channel';
 
 export default function SystemConfigPage() {
   const { section: rawSection } = useParams();
   const navigate = useNavigate();
   const { token } = theme.useToken();
-  const section: Section = (['models', 'users', 'storage', 'sandbox'] as const)
+  const section: Section = (['models', 'users', 'storage', 'sandbox', 'channel'] as const)
     .includes(rawSection as Section)
     ? (rawSection as Section)
     : 'models';
 
   const menuItems: { key: Section; label: string; icon: React.ReactNode }[] = [
-    { key: 'models', label: '模型', icon: <ApiOutlined /> },
-    { key: 'users', label: '用户', icon: <TeamOutlined /> },
-    { key: 'storage', label: '存储', icon: <DatabaseOutlined /> },
-    { key: 'sandbox', label: '沙箱', icon: <CloudServerOutlined /> },
+    { key: 'models', label: '模型', icon: <SparkApiLine /> },
+    { key: 'users', label: '用户', icon: <SparkUserGroupLine /> },
+    { key: 'storage', label: '存储', icon: <SparkDataLine /> },
+    { key: 'sandbox', label: '沙箱', icon: <SparkInternetLine /> },
+    { key: 'channel', label: '连接器', icon: <SparkLinkLine /> },
   ];
 
   return (
     <div style={{ padding: '20px 28px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-        <SettingOutlined style={{ fontSize: 18, color: 'rgba(26,26,29,0.7)' }} />
+        <SparkSettingLine style={{ fontSize: 18, color: 'rgba(26,26,29,0.7)' }} />
         <span style={{ fontWeight: 700, fontSize: 17, color: 'rgba(26, 26, 29, 0.92)' }}>系统配置</span>
-        <span style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>模型 · 用户 · 存储 · 沙箱（仅管理员）</span>
+        <span style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>模型 · 用户 · 存储 · 沙箱 · 连接器（仅管理员）</span>
       </div>
 
       <Row gutter={20}>
@@ -94,6 +110,7 @@ export default function SystemConfigPage() {
           {section === 'users' && <Users />}
           {section === 'storage' && <StorageSection />}
           {section === 'sandbox' && <SandboxSection />}
+          {section === 'channel' && <ChannelSection />}
         </Col>
       </Row>
       {/* token 仅用于保持主题上下文一致（与其他页面同风格） */}
@@ -189,7 +206,7 @@ function StorageSection() {
                 AK/Secret 加密入库，界面不回显明文。
               </div>
             </div>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
               新建记录
             </Button>
           </div>
@@ -412,7 +429,7 @@ function SandboxSection() {
                 API Key / 账号 ID 加密入库，界面不回显明文。
               </div>
             </div>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
               新建记录
             </Button>
           </div>
@@ -556,6 +573,247 @@ function SandboxSection() {
               </>
             )}
 
+            <Form.Item name="remark" label="备注">
+              <Input placeholder="可选" />
+            </Form.Item>
+          </Form>
+        </Modal>
+      </div>
+    </Spin>
+  );
+}
+
+/* ---------------- 连接器分区（SPEC §24.4：渠道连接记录；启用按 Agent 选择） ---------------- */
+
+function ChannelSection() {
+  const [recordForm] = Form.useForm();
+  const [loading, setLoading] = useState(true);
+  const [savingRecord, setSavingRecord] = useState(false);
+  const [listData, setListData] = useState<ChannelListData | null>(null);
+  const [modal, setModal] = useState<{ mode: 'create' | 'edit' } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const channelType = Form.useWatch('channelType', recordForm);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setListData(await channelConfigList());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const onDelete = async (name: string) => {
+    const l = await deleteChannelRecord(name);
+    setListData(l);
+    message.success('记录已删除');
+  };
+
+  /** 测试连接（§24.10）：轻量调平台 API 验凭证/网络；成功/失败均用 message 展示平台返回 */
+  const onTest = async (payload: Record<string, string>) => {
+    setTesting(true);
+    try {
+      const r = await testChannelConnect(payload);
+      if (r.success) {
+        message.success(r.message);
+      } else {
+        message.error(r.message);
+      }
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  /** 弹窗内测试：取当前表单值（botToken 映射 app_secret，同保存逻辑） */
+  const onTestFromForm = () => {
+    const values = recordForm.getFieldsValue();
+    const isDiscord = (values.channelType || channelType) === 'discord';
+    onTest({
+      name: values.name || '',
+      channelType: values.channelType || channelType || 'dingtalk',
+      appKey: isDiscord ? '' : (values.appKey || ''),
+      appSecret: isDiscord ? (values.botToken || '') : (values.appSecret || ''),
+    });
+  };
+
+  const openCreate = () => {
+    recordForm.resetFields();
+    recordForm.setFieldsValue({ channelType: 'dingtalk' });
+    setModal({ mode: 'create' });
+  };
+
+  const openEdit = (record: ChannelRecord) => {
+    recordForm.resetFields();
+    recordForm.setFieldsValue({
+      name: record.name,
+      channelType: record.channelType,
+      appKey: record.appKey,
+      robotCode: record.robotCode,
+      remark: record.remark,
+    });
+    setModal({ mode: 'edit' });
+  };
+
+  /** Modal 提交：新建 / 更新记录（凭证编辑时留空不修改；钉钉 AppKey+AppSecret，Discord 仅 Bot Token） */
+  const onSaveRecord = async () => {
+    const values = await recordForm.validateFields();
+    setSavingRecord(true);
+    try {
+      const isDiscord = values.channelType === 'discord';
+      const payload: Record<string, string> = {
+        name: values.name,
+        channelType: values.channelType || 'dingtalk',
+        appKey: isDiscord ? '' : (values.appKey || ''),
+        // Discord 的 Bot Token 存 app_secret 列（后端按类型校验/解密）
+        appSecret: isDiscord ? (values.botToken || '') : (values.appSecret || ''),
+        robotCode: isDiscord ? '' : (values.robotCode || ''),
+        remark: values.remark || '',
+      };
+      const l = modal?.mode === 'edit'
+        ? await updateChannelRecord(payload)
+        : await createChannelRecord(payload);
+      setListData(l);
+      setModal(null);
+      message.success(modal?.mode === 'edit' ? '记录已更新' : '记录已创建');
+    } finally {
+      setSavingRecord(false);
+    }
+  };
+
+  return (
+    <Spin spinning={loading}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* 渠道连接记录表（§24.4；启用按 Agent 选择，无全局激活） */}
+        <div className="glass-card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>渠道连接记录</div>
+              <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)' }}>
+                支持钉钉机器人（Stream 模式）与 Discord（Gateway 长连），均为出站长连无需公网回调；
+                Agent 在各自配置页（Channel）选择其一启用。凭证加密入库，界面不回显明文。
+              </div>
+            </div>
+            <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
+              新建记录
+            </Button>
+          </div>
+          <Table<ChannelRecord>
+            rowKey="name"
+            size="small"
+            pagination={false}
+            dataSource={listData?.records ?? []}
+            scroll={window.innerWidth < 768 ? { x: 720 } : undefined}
+            columns={[
+              { title: '记录名', dataIndex: 'name' },
+              {
+                title: '类型',
+                dataIndex: 'channelType',
+                render: (v: string) => (
+                  <Tag color={v === 'dingtalk' ? 'blue' : v === 'discord' ? 'purple' : undefined}>
+                    {v === 'dingtalk' ? '钉钉' : v === 'discord' ? 'Discord' : v}
+                  </Tag>
+                ),
+              },
+              { title: 'AppKey', dataIndex: 'appKey', render: (v?: string) => v || '-' },
+              { title: 'Robot Code', dataIndex: 'robotCode', render: (v?: string) => v || '-' },
+              {
+                title: '凭证',
+                dataIndex: 'configured',
+                render: (v: boolean) => (v ? <Tag color="blue">已配置</Tag> : <Tag>未配置</Tag>),
+              },
+              {
+                title: '更新时间',
+                dataIndex: 'updatedAt',
+                render: (v?: string) => (v ? v.replace('T', ' ').slice(0, 16) : '-'),
+              },
+              {
+                title: '操作',
+                render: (_: unknown, r: ChannelRecord) => (
+                  <span style={{ display: 'flex', gap: 10, fontSize: 13 }}>
+                    <a onClick={() => onTest({ name: r.name, channelType: r.channelType })}>测试</a>
+                    <a onClick={() => openEdit(r)}>编辑</a>
+                    <Popconfirm title={`删除记录 ${r.name}？被 Agent 引用时将被拒绝。`} onConfirm={() => onDelete(r.name)}>
+                      <a style={{ color: '#cf1322' }}>删除</a>
+                    </Popconfirm>
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </div>
+
+        {/* 新建 / 编辑记录 Modal */}
+        <Modal
+          title={modal?.mode === 'edit' ? '编辑渠道连接记录' : '新建渠道连接记录'}
+          open={modal !== null}
+          confirmLoading={savingRecord}
+          onOk={onSaveRecord}
+          onCancel={() => setModal(null)}
+          destroyOnClose
+          footer={
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Button onClick={onTestFromForm} loading={testing}>
+                测试连接
+              </Button>
+              <span style={{ display: 'flex', gap: 8 }}>
+                <Button onClick={() => setModal(null)}>取消</Button>
+                <Button type="primary" loading={savingRecord} onClick={onSaveRecord}>
+                  确定
+                </Button>
+              </span>
+            </div>
+          }
+        >
+          <Form form={recordForm} layout="vertical" style={{ marginTop: 12 }}>
+            <Form.Item name="name" label="记录名" rules={[{ required: true, message: '必填' }]}>
+              <Input placeholder="如 dingtalk-teamer" disabled={modal?.mode === 'edit'} />
+            </Form.Item>
+            <Form.Item name="channelType" label="渠道类型">
+              <Radio.Group>
+                <Radio value="dingtalk">钉钉（Stream 模式）</Radio>
+                <Radio value="discord">Discord（Gateway 长连）</Radio>
+              </Radio.Group>
+            </Form.Item>
+            {channelType === 'discord' ? (
+              <Form.Item
+                name="botToken"
+                label="Bot Token"
+                rules={[{ required: modal?.mode === 'create', message: '必填' }]}
+                tooltip={
+                  modal?.mode === 'edit'
+                    ? '留空不修改；AES-GCM 加密入库'
+                    : 'Discord Developer Portal → Bot → Reset Token 获取；需开启 MESSAGE CONTENT INTENT 并邀请进服务器'
+                }
+              >
+                <Input.Password placeholder={modal?.mode === 'edit' ? '留空不修改' : ''} />
+              </Form.Item>
+            ) : (
+              <>
+                <Form.Item
+                  name="appKey"
+                  label="AppKey"
+                  rules={[{ required: true, message: '必填' }]}
+                  tooltip="钉钉开放平台应用的 Client ID"
+                >
+                  <Input placeholder="dingxxxxxx" />
+                </Form.Item>
+                <Form.Item
+                  name="appSecret"
+                  label="AppSecret"
+                  rules={[{ required: modal?.mode === 'create', message: '必填' }]}
+                  tooltip={modal?.mode === 'edit' ? '留空不修改；AES-GCM 加密入库' : 'AES-GCM 加密入库'}
+                >
+                  <Input.Password placeholder={modal?.mode === 'edit' ? '留空不修改' : ''} />
+                </Form.Item>
+                <Form.Item name="robotCode" label="Robot Code（可选）" tooltip="留空默认与 AppKey 相同">
+                  <Input placeholder="dingxxxxxx" />
+                </Form.Item>
+              </>
+            )}
             <Form.Item name="remark" label="备注">
               <Input placeholder="可选" />
             </Form.Item>

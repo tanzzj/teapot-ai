@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Space, Typography } from 'antd';
+import { AutoComplete, Space, Typography } from 'antd';
 import { Button, Form, Input, message, Modal, Popconfirm, Select, Switch, Table, Tag } from '@agentscope-ai/design';
-import { PlusOutlined } from '@ant-design/icons';
-import { modelCreate, modelDelete, modelList, modelUpdate, type ModelEntry } from '../api/model';
+import { SparkPlusLine } from '@agentscope-ai/icons';
+import {
+  modelCreate,
+  modelDelete,
+  modelList,
+  modelUpdate,
+  modelVendorModels,
+  type ModelEntry,
+} from '../api/model';
 
 const PROVIDER_OPTIONS = [
   { label: 'DashScope（通义千问系）', value: 'dashscope' },
   { label: 'OpenAI / 兼容端点', value: 'openai' },
 ];
 
-// 多模态能力位（SPEC §19；一期界面仅开放 image）
+// 多模态能力位（SPEC §19）
 const CAPABILITY_OPTIONS = [
   { label: '图片（image）', value: 'image' },
+  { label: '视频（video）', value: 'video' },
 ];
 
 /** 模型入口管理（SPEC §6.4 修订：界面配置化，admin 专属） */
@@ -22,6 +30,9 @@ export default function Models() {
   const [editTarget, setEditTarget] = useState<ModelEntry | null>(null);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  /** DashScope 在售模型清单（模型名下拉数据源；拉取失败降级为手输） */
+  const [vendorModels, setVendorModels] = useState<string[]>([]);
+  const [vendorLoading, setVendorLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -36,6 +47,12 @@ export default function Models() {
 
   useEffect(() => {
     load();
+    // 模型清单仅 admin 可见本页；失败静默降级为手输
+    setVendorLoading(true);
+    modelVendorModels('dashscope')
+      .then(setVendorModels)
+      .catch(() => setVendorModels([]))
+      .finally(() => setVendorLoading(false));
   }, [load]);
 
   const onCreate = async () => {
@@ -79,7 +96,7 @@ export default function Models() {
   return (
     <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
       <Space style={{ marginBottom: 8 }} align="center">
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+        <Button type="primary" icon={<SparkPlusLine />} onClick={() => setCreateOpen(true)}>
           新建模型入口
         </Button>
       </Space>
@@ -193,16 +210,41 @@ export default function Models() {
             <Select options={PROVIDER_OPTIONS} />
           </Form.Item>
           <Form.Item
-            name="modelName"
-            label="模型名"
-            rules={[{ required: true, message: '请输入模型名' }, { max: 64, message: '不超过 64 位' }]}
+            noStyle
+            shouldUpdate={(prev, cur) => prev.provider !== cur.provider}
           >
-            <Input placeholder="如 qwen-plus / gpt-5.2" />
+            {({ getFieldValue }) =>
+              getFieldValue('provider') === 'dashscope' && vendorModels.length > 0 ? (
+                <Form.Item
+                  name="modelName"
+                  label="模型名"
+                  rules={[{ required: true, message: '请选择模型名' }, { max: 64, message: '不超过 64 位' }]}
+                  tooltip="数据源为 DashScope 在售清单（服务器代拉，10 分钟缓存）；也可手动输入清单外的模型名"
+                >
+                  <AutoComplete
+                    options={vendorModels.map((m) => ({ value: m }))}
+                    filterOption={(input, option) =>
+                      String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                    }
+                    placeholder="搜索或选择，也可手动输入"
+                    disabled={vendorLoading}
+                  />
+                </Form.Item>
+              ) : (
+                <Form.Item
+                  name="modelName"
+                  label="模型名"
+                  rules={[{ required: true, message: '请输入模型名' }, { max: 64, message: '不超过 64 位' }]}
+                >
+                  <Input placeholder="如 qwen-plus / gpt-5.2" />
+                </Form.Item>
+              )
+            }
           </Form.Item>
           <Form.Item name="displayName" label="展示名">
             <Input placeholder="如 通义千问 Plus（留空显示模型标识）" />
           </Form.Item>
-          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放图片上传；DashScope 会改走 multimodal-generation 端点">
+          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点">
             <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
           </Form.Item>
           <Form.Item
@@ -234,16 +276,41 @@ export default function Models() {
             <Select options={PROVIDER_OPTIONS} />
           </Form.Item>
           <Form.Item
-            name="modelName"
-            label="模型名"
-            rules={[{ required: true, message: '请输入模型名' }, { max: 64, message: '不超过 64 位' }]}
+            noStyle
+            shouldUpdate={(prev, cur) => prev.provider !== cur.provider}
           >
-            <Input />
+            {({ getFieldValue }) =>
+              getFieldValue('provider') === 'dashscope' && vendorModels.length > 0 ? (
+                <Form.Item
+                  name="modelName"
+                  label="模型名"
+                  rules={[{ required: true, message: '请选择模型名' }, { max: 64, message: '不超过 64 位' }]}
+                  tooltip="数据源为 DashScope 在售清单；也可手动输入清单外的模型名"
+                >
+                  <AutoComplete
+                    options={vendorModels.map((m) => ({ value: m }))}
+                    filterOption={(input, option) =>
+                      String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                    }
+                    placeholder="搜索或选择，也可手动输入"
+                    disabled={vendorLoading}
+                  />
+                </Form.Item>
+              ) : (
+                <Form.Item
+                  name="modelName"
+                  label="模型名"
+                  rules={[{ required: true, message: '请输入模型名' }, { max: 64, message: '不超过 64 位' }]}
+                >
+                  <Input />
+                </Form.Item>
+              )
+            }
           </Form.Item>
           <Form.Item name="displayName" label="展示名">
             <Input placeholder="留空显示模型标识" />
           </Form.Item>
-          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放图片上传；DashScope 会改走 multimodal-generation 端点">
+          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点">
             <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
           </Form.Item>
           <Form.Item name="baseUrl" label="baseUrl（仅 OpenAI 生效，可选）">

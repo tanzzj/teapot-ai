@@ -64,6 +64,16 @@
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-agui-spring-boot-starter</artifactId>
         </dependency>
+        <!-- 钉钉 Channel 连接器（SPEC §24：Agent 对外消息通道，Stream 协议） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-channel-dingtalk</artifactId>
+        </dependency>
+        <!-- JDA：Discord Gateway 客户端（SPEC §24 修订：Discord 渠道自实现适配器） -->
+        <dependency>
+            <groupId>net.dv8tion</groupId>
+            <artifactId>JDA</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>

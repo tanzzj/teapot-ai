@@ -1,6 +1,8 @@
 package com.teamer.teapot.ai.core.config;
 
 import com.teamer.teapot.ai.common.exception.BizException;
+import com.teamer.teapot.ai.core.storage.OssClientManager;
+import com.teamer.teapot.ai.core.storage.OssSkillRepository;
 import com.zaxxer.hikari.HikariDataSource;
 import io.agentscope.core.skill.repository.GitSkillRepository;
 import io.agentscope.core.skill.repository.mysql.MysqlSkillRepository;
@@ -118,5 +120,17 @@ public class AgentScopeConfig {
                 Path.of(cfg.getLocalPath()), cfg.getSource(), cfg.isAutoSync(),
                 // 仓内 skill 目录根（如 .qoder/skills）；空串/null 由官方归一为自动探测
                 cfg.getSkillsRoot());
+    }
+
+    /**
+     * OSS Skill 来源（第三 skill 来源）：enabled=false 时不装配，零副作用；
+     * 消费方一律 ObjectProvider 注入。凭证不齐时读路径按空集降级（仓库自身处理）。
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(prefix = "teapot.ai.skill-oss", name = "enabled", havingValue = "true")
+    public OssSkillRepository ossSkillRepository(OssClientManager ossClientManager,
+                                                 OssConnection ossConnection,
+                                                 TeapotAiProperties properties) {
+        return new OssSkillRepository(ossClientManager, ossConnection, properties.getSkillOss());
     }
 }

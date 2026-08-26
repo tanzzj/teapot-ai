@@ -23,6 +23,8 @@
         <agentscope.version>2.0.1</agentscope.version>
         <mybatis-starter.version>3.0.5</mybatis-starter.version>
         <java-jwt.version>4.5.0</java-jwt.version>
+        <!-- JDA：Discord Gateway WebSocket 客户端（SPEC §24 修订：Discord 渠道，SDK 无官方 Java 扩展） -->
+        <jda.version>5.6.1</jda.version>
         <!-- OSS Java SDK V2（SPEC §20）：preview 期 SDK，锁版本不浮动 -->
         <alibabacloud-oss-v2.version>0.5.1</alibabacloud-oss-v2.version>
     </properties>
@@ -91,6 +93,18 @@
                 <groupId>io.agentscope</groupId>
                 <artifactId>agentscope-agui-spring-boot-starter</artifactId>
                 <version>${agentscope.version}</version>
+            </dependency>
+            <!-- 钉钉 Channel 连接器（SPEC §24：Stream 协议出站长连） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-channel-dingtalk</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <!-- JDA（SPEC §24 修订：Discord 渠道自实现 channel 适配器） -->
+            <dependency>
+                <groupId>net.dv8tion</groupId>
+                <artifactId>JDA</artifactId>
+                <version>${jda.version}</version>
             </dependency>
 
             <!-- 其余外部依赖 -->

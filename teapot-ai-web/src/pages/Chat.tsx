@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { Empty, message, Upload } from 'antd';
-import { Drawer, IconButton } from '@agentscope-ai/design';
-import { SparkHistoryLine } from '@agentscope-ai/icons';
+import { IconButton } from '@agentscope-ai/design';
+import { SparkEnlargeLine, SparkLeftArrowLine, SparkShrinkLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
   useChatAnywhereInput,
@@ -11,46 +11,92 @@ import {
   useChatAnywhereSessionsState,
 } from '@agentscope-ai/chat';
 import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
+import type { SessionItem } from '../chat/sessionBridge';
 import { agentList } from '../api/agent';
 import { modelCapabilities } from '../api/model';
 import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
 import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
 import { newChatCoordinator } from '../chat/newChatCoordinator';
+import { useMobileUIStore } from '../store/mobileUI';
 import {
-  ACCEPT_ATTR,
   ACCEPTED_IMAGE_MIME,
+  ACCEPTED_VIDEO_MIME,
   MAX_IMAGE_BYTES,
   MAX_IMAGES_PER_MESSAGE,
+  MAX_VIDEO_BYTES,
   imageCustomRequestFor,
 } from '../chat/imageUpload';
 import type { Agent } from '../types';
 
-// 必须与模板内置 narrowMode 断点一致（ahooks useResponsive 的 lg=992px）：
-// 低于 992 时模板会改渲染内置会话列表（带 "Runtime WebUI" 品牌头部），
-// 若本断点取更小值（如 768），768–991 区间会出现内置列表与自定义逻辑不一致
+// 双断点设计：
+// - PHONE_BP(768)：手机双态（全屏会话首页 ↔ 全屏聊天），与 AppLayout 断点一致；
+// - MOBILE_BP(992)：必须与模板内置 narrowMode 断点一致（ahooks useResponsive 的 lg=992px），
+//   低于 992 时模板不渲染内置左栏（改渲染窄屏头部）。768–991 区间（平板 / 手机浏览器
+//   桌面模式）由本页自渲染左栏槽位补齐双栏，经 ChatBridge Portal 填充。
 const MOBILE_BP = 992;
+const PHONE_BP = 768;
+
+/** 消息时间展示（气泡下方小字）：created_at 实时链路用户卡为秒、响应流为毫秒，统一归一 */
+function msgTimeSlot(ts?: number, alignRight?: boolean) {
+  if (!ts) return null;
+  const d = new Date(ts > 1e12 ? ts : ts * 1000);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const text = d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        color: 'rgba(26, 26, 29, 0.35)',
+        marginTop: 2,
+        textAlign: alignRight ? 'right' : 'left',
+      }}
+    >
+      {text}
+    </div>
+  );
+}
 
 /**
  * 桥接组件：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽，桌面/移动均常驻挂载）。
  * 1) 把模板当前的 sessionId getter 暴露给外层 fetch 闭包（作 AG-UI threadId）；
  * 2) 懒创建会话接线：上报当前会话、注册建会话能力；
  * 3) 揭示时机：AI 首条回复完成（loading true→false）后把隐藏会话放入列表；
- * 4) 移动端会话历史入口：经 Portal 挂到全局顶栏。
+ * 4) 移动端双态：首页态把 SessionPanel 全屏 Portal 到外层容器；
+ *    聊天态在顶栏 Portal 返回箭头（回会话首页）。
  *    注意：Portal 必须从本组件（Provider 内部）发起——SessionPanel 依赖
  *    ChatAnywhere 的 React Context，若放到 Provider 外部渲染会拿不到会话状态。
  */
 function ChatBridge(props: {
   register: (getter: () => string | undefined) => void;
-  isMobile: boolean;
+  isPhone: boolean;
+  isTablet: boolean;
+  mobileHome: boolean;
+  homeSlot: HTMLElement | null;
+  tabletSlot: HTMLElement | null;
   slot: HTMLElement | null;
-  drawerOpen: boolean;
-  onDrawerOpen: (open: boolean) => void;
+  onEnterChat: () => void;
+  onBackHome: () => void;
   agentName: string;
 }) {
   const { getCurrentSessionId, createSession } = useChatAnywhereSessions();
-  const { currentSessionId, setSessions } = useChatAnywhereSessionsState();
+  const { sessions, currentSessionId, setSessions } = useChatAnywhereSessionsState();
   const loading = useChatAnywhereInput((v) => ({ loading: v.loading })).loading;
+  const setSessionTitle = useMobileUIStore((v) => v.setSessionTitle);
+
+  // 同步会话标题到全局 store（手机聊天态顶栏显示）。
+  // 必须在 Provider 内部做：Chat 组件在 Provider 外调 useChatAnywhereSessionsState
+  // 只能拿到 Context 默认值（sessions 恒空），标题会永远退化成 Agent 名称。
+  useEffect(() => {
+    if (props.isPhone && !props.mobileHome) {
+      const list = (sessions || []) as SessionItem[];
+      const session = list.find((s) => s.id === currentSessionId);
+      setSessionTitle(session?.name?.trim() || props.agentName);
+    }
+  }, [props.isPhone, props.mobileHome, sessions, currentSessionId, props.agentName, setSessionTitle]);
 
   useEffect(() => {
     props.register(getCurrentSessionId);
@@ -87,32 +133,29 @@ function ChatBridge(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return props.isMobile && props.slot
-    ? createPortal(
-        <>
-          <IconButton
-            bordered={false}
-            icon={<SparkHistoryLine />}
-            onClick={() => props.onDrawerOpen(true)}
-          />
-          <Drawer
-            open={props.drawerOpen}
-            onClose={() => props.onDrawerOpen(false)}
-            placement="left"
-            width="80vw"
-            title={null}
-            closable={false}
-            styles={{ body: { padding: 0, height: '100%' } }}
-          >
-            <SessionPanel
-              title={props.agentName}
-              onNavigate={() => props.onDrawerOpen(false)}
-            />
-          </Drawer>
-        </>,
-        props.slot,
-      )
-    : null;
+  // 手机首页：全屏会话面板（点会话/新建后由 onNavigate 进聊天态）
+  if (props.isPhone && props.mobileHome && props.homeSlot) {
+    return createPortal(
+      <SessionPanel title="" onNavigate={props.onEnterChat} flat />,
+      props.homeSlot,
+    );
+  }
+  // 平板 / 手机浏览器桌面模式（768–991）：模板处于窄屏模式不渲染左栏，
+  // 由外层自渲染的左栏槽位补位，这里 Portal 填充（保持会话 Context 可达）
+  if (props.isTablet && props.tabletSlot) {
+    return createPortal(
+      <SessionPanel title={props.agentName} />,
+      props.tabletSlot,
+    );
+  }
+  // 手机聊天态：顶栏返回箭头回会话首页（会话切换就在首页列表里）
+  if (props.isPhone && !props.mobileHome && props.slot) {
+    return createPortal(
+      <IconButton bordered={false} icon={<SparkLeftArrowLine />} onClick={props.onBackHome} />,
+      props.slot,
+    );
+  }
+  return null;
 }
 
 /**
@@ -126,12 +169,23 @@ export default function Chat() {
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BP);
-  const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
-  /** 顶栏历史入口 Portal 挂载点（AppLayout header 内的空 div） */
+  const [isPhone, setIsPhone] = useState(window.innerWidth < PHONE_BP);
+  const [isTablet, setIsTablet] = useState(
+    window.innerWidth >= PHONE_BP && window.innerWidth < MOBILE_BP,
+  );
+  /** 手机双态：首页（全屏会话面板）↔ 聊天（chat pane 全屏）——同步到全局 store 供 AppLayout 顶栏使用 */
+  const { mobileView, setMobileView } = useMobileUIStore();
+  /** 手机首页容器（SessionPanel Portal 挂载点，由 ChatBridge 填充） */
+  const [homeSlot, setHomeSlot] = useState<HTMLElement | null>(null);
+  /** 平板 / 手机桌面模式（768–991）自渲染左栏槽位（模板窄屏无左栏，补位双栏） */
+  const [tabletSlot, setTabletSlot] = useState<HTMLElement | null>(null);
+  /** 顶栏返回入口 Portal 挂载点（AppLayout header 内的空 div） */
   const [historySlot, setHistorySlot] = useState<HTMLElement | null>(null);
   /** 启用模型的能力位 modelId → capabilities（SPEC §19 多模态 gating） */
   const [modelCaps, setModelCaps] = useState<Record<string, string>>({});
+  /** 移动端输入框焦点（focus 后显示放大按钮）与放大态（单行 ↔ 多行） */
+  const [senderFocused, setSenderFocused] = useState(false);
+  const [senderExpanded, setSenderExpanded] = useState(false);
 
   /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
@@ -140,14 +194,19 @@ export default function Chat() {
   }, []);
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < MOBILE_BP);
+    const onResize = () => {
+      setIsPhone(window.innerWidth < PHONE_BP);
+      setIsTablet(window.innerWidth >= PHONE_BP && window.innerWidth < MOBILE_BP);
+    };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
   useEffect(() => {
-    setHistorySlot(document.getElementById('topbar-history-slot'));
-  }, []);
+    // 根据 mobileView 选择正确的 portal 挂载点（仅手机聊天态用 chat-slot）
+    const slotId = isPhone && mobileView === 'chat' ? 'topbar-chat-slot' : 'topbar-history-slot';
+    setHistorySlot(document.getElementById(slotId));
+  }, [isPhone, mobileView]);
 
   // 加载可用 Agent 列表；未指定时优先 localStorage 上次选择，否则选第一个
   useEffect(() => {
@@ -169,6 +228,34 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const activeAgent = useMemo(
+    () => agents.find((a) => a.agentKey === currentAgent),
+    [agents, currentAgent],
+  );
+
+  // 移动端监听发送框 textarea 焦点：focus 后浮出放大按钮，失焦收起（放大态常驻）
+  useEffect(() => {
+    if (!isPhone) return;
+    const isSenderTextarea = (el: EventTarget | null) =>
+      el instanceof HTMLElement &&
+      el.tagName === 'TEXTAREA' &&
+      !!el.closest('.agentscope-runtime-webui-sender');
+    const onFocusIn = (e: FocusEvent) => {
+      if (isSenderTextarea(e.target)) setSenderFocused(true);
+    };
+    const onFocusOut = (e: FocusEvent) => {
+      if (isSenderTextarea(e.target) && !isSenderTextarea(e.relatedTarget)) {
+        setSenderFocused(false);
+      }
+    };
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+    };
+  }, [isPhone]);
+
   // 拉取启用模型的能力位（失败不阻断，退化为纯文本）
   useEffect(() => {
     modelCapabilities()
@@ -184,16 +271,13 @@ export default function Chat() {
       });
   }, []);
 
-  const activeAgent = useMemo(
-    () => agents.find((a) => a.agentKey === currentAgent),
-    [agents, currentAgent],
+  // 当前 Agent 的模型多模态能力（capabilities 含 image/video；无配置/拉取失败则隐藏入口）
+  const mediaCaps = useMemo(
+    () => (activeAgent ? (modelCaps[activeAgent.modelId] || '').split(',') : []),
+    [activeAgent, modelCaps],
   );
-
-  // 当前 Agent 的模型是否支持图片（capabilities 含 image；无配置/拉取失败则隐藏入口）
-  const imageCapable = useMemo(() => {
-    if (!activeAgent) return false;
-    return (modelCaps[activeAgent.modelId] || '').split(',').includes('image');
-  }, [activeAgent, modelCaps]);
+  const imageCapable = mediaCaps.includes('image');
+  const videoCapable = mediaCaps.includes('video');
 
   const options = useMemo<IAgentScopeRuntimeWebUIOptions | null>(() => {
     if (!currentAgent) return null;
@@ -201,10 +285,14 @@ export default function Chat() {
     const rightHeader = (
       <ChatBridge
         register={registerSessionGetter}
-        isMobile={isMobile}
+        isPhone={isPhone}
+        isTablet={isTablet}
+        mobileHome={isPhone && mobileView === 'home'}
+        homeSlot={homeSlot}
+        tabletSlot={tabletSlot}
         slot={historySlot}
-        drawerOpen={sessionDrawerOpen}
-        onDrawerOpen={setSessionDrawerOpen}
+        onEnterChat={() => setMobileView('chat')}
+        onBackHome={() => setMobileView('home')}
         agentName={activeAgent?.name || 'Teapot AI'}
       />
     );
@@ -221,9 +309,10 @@ export default function Chat() {
       session: {
         multiple: true,
         api: createSessionBridge(currentAgent),
-        // 移动端隐藏模板内置会话列表（其头部带 "Runtime WebUI" 品牌且抽屉非自定义面板），
-        // 改用 rightHeader 内的自定义抽屉；桌面端左侧栏不受影响
-        hideBuiltInSessionList: isMobile,
+        // 窄屏（<992）隐藏模板内置会话列表（其头部带 "Runtime WebUI" 品牌）：
+        // 手机端由全屏首页面板提供，平板/桌面模式由自渲染左栏提供；
+        // 宽屏（≥992）模板原生左栏不受影响（leftHeader 插槽接管）
+        hideBuiltInSessionList: isPhone || isTablet,
       },
       theme: {
         locale: 'cn',
@@ -243,25 +332,63 @@ export default function Chat() {
           { value: '帮我写一段 Python 快排' },
         ],
       },
+      // 消息时间展示：用户/助手气泡下方追加小字时间（历史回放由 toTemplateMessages 回填真实时间）
+      request: {
+        append: [{
+          id: 'teapot-msg-time',
+          order: 50,
+          render: ({ data }) => msgTimeSlot(data.created_at, true),
+        }],
+      },
+      response: {
+        append: [{
+          id: 'teapot-msg-time',
+          order: 50,
+          render: ({ data }) => msgTimeSlot(data.created_at),
+        }],
+      },
       sender: {
         placeholder: '输入消息，Enter 发送',
         maxLength: 10000,
-        disclaimer: '内容由 AI 生成，请注意甄别',
-        // 多模态 gating：仅模型能力位含 image 时开启附件入口（SPEC §19）
-        attachments: imageCapable
+        // 手机端单行输入框（SPEC：chat 模式收件到一行）
+        autoSize: isPhone ? { minRows: 1, maxRows: 1 } : undefined,
+        // 多模态 gating：模型能力位含 image/video 时开启附件入口（SPEC §19），accept 按能力位裁剪
+        attachments: imageCapable || videoCapable
           ? {
-              accept: ACCEPT_ATTR,
+              accept: [
+                ...(imageCapable ? ACCEPTED_IMAGE_MIME : []),
+                ...(videoCapable ? ACCEPTED_VIDEO_MIME : []),
+              ].join(','),
               maxCount: MAX_IMAGES_PER_MESSAGE,
-              beforeUpload: (file: File) => {
-                if (!ACCEPTED_IMAGE_MIME.includes(file.type)) {
-                  message.error('仅支持 JPEG/PNG/WebP/GIF 图片');
-                  return Upload.LIST_IGNORE;
+              beforeUpload: (file: File, fileList: File[]) => {
+                if (file.type.startsWith('image/')) {
+                  if (!imageCapable || !ACCEPTED_IMAGE_MIME.includes(file.type)) {
+                    message.error('仅支持 JPEG/PNG/WebP/GIF 图片');
+                    return Upload.LIST_IGNORE;
+                  }
+                  if (file.size > MAX_IMAGE_BYTES) {
+                    message.error('单张图片不超过 5MB');
+                    return Upload.LIST_IGNORE;
+                  }
+                  return true;
                 }
-                if (file.size > MAX_IMAGE_BYTES) {
-                  message.error('单张图片不超过 5MB');
-                  return Upload.LIST_IGNORE;
+                if (file.type.startsWith('video/')) {
+                  if (!videoCapable || !ACCEPTED_VIDEO_MIME.includes(file.type)) {
+                    message.error('仅支持 MP4/WebM/MOV/MKV 视频');
+                    return Upload.LIST_IGNORE;
+                  }
+                  if (file.size > MAX_VIDEO_BYTES) {
+                    message.error('单个视频不超过 30MB');
+                    return Upload.LIST_IGNORE;
+                  }
+                  if (fileList.filter((f) => f.type.startsWith('video/')).length > 1) {
+                    message.error('单条消息最多发送 1 个视频');
+                    return Upload.LIST_IGNORE;
+                  }
+                  return true;
                 }
-                return true;
+                message.error('仅支持图片或视频');
+                return Upload.LIST_IGNORE;
               },
               // 按当前 Agent 探测/上传载体（SPEC §22.1：feature.storage 决定 base64/oss）
               customRequest: imageCustomRequestFor(currentAgent) as never,
@@ -272,7 +399,7 @@ export default function Chat() {
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
       },
     };
-  }, [currentAgent, activeAgent, agents, isMobile, historySlot, sessionDrawerOpen, registerSessionGetter, setSearchParams, imageCapable]);
+  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable]);
 
   if (loadingAgents) {
     return null;
@@ -297,10 +424,50 @@ export default function Chat() {
     return null;
   }
 
+  // 手机首页态：WebUI 隐藏但保持挂载（会话 Context/Portal 均在其 Provider 内）
+  const showHome = isPhone && mobileView === 'home';
+
   return (
-    <div style={{ height: '100%' }}>
-      {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
-      <AgentScopeRuntimeWebUI key={currentAgent} options={options} />
+    <div
+      className={isPhone && senderExpanded ? 'teapot-chat-expanded' : undefined}
+      style={{ height: '100%', position: 'relative', display: 'flex', minWidth: 0 }}
+    >
+      {showHome && (
+        <div
+          ref={(el) => setHomeSlot(el)}
+          style={{ height: '100%', flex: 1, overflow: 'hidden' }}
+        />
+      )}
+      {/* 平板 / 手机桌面模式（768–991）：模板窄屏无左栏，自渲染左栏槽位补位双栏，
+          内容由 ChatBridge Portal 填充（SessionPanel 需会话 Context） */}
+      {isTablet && (
+        <div
+          ref={(el) => setTabletSlot(el)}
+          style={{
+            width: 300,
+            flexShrink: 0,
+            height: '100%',
+            overflow: 'hidden',
+            borderRight: '1px solid rgba(0, 0, 0, 0.05)',
+          }}
+        />
+      )}
+      <div style={{ height: '100%', flex: 1, minWidth: 0, display: showHome ? 'none' : undefined }}>
+        {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
+        <AgentScopeRuntimeWebUI key={currentAgent} options={options} />
+      </div>
+      {/* 手机端输入框放大按钮：聚焦发送框后浮出，点击切换单行/多行 */}
+      {isPhone && !showHome && (senderFocused || senderExpanded) && (
+        <button
+          type="button"
+          className="teapot-sender-expand-btn"
+          aria-label={senderExpanded ? '收起输入框' : '放大输入框'}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setSenderExpanded((v) => !v)}
+        >
+          {senderExpanded ? <SparkShrinkLine size={16} /> : <SparkEnlargeLine size={16} />}
+        </button>
+      )}
     </div>
   );
 }

@@ -18,6 +18,9 @@ public class TeapotAiProperties {
     /** Git Skill 仓库（第二 skill 来源，SPEC §15.5） */
     private SkillGit skillGit = new SkillGit();
 
+    /** OSS Skill 来源（第三 skill 来源：zip 导入 → OSS 对象挂载） */
+    private SkillOss skillOss = new SkillOss();
+
     /** 沙箱全局配置（SPEC §16.5 修订：e2b / agent-run 双链路；凭证走 t_sys_config） */
     private Sandbox sandbox = new Sandbox();
 
@@ -62,6 +65,19 @@ public class TeapotAiProperties {
         /** 仓内 skill 目录根（相对仓库根，如 .qoder/skills）；空 = 自动探测（skills/ 子目录或仓库根）。
          *  官方扫描只认 skillsRoot 下第一层子目录，嵌套布局（如 .qoder/skills/<name>/SKILL.md）必须显式指定 */
         private String skillsRoot;
+    }
+
+    /** OSS Skill 来源配置：凭证复用全局 OSS 链路（OssConnection：env > 激活记录 > 旧单键） */
+    @Data
+    public static class SkillOss {
+        /** 功能开关：false 时 Bean 不装配，zip 导入入口同步关闭 */
+        private boolean enabled = false;
+        /** skill 对象 key 前缀，布局 {prefix}{skillName}/SKILL.md + 资源 */
+        private String prefix = "teapot-ai/skills/";
+        /** 列表/详情展示的 source 标识 */
+        private String source = "oss";
+        /** 读缓存 TTL（秒）：Agent 每轮重建走缓存，zip 导入/删除与手动刷新强制重载 */
+        private long cacheTtlSeconds = 60;
     }
 
     /**

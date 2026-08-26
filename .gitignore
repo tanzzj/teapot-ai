@@ -47,3 +47,7 @@ teapot-ai-web/tsconfig.tsbuildinfo
 
 teapot-ai-web/dist.zip*
 teapot-ai-web/dist.tar.gz
+teapot-ai-web/dist-deploy.*
+
+# ===== 临时截图 =====
+shot-*.png

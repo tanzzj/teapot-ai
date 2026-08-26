@@ -7,8 +7,11 @@ import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
 import com.teamer.teapot.ai.core.model.dto.AgentUpdateRequest;
 import com.teamer.teapot.ai.core.model.dto.BindSkillRequest;
 import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
+import com.teamer.teapot.ai.core.model.dto.SessionHistoryItem;
+import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.vo.AgentDetailVO;
 import com.teamer.teapot.ai.core.service.AgentService;
+import com.teamer.teapot.ai.core.service.SessionHistoryService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /**
  * Agent 管理接口（SPEC §7；权限由 RbacAccessFilter 按 resource-list 控制）。
  */
@@ -28,9 +33,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AgentController {
 
     private final AgentService agentService;
+    private final SessionHistoryService sessionHistoryService;
 
-    public AgentController(AgentService agentService) {
+    public AgentController(AgentService agentService, SessionHistoryService sessionHistoryService) {
         this.agentService = agentService;
+        this.sessionHistoryService = sessionHistoryService;
     }
 
     @GetMapping("/list")
@@ -83,5 +90,36 @@ public class AgentController {
     public Result<String> chat(@PathVariable String agentKey,
                                @Valid @RequestBody ChatDebugRequest request) {
         return Result.ok(agentService.chat(agentKey, request));
+    }
+
+    /**
+     * Agent 全量会话历史列表（SPEC §24.9，仅 admin，Service 层 requireAdmin 兜底）：
+     * Web + 渠道两索引 union，按活跃时间倒序分页。
+     */
+    @GetMapping("/{agentKey}/session-history")
+    public Result<List<SessionHistoryItem>> sessionHistory(@PathVariable String agentKey,
+                                                           @RequestParam(defaultValue = "1") int page,
+                                                           @RequestParam(defaultValue = "20") int size,
+                                                           @RequestParam(required = false) String keyword) {
+        return Result.ok(sessionHistoryService.list(agentKey, page, size, keyword));
+    }
+
+    /** 会话全文回放（SPEC §24.9，仅 admin）：不校验会话归属，source 区分图片引用策略 */
+    @GetMapping("/{agentKey}/session-history/{userId}/{sessionId}/messages")
+    public Result<List<SessionMessageItem>> sessionHistoryMessages(@PathVariable String agentKey,
+                                                                   @PathVariable String userId,
+                                                                   @PathVariable String sessionId,
+                                                                   @RequestParam(defaultValue = "web") String source) {
+        return Result.ok(sessionHistoryService.messages(userId, sessionId, source));
+    }
+
+    /** 删除单条历史会话（SPEC §24.9，仅 admin）：stateStore 状态 + 对应索引表 */
+    @DeleteMapping("/{agentKey}/session-history/{userId}/{sessionId}")
+    public Result<Void> deleteSessionHistory(@PathVariable String agentKey,
+                                             @PathVariable String userId,
+                                             @PathVariable String sessionId,
+                                             @RequestParam(defaultValue = "web") String source) {
+        sessionHistoryService.delete(userId, sessionId, source);
+        return Result.ok();
     }
 }

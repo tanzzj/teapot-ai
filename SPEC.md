@@ -1962,6 +1962,176 @@ Agent 配置页（AgentDetail）不再内嵌全局凭证表单，改为**下拉�
 
 ---
 
+## §24 Channel 连接器（Agent 对外消息通道：钉钉 / Discord）
+
+### 24.1 背景与目标
+
+现状对话入口仅 Web AG-UI（§6.2）。本节基于 AgentScope 2.0.1 的 Gateway/Channel 体系（`io.agentscope.harness.agent.gateway.*`，harness 包内置）为 Agent 增加**对外连接器**：每个 Agent 可配置自己的 channel（钉钉机器人、后续飞书/企微等），用户在 IM 里直接 @ 机器人对话，复用该 Agent 的模型/Skill/人设。
+
+SDK 能力盘点（字节码级已验证）：
+- `GatewayBootstrap.builder().agent(id, HarnessAgent).channel(Channel).mainAgent(id).build()` + `start()/stop()`：channel 生命周期 init/start/stop 由 gateway 托管，同 session 并发排队、按 peer 会话映射；
+- 钉钉扩展 `io.agentscope:agentscope-extensions-channel-dingtalk:2.0.1`：`DingTalkChannel.fromProperties(channelId, ChannelConfig, props)`，Stream 协议（出站 WebSocket 长连，**无需公网 IP/回调域名**，与 teapot 服务器现状匹配）；props 消费 `appKey/appSecret/robotCode`（apiBase/oapiBase/streamRegisterUrl 有默认值）；内置幂等去重（IdempotencyStore）与机器人自环防护（BotLoopGuard）；
+- `ChannelConfig.builder(channelId)`：`defaultAgentId` / `dmScope`（MAIN、PER_PEER、PER_CHANNEL_PEER、PER_ACCOUNT_CHANNEL_PEER，会话粒度）/ `bindings`。
+- **Discord（§24 修订，§24.10）**：Java SDK 无官方 Discord 扩展（Maven Central 2.0.1 仅 dingtalk/feishu/wecom/github/gitlab），自实现 harness `Channel` 接口 + JDA 5.6.1 Gateway WebSocket 出站长连（同钉钉 Stream，**无需公网回调**）。
+
+### 24.2 总体架构
+
+```
+钉钉云 ──Stream WS(反连)──▶ DingTalkChannel ─▶ HarnessGateway ─▶ HarnessAgent(长驻)
+                                                                    │ 共享组件
+Web ──AG-UI SSE──▶ TeapotAguiAgentRegistrar ─▶ AgentRegistry(每轮重建) ─┤ model/skill/sandbox/stateStore
+                                                                    ▼
+                                                      MysqlAgentStateStore（agentscope_sessions）
+```
+
+- **双链路独立实例**：Web 链路保持现状（AgentRegistry 每轮重建，§6.1 修订）；channel 链路需要**长驻** HarnessAgent（gateway 持有实例做会话排队），由新增 `ChannelHub` 装配，与 AgentRegistry 共享 build 逻辑（抽出 `AgentAssembler`，同一份 model/skill/sandbox/stateStore 装配规则）。
+- **会话域隔离**：channel 会话的 sessionId 由 gateway 生成（gw-…），与 Web 的 t_chat_session UUID 不同域；channel 对话历史落 agentscope_sessions 但**不进用户自己的 Web 会话面板**（避免双端互串）；admin 可在 Agent 配置面板「会话历史」统一查看全量用户对话（§24.9）。
+- **身份归属**：channel 链路 userId 统一使用**渠道类型名称**（如 `discord`，v1 修订：原设计为钉钉 peer/Discord snowflake），非平台用户；沙箱状态按该 userId 分槽（USER scope 时整条 channel 链路共享一槽，SESSION scope 仍按会话细分）。**channel 与沙箱可同时启用**（原 v1 互斥约束已解除）；已知限制：钉钉为 SDK 官方 channel，senderId 由 SDK 控制无法覆盖为渠道名称，仅 Discord（自实现 channel）生效。
+
+### 24.3 数据模型
+
+**新表 `t_channel_config`（V10 迁移，镜像 t_sandbox_config 模式）：**
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | BIGINT UNSIGNED PK | 自增 |
+| name | VARCHAR(64) UK | 记录名，Agent feature 引用 |
+| channel_type | VARCHAR(16) | `dingtalk` / `discord`（§24 修订，枚举留扩展） |
+| app_key | VARCHAR(128) | 钉钉应用 ClientID（明文）；discord 不使用（空） |
+| app_secret | TEXT | 钉钉 ClientSecret / **Discord Bot Token**（§24 修订），AES-GCM 密文（同 §22.2 加密方案） |
+| robot_code | VARCHAR(128) | 机器人 robotCode，可空（缺省同 appKey）；discord 不使用 |
+| remark / updated_by / created_at / updated_at | | 同 t_sandbox_config |
+
+**AgentFeature 新增 `channel` 命名空间**（与 sandbox/storage 同构，未知命名空间保留机制天然兼容）：
+
+```json
+{ "channel": { "enabled": true, "channelRecord": "dingtalk-main", "dmScope": "PER_CHANNEL_PEER" } }
+```
+
+- `enabled`：是否接入连接器；`channelRecord`：引用 t_channel_config.name（启用必填，模式同 §22.2 sandboxRecord）；`dmScope`：缺省 `PER_CHANNEL_PEER`（每个群/每个私聊各自一个会话），可选 `PER_PEER`（同一人跨群合并）/ `MAIN`（全机器人单会话）。
+- validate 追加：enabled 必须选记录；记录不存在/凭证不齐在 AgentService 保存时拦截（同沙箱）；channel 与沙箱可同时启用（§24.2 修订）。
+
+### 24.4 后端组件
+
+| 组件 | 职责 |
+|---|---|
+| `ChannelConfigDO/Mapper`（sqlclient XML） | t_channel_config CRUD |
+| `ChannelConfigService` | CRUD + 加解密 + `getPlain` + `configured(record)`（钉钉 appKey+appSecret 齐备；discord 仅 app_secret，§24 修订）；删除被引用记录时拒绝 |
+| `ChannelController`（/api/channel-config） | list/create/update/delete + `GET /api/channel-config/registry`（轻量 name+type 下拉名单，模式同 §22.2）；全部 admin（RBAC yml 追加 `/api/channel-config/*`） |
+| `AgentAssembler`（自 AgentRegistry.build 抽出） | 同一份装配规则供 Web/channel 双链路复用 |
+| `ChannelHub` | `Map<agentKey, GatewayBootstrap>`：`start(agentKey)`（读 feature+记录 → build agent → 建 channel → gw.start）、`stop(agentKey)`（gw.stop）、`restart(agentKey)`；app_secret 只在此处解密消费 |
+| 生命周期接线 | `ApplicationReadyEvent` 扫描全部启用 Agent，channel.enabled=true 者 start（单个失败仅告警不阻断启动）；`@PreDestroy` 全部 stop；AgentService.update/delete 及 ChannelConfig 变更 → 相关 Agent restart；Agent 停用同 delete 处理 |
+| `ChannelFactory` | channel_type → Channel 构造（dingtalk 官方扩展 / discord 自实现 JDA 适配器，§24.10），后续飞书/企微只加分支 |
+
+钉钉 channel 构造：`DingTalkChannel.fromProperties("dingtalk-"+name, ChannelConfig.builder(channelId).defaultAgentId(agentKey).dmScope(...).build(), Map.of("appKey",..,"appSecret",..,"robotCode",..))`。
+
+Discord channel 构造（§24.10）：`new DiscordChannel("discord-"+name, ChannelConfig.builder(channelId).defaultAgentId(agentKey).dmScope(...).build(), botToken, onlyAtReply=true)`。
+
+**回复时效**：钉钉 Stream 要求及时 ack，长回复由扩展 SDK 的出站客户端处理（v1 不实现“打字中”卡片，列为后续）。
+
+### 24.5 前端
+
+- `api/channelConfig.ts`：CRUD + registry。
+- **系统配置 → 新增「连接器」页**（admin，镜像沙箱配置页）：记录列表（name/类型/appKey/robotCode/备注，secret 回显掩码 `****`）、新建/编辑弹窗（按 channelType 动态切字段：钉钉 AppKey/AppSecret/RobotCode，Discord 仅 Bot Token，§24.10）、删除前提示引用检查。
+- **Agent 编辑 → 「连接器」卡片**（镜像沙箱卡片）：启用开关 + 记录下拉（registry）+ dmScope 单选（每群独立/每人合并/全局单会话）；可与沙箱同时启用（§24.2 修订）。
+- 对话页/会话面板无改动（channel 历史不进 Web，§24.2）。
+
+### 24.6 范围与限制（v1）
+
+1. 钉钉 Stream 机器人 + Discord Bot（§24.10）；文本进、markdown 出；图片/文件透传不做（后续 §）；
+2. 一个连接器记录（一个钉钉应用）只绑一个 Agent；同 Agent 只绑一条记录（多机器人/多 Agent 路由留后续）；
+3. 单实例部署假设：Stream 同 clientId 多连接会负载均衡分流，**多副本部署前需引入分布式协调**，文档明示；
+4. channel 历史不展示于**用户**的 Web 会话面板；但 admin 可在 Agent 配置面板查看全量用户对话历史（§24.9）；无渠道级白名单（钉钉侧应用可见性控制）；
+5. 群聊 @ 机器人触发（SDK 默认行为），私聊直发。
+
+### 24.7 验收
+
+1. 系统配置新建 dingtalk 记录（appKey/appSecret/robotCode）→ 列表回显 secret 掩码；DB 列为 AES-GCM 密文；
+2. Agent 启用 channel 并选记录后重启服务，日志见 channel start；钉钉私聊机器人收到符合人设的回复，同用户第二轮有上下文；
+3. 群 A 与群 B 对话互不串扰（dmScope 默认）；
+4. 凭证错误的记录：启动告警但不阻断其他 Agent；
+5. Agent 编辑页改绑/停用 channel → 新绑定即时生效、旧连接断开；删除被引用记录被拒；
+6. channel 与沙箱同时启用可保存，channel 消息触发沙箱工具执行正常（userId=渠道名称）；viewer/developer 调 channel-config 接口 403。
+
+---
+
+### 24.8 风险
+- ~~`GatewayBootstrap` 接受预建 HarnessAgent 的 builder 重载需 spike 验证~~ **已验证**：`Builder.agent(String, HarnessAgent)` 与 `agent(String, Consumer<HarnessAgent.Builder>)` 两种重载均存在（2.0.1 字节码），首选预建实例方案；
+- 长回复超出钉钉 ack 窗口时的中间态展示（v1 容忍，后续加 AI 卡片流式）；
+- channel 链路 RuntimeContext 由 gateway 覆盖身份字段，如需注入平台属性需 ChannelRuntimeContextResolver（v1 不用）。
+
+---
+
+### 24.9 Agent 全量会话历史（admin 视图）
+
+**动机**：channel 会话不进用户 Web 会话面板（§24.2），运营/排障需要在 Agent 维度看到全部用户（Web + 各渠道）的对话。
+
+**数据模型**：新表 `t_channel_session`（V10 迁移，与 t_channel_config 同批）：
+
+| 列 | 说明 |
+|---|---|
+| agent_key | 所属 Agent |
+| user_id | gateway 身份（钉钉 peer：staffId/conversationId） |
+| session_id | gateway 生成的 gw-… 会话 id |
+| channel_type | dingtalk（后续渠道枚举） |
+| title | 首条用户消息截断 50 字（同 Web 会话标题规则） |
+| created_at / last_active_at | 首次/最近活跃时间 |
+| UNIQUE KEY (user_id, session_id)，索引 (agent_key, last_active_at) |
+
+Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层 union。
+
+**写入链路**：新增 `ChannelSessionIndexMiddleware`（harness Middleware 体系），**仅装配到 channel 链路 Agent**（ChannelHub build 时追加，Web 链路不受影响）：每次调用时从 RuntimeContext 取 userId/sessionId，upsert 索引行；title 仅首次写入（首条用户文本截断）。agentscope_sessions 本身按 (userId, sessionId) 存状态，消息体不双写。
+
+**接口**（全部 admin，RBAC yml 追加；Service 层 requireAdmin 兜底）：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/agent/{agentKey}/session-history` | union 两索引：返回 user（Web 平台用户 / 渠道 peer）、title、source（web/dingtalk/discord）、lastActiveAt，按活跃时间倒序，分页 |
+| `GET /api/agent/{agentKey}/session-history/{userId}/{sessionId}/messages` | 复用现有消息抽取逻辑（ChatSessionService.messages 的 block→Item 转换抽为共享组件），`stateStore.get(userId, sessionId)` 回放，图片同样走取图端点引用；**不校验会话归属**（admin 专用，与用户端隔离接口分开） |
+
+**前端**：
+
+- Agent 编辑页左侧菜单新增「会话历史」分区（与 Skills 同级）→ 分区内**完全复用 chat 页整套模板**：只读 `AgentScopeRuntimeWebUI` 实例，左侧 `SessionPanel`（readonly：无 New Chat/删除，标题带 [Web]/[Discord]/[钉钉] 来源前缀与用户标识），右侧同款聊天面板（Markdown/深度思考/工具卡片/图片）；会话桥接 `createHistorySessionBridge`（复合 id=source|userId|sessionId，列表=session-history union，详情=session-history messages 回放，建/改/删均 no-op，`getSession(undefined)` 需空值兼容——模板初始化会调一次）；输入框 CSS 隐藏 + `beforeSubmit` 兜底拦截，进入分区自动选中首个会话；**options 必传 welcome**（模板 DefaultResponseRender 取 `v.welcome.avatar/nick`，缺失时 selector 抛错被兜底为 `{}` 当 React child 渲染致整树崩溃）；移动端（<992px）同 Chat 页：`hideBuiltInSessionList` + 顶栏 `#topbar-history-slot` Portal 历史按钮/Drawer；
+- 仅 admin 可见该菜单项（角色判断隐藏）。
+
+**验收（并入 §24.7）**：
+
+7. 钉钉对话后 Agent 面板「会话历史」可见该渠道会话（来源=钉钉、标题=首条消息），点开可回放全文；Web 会话同样在列（来源=web）；
+8. developer/viewer 访问 session-history 接口 403，前端按钮不可见；用户自己的会话面板仍看不到 channel 会话。
+
+---
+
+### 24.10 Discord 渠道（§24 修订）
+
+**背景**：参考 Python 版 AgentScope 的 Discord channel（Gateway WebSocket 长连、无需公网回调）；Java SDK 2.0.1 无官方 Discord 扩展，故自实现 harness `Channel` 接口。
+
+**依赖**：`net.dv8tion:JDA:5.6.1`（bom 管版本，core 引入）；只启用 `GUILD_MESSAGES / MESSAGE_CONTENT / DIRECT_MESSAGES` 三个 intent，`createLight` 低内存模式。
+
+**实现（`DiscordChannel extends ListenerAdapter implements Channel`）**：
+- `start()`：`JDABuilder.createLight(botToken, intents).build()` 异步建连，不阻塞应用启动；`ReadyEvent` 打日志；`stop()` 调 `jda.shutdown()`，生命周期由 ChannelHub/Gateway 托管，与钉钉一致；
+- **Gateway 代理**：JDA 底层 nv-websocket-client 不走 JVM `-Dhttps.proxyHost`（仅 HTTP 客户端生效），经 `JDABuilder.setWebsocketFactory()` + `ProxySettings`（HTTP CONNECT 握手，非 SOCKS）显式配代理，由系统属性 `discord.proxy.host/port` 驱动（服务器 clash 7890，service ExecStart 注入）；未配置则直连（本地开发）；
+- 入站：guild 频道默认 `only_at_reply=true`（仅 @ 机器人响应，对齐 py 版默认值；DM 始终响应），去掉自身 @ 提及后构造 `InboundMessage`（peer=频道 id，guild=服务器 id，senderId=渠道名称 `discord`，作为沙箱分槽与会话索引身份；回复路由走 peer.id 不受影响）；DM 同机制（peer=用户 id）；bot 自身/webhook 消息忽略（防环）；
+- `dispatch()`：`ChannelRouter.resolveRoute(config, message)` → `gateway.run(...)`。**关键：HarnessGateway.run() 不自动投递回复**（字节码验证：仅记录 lastRouteBySession 并返回 Mono<Msg>），channel 必须在 Mono 上自行 `deliver(outboundAddress, reply)`，否则用户永远收不到回复（v1 曾因订阅用空消费者丢弃回复导致无回复 bug）；dmScope/会话映射由 router 按 ChannelConfig 处理，与钉钉同机制；
+- 出站 `deliver()`：**注意 OutboundAddress.to 是复合字符串** `{channelId} {PeerKind.value}:{peerId}`（如 `discord-DC Bot :CHANNEL:123…`），真实 snowflake 在最后一个冒号后，需自行提取并做数字校验（直接传给 JDA 会抛 NumberFormatException）；多条 Msg 拼接后按 Discord 单条 **2000 字符上限自动分段**（优先换行处切）；目标为频道 id 直查，用户 id 则 `openPrivateChannel()` 私聊发送；**发送失败（代理线路抖动常见 SSLHandshakeException）指数退避重试 3 次（1.5s/3s/6s），重试耗尽记 ERROR，避免回复静默丢失**；
+- 凭证：Bot Token 存 t_channel_config.app_secret 列（AES-GCM），`configured()` 按类型判定（discord 不看 app_key）。
+
+**会话归属**：channel 链路入站 senderId 为渠道名称 `discord`（非平台用户，Discord 用户/频道 snowflake 仍存于 peer 用于回复路由）；索引写 t_channel_session（channel_type=discord），admin 会话历史 source 展示 Discord 徽章；可与沙箱共存（§24.2 修订）。
+
+**接入步骤（运营）**：Discord Developer Portal 建 Application+Bot → Bot 页 Reset Token 拿 Bot Token（仅显示一次）→ 开启 **MESSAGE CONTENT INTENT**（否则收不到文本）→ OAuth2 URL Generator 勾 bot 权限（Send Messages / Read Message History）生成邀请链接拉进服务器 → 系统配置新建 discord 记录填 Token → Agent 启用。
+
+**py 版平台开关的取舍**：`only_at_reply` 固定 true（v1 不暴露配置）；`show_thinking`/`show_tool_process` 不实现（v1 仅发最终文本，与钉钉一致）；交互式按钮审批不做（harness HITL 渠道化后续 §）。
+
+**测试连接**：`POST /api/channel-config/test`（仅 admin）轻量调平台 API 验凭证/网络，不落库不触发建连：Discord GET `users/@me`（200 有效/401 Token 无效），钉钉 `gettoken`（errcode=0 有效）；凭证留空时回落库内解密值（支持已保存记录直测与编辑弹窗空密测试）。前端入口两处：记录列表行「测试」+ 新建/编辑弹窗「测试连接」按钮。Discord 测试经 JVM 系统代理（clash）出海，钉钉/阿里云境内域名在 nonProxyHosts 直连。
+
+**验收（并入 §24.7）**：
+
+9. 系统配置新建 discord 记录（仅 Bot Token）→ 保存成功，类型列展示 Discord；缺 Token 保存被拒；
+9.1 「测试连接」：正确 Token 返回成功（含 bot 名）；错误 Token 提示 401；代理不通时提示超时；钉钉凭证同理（errcode 回显）；
+10. Agent 绑定 discord 记录启用后重启，日志见 Discord Gateway 建连成功；服务器频道 @ 机器人/DM 均收到回复，同会话第二轮有上下文；
+11. 超长回复（>2000 字符）自动分段不截断报错；会话历史中该会话来源前缀为 Discord。
+
+---
+
 ## 附录 A：术语
 
 - **HarnessAgent**：AgentScope 2.0 推荐的长时运行 agent 入口，整合 workspace / 记忆 / 持久化 / subagent / 沙箱。

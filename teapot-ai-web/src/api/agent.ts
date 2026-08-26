@@ -1,5 +1,5 @@
 import { http, unwrap } from './http';
-import type { Agent, AgentDetail, PageData, Result } from '../types';
+import type { Agent, AgentDetail, PageData, Result, SessionHistoryItem, SessionMessageItem } from '../types';
 
 export function agentList(params: { page?: number; size?: number; keyword?: string; includeDisabled?: boolean }) {
   return unwrap<PageData<Agent>>(http.get<Result<PageData<Agent>>>('/api/agent/list', { params }));
@@ -50,4 +50,31 @@ export function agentChat(agentKey: string, messageText: string, sessionId?: str
 
 export function modelPresets() {
   return unwrap<string[]>(http.get<Result<string[]>>('/api/model/presets'));
+}
+
+/** Agent 全量会话历史列表（SPEC §24.9，仅 admin）：Web + 渠道两索引 union */
+export function sessionHistory(agentKey: string, params: { page?: number; size?: number; keyword?: string }) {
+  return unwrap<SessionHistoryItem[]>(
+    http.get<Result<SessionHistoryItem[]>>(`/api/agent/${agentKey}/session-history`, { params }),
+  );
+}
+
+/** 会话全文回放（SPEC §24.9，仅 admin）：source=web|dingtalk 区分图片引用策略 */
+export function sessionHistoryMessages(agentKey: string, userId: string, sessionId: string, source: string) {
+  return unwrap<SessionMessageItem[]>(
+    http.get<Result<SessionMessageItem[]>>(
+      `/api/agent/${agentKey}/session-history/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/messages`,
+      { params: { source } },
+    ),
+  );
+}
+
+/** 删除单条历史会话（SPEC §24.9，仅 admin）：stateStore 状态 + 索引表 */
+export function deleteSessionHistory(agentKey: string, userId: string, sessionId: string, source: string) {
+  return unwrap<void>(
+    http.delete<Result<void>>(
+      `/api/agent/${agentKey}/session-history/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}`,
+      { params: { source } },
+    ),
+  );
 }

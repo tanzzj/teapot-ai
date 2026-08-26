@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, Card, Form, Input, message, Modal } from '@agentscope-ai/design';
-import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { SparkUserLine, SparkLockLine } from '@agentscope-ai/icons';
 import { useNavigate } from 'react-router-dom';
 import { login, userUpdate } from '../api/auth';
 import { useAuthStore } from '../store/auth';
@@ -97,10 +97,10 @@ export default function Login() {
         </div>
         <Form onFinish={onFinish} size="large">
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" autoFocus />
+            <Input prefix={<SparkUserLine />} placeholder="用户名" autoFocus />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" />
+            <Input.Password prefix={<SparkLockLine />} placeholder="密码" />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={loading}>
             登录

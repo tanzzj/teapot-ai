@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Drawer, Menu, Segmented, Space, message, theme } from 'antd';
-import { Button, Dropdown, Avatar } from '@agentscope-ai/design';
+import { Drawer, Menu, Segmented, Space, message, theme, Dropdown } from 'antd';
+import { Button, Avatar } from '@agentscope-ai/design';
 import {
-  RobotOutlined,
-  ThunderboltOutlined,
-  MessageOutlined,
-  SettingOutlined,
-  UserOutlined,
-  LogoutOutlined,
-  MenuOutlined,
-  CameraOutlined,
-} from '@ant-design/icons';
+  SparkRoboticsLine,
+  SparkMagicWandLine,
+  SparkMessageLine,
+  SparkSettingLine,
+  SparkUserLine,
+  SparkEscapeLine,
+  SparkMenuLine,
+  SparkCameraLine,
+} from '@agentscope-ai/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
+import { useMobileUIStore } from '../store/mobileUI';
 import { uploadUserAvatar } from '../api/avatar';
 import AgentSelector from './AgentSelector';
 
@@ -28,7 +29,7 @@ export default function AppLayout() {
   const location = useLocation();
   const { user, logout, hasRole, setUserPatch } = useAuthStore();
   const { token } = theme.useToken();
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { mobileView, sessionTitle } = useMobileUIStore();
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BP);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -72,36 +73,45 @@ export default function AppLayout() {
 
   const items = useMemo(() => {
     const list: { key: string; label: string; icon: React.ReactNode }[] = [
-      { key: '/chat', label: '对话', icon: <MessageOutlined /> },
+      { key: '/chat', label: '对话', icon: <SparkMessageLine /> },
     ];
     if (hasRole('admin', 'developer')) {
-      list.push({ key: '/agents', label: 'Agent', icon: <RobotOutlined /> });
-      list.push({ key: '/skills', label: 'Skill', icon: <ThunderboltOutlined /> });
+      list.push({ key: '/agents', label: 'Agent', icon: <SparkRoboticsLine /> });
+      list.push({ key: '/skills', label: 'Skill', icon: <SparkMagicWandLine /> });
     }
     if (hasRole('admin')) {
       // 系统配置一站式管理台（SPEC §21）：模型/用户/存储/沙箱统一入口
-      list.push({ key: '/system', label: '系统配置', icon: <SettingOutlined /> });
+      list.push({ key: '/system', label: '系统配置', icon: <SparkSettingLine /> });
     }
     return list;
   }, [hasRole]);
 
   const selectedKey = items.find((i) => location.pathname.startsWith(i.key))?.key || '/chat';
 
+  /** 移动端下拉菜单选项（对话/Agent/Skill/系统配置） */
+  const mobileMenuItems = useMemo(() => {
+    return items.map((i) => ({
+      key: i.key,
+      label: i.label,
+      icon: i.icon,
+      onClick: () => navigate(i.key),
+    }));
+  }, [items, navigate]);
+
   const onMenuClick = useCallback(
     ({ key }: { key: string }) => {
       navigate(key);
-      setDrawerOpen(false);
     },
     [navigate],
   );
 
-  // 路由切换时关闭 Drawer
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [location.pathname]);
+  // 路由切换时关闭 Drawer（已移除 Drawer，保留注释）
+  // useEffect(() => {
+  //   setDrawerOpen(false);
+  // }, [location.pathname]);
 
   return (
-    <div style={{ height: '100dvh', padding: isMobile ? 6 : 12 }}>
+    <div style={{ height: '100dvh', padding: isMobile ? 6 : 12, boxSizing: 'border-box' }}>
       {/* 悬浮毛玻璃大卡片（Barley 应用容器） */}
       <div
         className="glass-panel"
@@ -125,85 +135,129 @@ export default function AppLayout() {
             borderBottom: '1px solid rgba(255, 255, 255, 0.55)',
           }}
         >
-          {isMobile && (
-            <MenuOutlined
-              style={{ fontSize: 17, cursor: 'pointer', color: token.colorText }}
-              onClick={() => setDrawerOpen(true)}
-            />
+          {/* 移动端：Logo + 下拉切换菜单（首页态）或 返回按钮 + 会话标题（聊天态） */}
+          {isMobile && mobileView === 'home' && (
+            <>
+              <img
+                src="/logo.png"
+                alt="Teapot AI"
+                style={{ width: 28, height: 28, borderRadius: 999, display: 'block', flexShrink: 0 }}
+              />
+              <Dropdown
+                menu={{ items: mobileMenuItems }}
+                trigger={['click']}
+                overlayClassName="teapot-mobile-menu"
+                overlayStyle={{ minWidth: 240 }}
+              >
+                <Button
+                  type="text"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', fontSize: 16 }}
+                >
+                  <span style={{ fontWeight: 600 }}>
+                    {items.find((i) => i.key === selectedKey)?.label || '对话'}
+                  </span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </Button>
+              </Dropdown>
+            </>
           )}
-
-          {/* Logo */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-            onClick={() => navigate('/chat')}
-          >
-            <img
-              src="/logo.png"
-              alt="Teapot AI"
-              style={{ width: 30, height: 30, borderRadius: 999, display: 'block' }}
-            />
-            {!isMobile && (
-              <span style={{ fontWeight: 700, fontSize: 16, color: token.colorText }}>
-                Teapot AI
+          {isMobile && mobileView === 'chat' && (
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div id="topbar-chat-slot" style={{ display: 'flex', alignItems: 'center' }} />
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: 15,
+                  fontWeight: 600,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={sessionTitle}
+              >
+                {sessionTitle}
               </span>
-            )}
-            {!isMobile && (
-              <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0820a</span>
-            )}
-          </div>
-
-          {/* 分段标签导航（Barley Chat/Agent 切换样式） */}
-          {!isMobile && (
-            <Segmented
-              value={selectedKey}
-              onChange={(v) => navigate(String(v))}
-              options={items.map((i) => ({ value: i.key, label: i.label, icon: i.icon }))}
-            />
+            </div>
           )}
 
-          <div style={{ flex: 1 }} />
+          {/* 桌面端：汉堡菜单（无）+ Logo + Segmented 导航 */}
+          {!isMobile && (
+            <>
+              {/* Logo */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+                onClick={() => navigate('/chat')}
+              >
+                <img
+                  src="/logo.png"
+                  alt="Teapot AI"
+                  style={{ width: 30, height: 30, borderRadius: 999, display: 'block' }}
+                />
+                <span style={{ fontWeight: 700, fontSize: 16, color: token.colorText }}>
+                  Teapot AI
+                </span>
+                <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0820a</span>
+              </div>
 
-          {/* 移动端会话历史入口的 Portal 挂载点（Chat 页注入，见 Chat.tsx） */}
+              {/* 分段标签导航（Barley Chat/Agent 切换样式） */}
+              <Segmented
+                value={selectedKey}
+                onChange={(v) => navigate(String(v))}
+                options={items.map((i) => ({ value: i.key, label: i.label, icon: i.icon }))}
+              />
+            </>
+          )}
+
+          {/* 手机聊天态：标题容器已 flex:1 吃满剩余宽度，占位符不再参与分推，避免标题被提前截断 */}
+          <div style={{ flex: isMobile && mobileView === 'chat' ? 'none' : 1 }} />
+
+          {/* 会话历史入口的 Portal 挂载点（始终存在，内容根据 mobileView 变化） */}
           <div id="topbar-history-slot" style={{ display: 'flex', alignItems: 'center' }} />
 
           {/* 对话页顶栏 Agent 选择器（原聊天区右上角，移至全局 header） */}
           <AgentSelector />
 
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'roles', label: `角色：${user?.roles || '-'}`, disabled: true },
-                { type: 'divider' },
-                {
-                  key: 'avatar',
-                  label: avatarUploading ? '头像上传中…' : '更换头像',
-                  icon: <CameraOutlined />,
-                  disabled: avatarUploading,
+          {/* 移动端聊天态：隐藏头像（SPEC：mobile chat 模式不需要展示登录人状态） */}
+          {!(isMobile && mobileView === 'chat') && (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'roles', label: `角色：${user?.roles || '-'}`, disabled: true },
+                  { type: 'divider' },
+                  {
+                    key: 'avatar',
+                    label: avatarUploading ? '头像上传中…' : '更换头像',
+                    icon: <SparkCameraLine />,
+                    disabled: avatarUploading,
+                  },
+                  { key: 'logout', label: '退出登录', icon: <SparkEscapeLine /> },
+                ],
+                onClick: ({ key }: { key: string }) => {
+                  if (key === 'logout') {
+                    logout();
+                    navigate('/login');
+                  } else if (key === 'avatar') {
+                    avatarInputRef.current?.click();
+                  }
                 },
-                { key: 'logout', label: '退出登录', icon: <LogoutOutlined /> },
-              ],
-              onClick: ({ key }: { key: string }) => {
-                if (key === 'logout') {
-                  logout();
-                  navigate('/login');
-                } else if (key === 'avatar') {
-                  avatarInputRef.current?.click();
-                }
-              },
-            }}
-          >
-            <Space style={{ cursor: 'pointer' }}>
-              <Avatar size="small" src={user?.avatar || undefined} icon={<UserOutlined />} />
-              {!isMobile && <span>{user?.realName || user?.username || '未登录'}</span>}
-            </Space>
-          </Dropdown>
+              }}
+            >
+              <Space style={{ cursor: 'pointer' }}>
+                <Avatar size="small" src={user?.avatar || undefined} icon={<SparkUserLine />} />
+                {!isMobile && <span>{user?.realName || user?.username || '未登录'}</span>}
+              </Space>
+            </Dropdown>
+          )}
           {/* 头像选择器（SPEC §23）：Dropdown 菜单项触发 */}
           <input
             ref={avatarInputRef}
@@ -220,50 +274,7 @@ export default function AppLayout() {
         </main>
       </div>
 
-      {/* 移动端：Drawer 菜单 */}
-      {isMobile && (
-        <Drawer
-          placement="left"
-          open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          width={240}
-          styles={{ body: { padding: 0 } }}
-          closable={false}
-        >
-          <div style={{ padding: '16px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <img src="/logo.png" alt="Teapot AI" style={{ width: 24, height: 24, borderRadius: 999 }} />
-            <span style={{ fontWeight: 700, fontSize: 16, color: token.colorPrimary }}>Teapot AI</span>
-          </div>
-          <Menu
-            mode="vertical"
-            selectedKeys={[selectedKey]}
-            items={items}
-            onClick={onMenuClick}
-            style={{ borderRight: 'none' }}
-          />
-          <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', marginTop: 8 }}>
-            <Space>
-              <Avatar size="small" src={user?.avatar || undefined} icon={<UserOutlined />} />
-              <span style={{ fontSize: 13 }}>{user?.realName || user?.username || '未登录'}</span>
-            </Space>
-            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-              角色：{user?.roles || '-'}
-            </div>
-            <Button
-              block
-              style={{ marginTop: 12 }}
-              icon={<LogoutOutlined />}
-              onClick={() => {
-                logout();
-                setDrawerOpen(false);
-                navigate('/login');
-              }}
-            >
-              退出登录
-            </Button>
-          </div>
-        </Drawer>
-      )}
+      {/* 移动端不再使用 Drawer，统一用顶栏下拉菜单 */}
     </div>
   );
 }

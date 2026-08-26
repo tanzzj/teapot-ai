@@ -73,12 +73,95 @@ export interface AgentSandboxConfig {
   nas?: AgentSandboxNas;
 }
 
+/** feature.runtime 结构：Agent 高级配置（Basic Info + Tool & Advanced），字段缺省 = 回落默认 */
+export interface AgentRuntimeConfig {
+  /** 思考模式（仅 DashScope 生效） */
+  thinkingMode?: boolean;
+  /** 采样温度 0–2 */
+  temperature?: number;
+  /** 核采样 0–1 */
+  topP?: number;
+  /** 最大生成 tokens */
+  maxTokens?: number;
+  /** 计划模式 */
+  enablePlanMode?: boolean;
+  /** shell 工具开关；未配置时跟随沙箱启用 */
+  enableShell?: boolean;
+  /** 工具白名单（空 = 不限制） */
+  allowedTools?: string[];
+  /** ReAct 最大迭代轮数 1–100；留空 = 默认 */
+  maxIterations?: number;
+}
+
 /** feature.storage 结构（SPEC §22.1：图片存储载体按 Agent 选择） */
 export interface AgentStorageConfig {
   /** base64（默认）/ oss（引用 OSS 连接记录） */
   mode: 'base64' | 'oss';
   /** mode=oss 时引用的 OSS 连接记录名 */
   storageRecord?: string;
+}
+
+/** feature.channel 结构（SPEC §24.5：Agent 渠道连接器配置，可与 sandbox 共存） */
+export interface AgentChannelConfig {
+  enabled: boolean;
+  /** 引用的渠道连接记录名（§24.4），enabled=true 必填 */
+  channelRecord?: string;
+  /** 会话隔离粒度：缺省 PER_CHANNEL_PEER */
+  dmScope?: 'MAIN' | 'PER_PEER' | 'PER_CHANNEL_PEER';
+}
+
+/** 渠道连接记录（SPEC §24.4，GET /api/channel-config/list） */
+export interface ChannelRecord {
+  name: string;
+  channelType: string;
+  appKey?: string;
+  robotCode?: string;
+  remark?: string;
+  /** 列表行不回明文，只回掩码 */
+  appSecretMasked?: string;
+  configured?: boolean;
+  updatedAt?: string;
+}
+
+/** GET /api/channel-config/list 出参（§24.4） */
+export interface ChannelListData {
+  records: ChannelRecord[];
+}
+
+/** 渠道记录轻量名单行（GET /api/channel-config/registry，developer/viewer 可读） */
+export interface ChannelRecordName {
+  name: string;
+  channelType: string;
+}
+
+/** 连接器测试连接结果（POST /api/channel-config/test，§24.10） */
+export interface ChannelTestResult {
+  success: boolean;
+  message: string;
+}
+
+/** Agent 全量会话历史列表条目（SPEC §24.9，admin 视图） */
+export interface SessionHistoryItem {
+  /** web / dingtalk（后续渠道枚举） */
+  source: string;
+  /** 平台用户 / 渠道 peer 标识 */
+  userId: string;
+  sessionId: string;
+  title?: string;
+  lastActiveAt?: string;
+}
+
+/** 会话回放消息条目（agentscope_sessions 状态回放，按序渲染） */
+export interface SessionMessageItem {
+  role: string;
+  /** text / image / reasoning / tool_call / tool_call_output */
+  type: string;
+  text?: string;
+  toolCallId?: string;
+  toolName?: string;
+  arguments?: string;
+  output?: string;
+  imageUrl?: string;
 }
 
 /** GET /api/config/sandbox-options 出参（SPEC §16.11 / 修订：e2b·agentrun 双链路） */
@@ -215,6 +298,21 @@ export interface SkillGitStatus {
   branch?: string;
   skillCount: number;
   lastSyncAt?: string;
+}
+
+/** GET /api/skill/oss/status 出参：OSS skill 来源状态 */
+export interface SkillOssStatus {
+  enabled: boolean;
+  bucket?: string;
+  prefix?: string;
+  skillCount: number;
+  lastRefreshAt?: string;
+}
+
+/** POST /api/skill/import 出参 */
+export interface SkillImportResult {
+  target: 'oss' | 'mysql';
+  imported: string[];
 }
 
 export interface ChatSession {

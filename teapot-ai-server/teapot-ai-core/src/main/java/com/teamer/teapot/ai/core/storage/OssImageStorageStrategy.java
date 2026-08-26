@@ -25,7 +25,8 @@ public class OssImageStorageStrategy implements ImageStorageStrategy {
 
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final Map<String, String> EXT = Map.of(
-            "image/jpeg", "jpg", "image/png", "png", "image/webp", "webp", "image/gif", "gif");
+            "image/jpeg", "jpg", "image/png", "png", "image/webp", "webp", "image/gif", "gif",
+            "video/mp4", "mp4", "video/webm", "webm", "video/quicktime", "mov", "video/x-matroska", "mkv");
 
     private final OssConnection ossConnection;
     private final OssClientManager ossClientManager;

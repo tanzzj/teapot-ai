@@ -6,18 +6,21 @@ import {
   Input,
   InputNumber,
   message,
+  Radio,
   Select,
   Switch,
 } from '@agentscope-ai/design';
 import {
-  CameraOutlined,
-  CloudServerOutlined,
-  EditOutlined,
-  IdcardOutlined,
-  ProfileOutlined,
-  SettingOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
+  SparkCameraLine,
+  SparkInternetLine,
+  SparkEditLine,
+  SparkHistoryLine,
+  SparkIdLine,
+  SparkLinkLine,
+  SparkDocumentLine,
+  SparkSettingLine,
+  SparkMagicWandLine,
+} from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   agentBindSkill,
@@ -27,19 +30,24 @@ import {
   modelPresets,
 } from '../api/agent';
 import { sandboxOptions, sandboxRecordNames, storageRecordNames } from '../api/config';
+import { channelRegistry } from '../api/channelConfig';
+import HistoryChatPanel from '../chat/HistoryChatPanel';
 import { uploadAgentAvatar } from '../api/avatar';
 import { skillList } from '../api/skill';
 import { sessionStats } from '../api/session';
 import { useAuthStore } from '../store/auth';
 import type {
+  AgentChannelConfig,
+  AgentRuntimeConfig,
   AgentSandboxConfig,
+  ChannelRecordName,
   SandboxOptions,
   SandboxRecordName,
   SkillListItem,
   StorageRecordName,
 } from '../types';
 
-type Section = 'profile' | 'basic' | 'sandbox' | 'skills';
+type Section = 'profile' | 'basic' | 'tools' | 'sandbox' | 'channel' | 'skills' | 'history';
 
 /** 贡献热力图：按 session by date 渲染该 Agent 近 280 天会话量（列=周，周一对齐） */
 function Heatmap({ agentKey }: { agentKey: string }) {
@@ -110,6 +118,8 @@ export default function AgentDetailPage() {
   const { token } = theme.useToken();
   const [form] = Form.useForm();
   const [section, setSection] = useState<Section>('profile');
+  // 会话历史分区横向空间让给会话列表，胶囊菜单收起为纯图标
+  const menuCollapsed = section === 'history';
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<string[]>([]);
@@ -119,11 +129,13 @@ export default function AgentDetailPage() {
   const [sbOptions, setSbOptions] = useState<SandboxOptions | null>(null);
   const [storageNames, setStorageNames] = useState<StorageRecordName[]>([]);
   const [sandboxNames, setSandboxNames] = useState<SandboxRecordName[]>([]);
+  const [channelNames, setChannelNames] = useState<ChannelRecordName[]>([]);
   /** 已加载的原始 feature 命名空间：分区保存时合并，避免单分区覆盖另一分区（§22） */
   const [loadedFeature, setLoadedFeature] = useState<Record<string, unknown>>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
   const sbEnabled = Form.useWatch(['sandbox', 'enabled'], form);
   const sbPersistence = Form.useWatch(['sandbox', 'persistence'], form);
+  const chEnabled = Form.useWatch(['channel', 'enabled'], form);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
@@ -161,17 +173,19 @@ export default function AgentDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [d, presets, skills, sbOpts, ossNames, sbRecordNames] = await Promise.all([
+      const [d, presets, skills, sbOpts, ossNames, sbRecordNames, chNames] = await Promise.all([
         agentDetail(agentKey),
         modelPresets(),
         skillList(),
         sandboxOptions(),
         storageRecordNames().catch(() => [] as StorageRecordName[]),
         sandboxRecordNames().catch(() => [] as SandboxRecordName[]),
+        channelRegistry().catch(() => [] as ChannelRecordName[]),
       ]);
       setSbOptions(sbOpts);
       setStorageNames(ossNames);
       setSandboxNames(sbRecordNames);
+      setChannelNames(chNames);
       setDetail({
         name: d.agent.name,
         description: d.agent.description,
@@ -179,8 +193,10 @@ export default function AgentDetailPage() {
         createdAt: d.agent.createdAt,
         avatar: d.agent.avatar,
       });
-      // feature.sandbox / feature.storage 回显（SPEC §16.11/§22）
+      // feature.sandbox / feature.storage / feature.channel / feature.runtime 回显（SPEC §16.11/§22/§24.5）
       let sb: Partial<AgentSandboxConfig> = {};
+      let ch: Partial<AgentChannelConfig> = {};
+      let rt: Partial<AgentRuntimeConfig> = {};
       let storageTarget = 'base64';
       let parsedFeature: Record<string, unknown> = {};
       if (d.agent.feature) {
@@ -190,6 +206,12 @@ export default function AgentDetailPage() {
             parsedFeature = f;
             if (f.sandbox) {
               sb = f.sandbox;
+            }
+            if (f.channel) {
+              ch = f.channel;
+            }
+            if (f.runtime) {
+              rt = f.runtime;
             }
             if (f.storage && f.storage.mode === 'oss' && f.storage.storageRecord) {
               storageTarget = f.storage.storageRecord;
@@ -218,6 +240,22 @@ export default function AgentDetailPage() {
           idleTimeoutSeconds: sb.idleTimeoutSeconds,
           nas: sb.nas,
         },
+        channel: {
+          enabled: !!ch.enabled,
+          channelRecord: ch.channelRecord,
+          dmScope: ch.dmScope ?? 'PER_CHANNEL_PEER',
+        },
+        runtime: {
+          thinkingMode: !!rt.thinkingMode,
+          temperature: rt.temperature,
+          topP: rt.topP,
+          maxTokens: rt.maxTokens,
+          enablePlanMode: !!rt.enablePlanMode,
+          // 存量未配置时跟随沙箱启用回显，与后端回落语义一致
+          enableShell: rt.enableShell ?? !!sb.enabled,
+          allowedTools: rt.allowedTools,
+          maxIterations: rt.maxIterations,
+        },
       });
       setBoundSkills(d.skillNames || []);
       setModels(presets || []);
@@ -235,9 +273,11 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, runtime, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
+      channel?: Partial<AgentChannelConfig>;
+      runtime?: Partial<AgentRuntimeConfig>;
     };
     const payload: Record<string, unknown> = { ...rest };
     // feature：在已加载命名空间基础上合并本次分区提交，避免单分区覆盖另一分区（§22）
@@ -250,6 +290,21 @@ export default function AgentDetailPage() {
     if (sandbox !== undefined) {
       // enabled=false 时仅提交 {enabled:false}，保持 feature 精简（SPEC §16.11）
       feature.sandbox = sandbox.enabled ? sandbox : { enabled: false };
+    }
+    if (channel !== undefined) {
+      feature.channel = channel.enabled ? channel : { enabled: false };
+    }
+    if (runtime !== undefined) {
+      // runtime 跨 Basic Info / Tool & Advanced 两分区提交：仅合并本次挂载字段，null = 清除该项
+      const merged: Record<string, unknown> = { ...((loadedFeature.runtime as Record<string, unknown>) || {}) };
+      for (const [k, v] of Object.entries(runtime)) {
+        if (v === undefined || v === null) {
+          delete merged[k];
+        } else {
+          merged[k] = v;
+        }
+      }
+      feature.runtime = merged;
     }
     if (Object.keys(feature).length > 0) {
       payload.feature = feature;
@@ -265,34 +320,64 @@ export default function AgentDetailPage() {
   };
 
   const menuItems: { key: Section; label: string; icon: React.ReactNode }[] = [
-    { key: 'profile', label: 'Profile', icon: <IdcardOutlined /> },
-    { key: 'basic', label: 'Basic Info', icon: <ProfileOutlined /> },
-    { key: 'sandbox', label: 'Sandbox', icon: <CloudServerOutlined /> },
-    { key: 'skills', label: 'Skills', icon: <ThunderboltOutlined /> },
+    { key: 'profile', label: 'Profile', icon: <SparkIdLine /> },
+    { key: 'basic', label: 'Basic Info', icon: <SparkDocumentLine /> },
+    { key: 'tools', label: 'Tool & Advanced', icon: <SparkSettingLine /> },
+    { key: 'sandbox', label: 'Sandbox', icon: <SparkInternetLine /> },
+    { key: 'channel', label: 'Channel', icon: <SparkLinkLine /> },
+    { key: 'skills', label: 'Skills', icon: <SparkMagicWandLine /> },
+    ...(isAdmin ? [{ key: 'history' as Section, label: '会话历史', icon: <SparkHistoryLine /> }] : []),
   ];
 
   return (
-    <div style={{ padding: '20px 28px' }}>
-      {/* 页头：头像 + 名称 + Save */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+    <div
+      style={{
+        padding: '20px 28px',
+        // 会话历史分区：flex 纵向链路铺满 main，面板精确吃满剩余高度（其余分区自然滚动）
+        ...(menuCollapsed
+          ? {
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column' as const,
+              boxSizing: 'border-box' as const,
+            }
+          : null),
+      }}
+    >
+      {/* 页头：头像 + 名称 + Save；会话历史分区压缩页头，纵向空间让给面板 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: menuCollapsed ? 8 : 12,
+          marginBottom: menuCollapsed ? 10 : 20,
+          flexShrink: 0,
+        }}
+      >
         {detail?.avatar ? (
           <img
             src={detail.avatar}
             alt={detail.name || agentKey}
-            style={{ width: 40, height: 40, borderRadius: 999, objectFit: 'cover', flexShrink: 0 }}
+            style={{
+              width: menuCollapsed ? 28 : 40,
+              height: menuCollapsed ? 28 : 40,
+              borderRadius: 999,
+              objectFit: 'cover',
+              flexShrink: 0,
+            }}
           />
         ) : (
           <span
             style={{
-              width: 40,
-              height: 40,
+              width: menuCollapsed ? 28 : 40,
+              height: menuCollapsed ? 28 : 40,
               borderRadius: 999,
               background: 'linear-gradient(135deg, #2b2b31, #1a1a1d)',
               color: '#fff',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 17,
+              fontSize: menuCollapsed ? 13 : 17,
               fontWeight: 700,
             }}
           >
@@ -300,37 +385,76 @@ export default function AgentDetailPage() {
           </span>
         )}
         <div>
-          <div style={{ fontWeight: 700, fontSize: 17, color: 'rgba(26, 26, 29, 0.92)' }}>
+          <div
+            style={{
+              fontWeight: 700,
+              fontSize: menuCollapsed ? 14 : 17,
+              color: 'rgba(26, 26, 29, 0.92)',
+            }}
+          >
             {detail?.name || agentKey}
           </div>
-          <div style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 11, color: 'rgba(26, 26, 29, 0.45)' }}>
+          <div
+            style={{
+              fontFamily: 'Menlo, Consolas, monospace',
+              fontSize: menuCollapsed ? 10 : 11,
+              color: 'rgba(26, 26, 29, 0.45)',
+            }}
+          >
             {agentKey}
           </div>
         </div>
         <div style={{ flex: 1 }} />
-        {(section === 'basic' || section === 'sandbox') && (
+        {(section === 'basic' || section === 'sandbox' || section === 'channel') && (
           <Button type="primary" onClick={onSave} loading={saving}>
             Save
           </Button>
         )}
       </div>
 
-      <Spin spinning={loading}>
+      <div
+        className={menuCollapsed ? 'teapot-history-fill' : undefined}
+        style={menuCollapsed ? { flex: 1, minHeight: 0 } : undefined}
+      >
+        <Spin spinning={loading}>
         <Row gutter={20}>
-          {/* 左侧胶囊菜单 */}
-          <Col xs={24} md={6} lg={5} style={{ marginBottom: 16 }}>
-            <div className="glass-card" style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {/* 左侧胶囊菜单：会话历史分区需要横向空间放会话列表，菜单自动收起为纯图标窄条 */}
+          <Col
+            xs={24}
+            md={6}
+            lg={5}
+            style={
+              menuCollapsed
+                ? { flex: '0 0 72px', maxWidth: 72, height: '100%' }
+                : { flex: '0 0 208px', maxWidth: 208, marginBottom: 16 }
+            }
+          >
+            <div
+              className="glass-card"
+              style={{
+                padding: 8,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+                height: menuCollapsed ? '100%' : undefined,
+                boxSizing: menuCollapsed ? ('border-box' as const) : undefined,
+              }}
+            >
               {menuItems.map((m) => {
                 const active = section === m.key;
                 return (
                   <div
                     key={m.key}
-                    onClick={() => setSection(m.key)}
+                    onClick={() => {
+                      setSection(m.key);
+                    }}
+                    title={m.label}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
+                      justifyContent: menuCollapsed ? 'center' : 'flex-start',
                       gap: 10,
-                      padding: '10px 14px',
+                      padding: menuCollapsed ? '10px 0' : '10px 14px',
                       borderRadius: 10,
                       cursor: 'pointer',
                       fontSize: 13.5,
@@ -341,15 +465,25 @@ export default function AgentDetailPage() {
                       transition: 'all 0.2s ease',
                     }}
                   >
-                    {m.icon} {m.label}
+                    {m.icon} {!menuCollapsed && m.label}
                   </div>
                 );
               })}
             </div>
           </Col>
 
-          {/* 右侧内容 */}
-          <Col xs={24} md={18} lg={19}>
+          {/* 右侧内容：收起态 flex-basis 0 + minWidth 0，只吃剩余宽度，
+              避免被内容撑宽导致 Row wrap / 横向溢出 */}
+          <Col
+            xs={24}
+            md={18}
+            lg={19}
+            style={
+              menuCollapsed
+                ? { flex: '1 1 0', minWidth: 0, maxWidth: 'none', height: '100%' }
+                : { flex: '1 1 0', minWidth: 0, maxWidth: 'none' }
+            }
+          >
             {section === 'profile' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 <div className="glass-card" style={{ padding: 24, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
@@ -401,7 +535,7 @@ export default function AgentDetailPage() {
                           gap: 4,
                         }}
                       >
-                        <CameraOutlined /> {avatarUploading ? '上传中…' : '更换头像'}
+                        <SparkCameraLine /> {avatarUploading ? '上传中…' : '更换头像'}
                       </span>
                     </div>
                     {/* 头像选择器（SPEC §23） */}
@@ -433,7 +567,7 @@ export default function AgentDetailPage() {
                     <div style={{ color: 'rgba(26, 26, 29, 0.6)', fontSize: 13.5, marginBottom: 16 }}>
                       {detail?.description || 'No persona configured.'}
                     </div>
-                    <Button icon={<EditOutlined />} onClick={() => setSection('basic')}>
+                    <Button icon={<SparkEditLine />} onClick={() => setSection('basic')}>
                       编辑
                     </Button>
                   </div>
@@ -481,6 +615,51 @@ export default function AgentDetailPage() {
                     <Select options={models.map((m) => ({ label: m, value: m }))} placeholder="e.g. qwen-max" />
                   </Form.Item>
                   <Form.Item
+                    name={['runtime', 'thinkingMode']}
+                    label="Thinking Mode"
+                    valuePropName="checked"
+                    tooltip="开启模型思考模式（仅 DashScope 生效，OpenAI 供应商忽略）"
+                  >
+                    <Switch />
+                  </Form.Item>
+                  <Row gutter={16}>
+                    <Col xs={24} sm={12}>
+                      <Form.Item name={['runtime', 'temperature']} label="Temperature" tooltip="采样温度 0–2，留空默认">
+                        <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item name={['runtime', 'topP']} label="Top P" tooltip="核采样 0–1，留空默认">
+                        <InputNumber min={0} max={1} step={0.05} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item name={['runtime', 'maxTokens']} label="Max Tokens" tooltip="最大生成 tokens，留空默认">
+                    <InputNumber min={1} max={65536} style={{ width: '100%' }} />
+                  </Form.Item>
+                  <Row gutter={16}>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'enablePlanMode']}
+                        label="Enable Plan Mode"
+                        valuePropName="checked"
+                        tooltip="开启后 Agent 具备计划模式能力"
+                      >
+                        <Switch />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'enableShell']}
+                        label="Enable Shell"
+                        valuePropName="checked"
+                        tooltip="关闭则无 shell_execute 工具；未配置时跟随沙箱启用"
+                      >
+                        <Switch />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item
                     name="storageTarget"
                     label="图片存储载体"
                     tooltip="对话台图片附件的存储方式（§22.1）；OSS 记录在系统配置 - 存储中维护"
@@ -504,18 +683,51 @@ export default function AgentDetailPage() {
                       message="尚无 OSS 连接记录，当前仅可使用 Base64 内联；如需 OSS，请在系统配置 - 存储中新建记录。"
                     />
                   )}
+                </Form>
+              </div>
+            )}
+
+            {section === 'tools' && (
+              <div className="glass-card" style={{ padding: 24 }}>
+                <Form form={form} layout="vertical">
                   <Row gutter={16}>
                     <Col xs={24} sm={12}>
-                      <Form.Item name="compactionTrigger" label="压缩触发轮数" tooltip="会话历史超过该轮数时触发记忆压缩">
-                        <InputNumber min={1} max={200} style={{ width: '100%' }} />
+                      <Form.Item
+                        name="compactionTrigger"
+                        label="压缩触发轮数"
+                        tooltip="会话历史超过该轮数时触发记忆压缩；-1 = 关闭压缩"
+                      >
+                        <InputNumber min={-1} max={200} style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={12}>
-                      <Form.Item name="compactionKeep" label="压缩保留轮数" tooltip="压缩后保留的最近轮数">
-                        <InputNumber min={0} max={100} style={{ width: '100%' }} />
+                      <Form.Item
+                        name="compactionKeep"
+                        label="压缩保留轮数"
+                        tooltip="压缩后保留的最近轮数；-1 = 关闭压缩"
+                      >
+                        <InputNumber min={-1} max={100} style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
                   </Row>
+                  <Row gutter={16}>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'maxIterations']}
+                        label="Max Iterations"
+                        tooltip="ReAct 最大迭代轮数 1–100，留空 = SDK 默认"
+                      >
+                        <InputNumber min={1} max={100} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item
+                    name={['runtime', 'allowedTools']}
+                    label="Allowed Tools"
+                    tooltip="工具白名单（回车/逗号分隔录入），留空 = 不限制"
+                  >
+                    <Select mode="tags" placeholder="留空不限制" tokenSeparators={[',', ' ']} />
+                  </Form.Item>
                 </Form>
               </div>
             )}
@@ -645,7 +857,7 @@ export default function AgentDetailPage() {
                       <div style={{ fontSize: 15, fontWeight: 700 }}>沙箱连接记录</div>
                       <div style={{ flex: 1 }} />
                       {/* 记录统一在系统配置管理（SPEC §22.2） */}
-                      <Button icon={<SettingOutlined />} onClick={() => navigate('/system/sandbox')}>
+                      <Button icon={<SparkSettingLine />} onClick={() => navigate('/system/sandbox')}>
                         前往系统配置
                       </Button>
                     </div>
@@ -658,13 +870,86 @@ export default function AgentDetailPage() {
               </div>
             )}
 
+            {section === 'channel' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {channelNames.length === 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="渠道未接入"
+                    description="请联系管理员在「系统配置 - 连接器」中新建渠道连接记录后再启用 Channel。"
+                  />
+                )}
+                <div className="glass-card" style={{ padding: 24 }}>
+                  <Form form={form} layout="vertical">
+                    <Form.Item
+                      name={['channel', 'enabled']}
+                      label="启用渠道连接器"
+                      valuePropName="checked"
+                      tooltip="启用后 Agent 接入钉钉等外部渠道收发消息，长驻连接由服务端维护"
+                    >
+                      <Switch disabled={channelNames.length === 0} />
+                    </Form.Item>
+                    {chEnabled && (
+                      <>
+                        <Form.Item
+                          name={['channel', 'channelRecord']}
+                          label="渠道连接记录"
+                          tooltip="启用时必选其一（§24.4）；记录在系统配置 - 连接器中维护"
+                          rules={[{ required: true, message: '启用渠道必须选择一条连接记录' }]}
+                        >
+                          <Select
+                            placeholder="选择渠道连接记录"
+                            options={channelNames.map((r) => ({
+                              value: r.name,
+                              label: `${r.name}（${r.channelType === 'dingtalk' ? '钉钉' : r.channelType === 'discord' ? 'Discord' : r.channelType}）`,
+                            }))}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          name={['channel', 'dmScope']}
+                          label="会话隔离粒度"
+                          tooltip="决定渠道侧会话如何切分，与记忆/上下文隔离粒度一致"
+                        >
+                          <Radio.Group>
+                            <Radio value="PER_CHANNEL_PEER">每群/每人独立（推荐）</Radio>
+                            <Radio value="PER_PEER">每人合并（跨群同人一会话）</Radio>
+                            <Radio value="MAIN">全局单会话</Radio>
+                          </Radio.Group>
+                        </Form.Item>
+                        <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
+                          渠道会话不进 Web 对话台（会话域隔离）；管理员可在左侧菜单「会话历史」中查看全量对话。
+                          保存后服务端自动重启该 Agent 的渠道连接。
+                        </div>
+                      </>
+                    )}
+                  </Form>
+                </div>
+
+                {isAdmin && (
+                  <div className="glass-card" style={{ padding: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>渠道连接记录</div>
+                      <div style={{ flex: 1 }} />
+                      <Button icon={<SparkSettingLine />} onClick={() => navigate('/system/channel')}>
+                        前往系统配置
+                      </Button>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginTop: 12 }}>
+                      当前共 {channelNames.length} 条渠道连接记录；启用时必选其一，凭证由记录决定。
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {section === 'skills' && (
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                   <div style={{ fontSize: 20, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>Skills</div>
                   <span style={{ color: 'rgba(26, 26, 29, 0.45)', fontSize: 13 }}>管理与配置技能集成</span>
                   <div style={{ flex: 1 }} />
-                  <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => navigate('/skills')}>
+                  <Button type="primary" icon={<SparkMagicWandLine />} onClick={() => navigate('/skills')}>
                     Create Skill
                   </Button>
                 </div>
@@ -747,9 +1032,13 @@ export default function AgentDetailPage() {
                 )}
               </div>
             )}
+
+            {/* 会话历史分区（SPEC §24.9，仅 admin）：复用 chat 页 SessionPanel + 聊天面板，只读 */}
+            {section === 'history' && isAdmin && <HistoryChatPanel agentKey={agentKey} />}
           </Col>
         </Row>
-      </Spin>
+        </Spin>
+      </div>
     </div>
   );
 }

@@ -8,7 +8,7 @@ import {
   Input,
   message,
 } from '@agentscope-ai/design';
-import { DeleteOutlined, EyeOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
+import { SparkDeleteLine, SparkVisibleLine, SparkPlusLine, SparkSaveLine } from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { skillDetail, skillGitStatus, skillPreview, skillSave } from '../api/skill';
 import type { SkillResourceItem } from '../types';
@@ -23,8 +23,8 @@ export default function SkillDetailPage() {
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState('');
-  const [gitBanner, setGitBanner] = useState<string | null>(null);
-  const isGit = gitBanner !== null;
+  const [roBanner, setRoBanner] = useState<{ title: string; text: string } | null>(null);
+  const isReadOnly = roBanner !== null;
 
   useEffect(() => {
     if (isNew) return;
@@ -39,9 +39,16 @@ export default function SkillDetailPage() {
         setResources(detail.resources || []);
         if (detail.source === 'git') {
           // SPEC §15.13：git 来源只读横幅
-          setGitBanner(
-            `该 skill 由 Git 仓库${git?.branch ? `（branch ${git.branch}）` : ''}管控，修改请提交 PR`,
-          );
+          setRoBanner({
+            title: 'Git 管控 · 只读',
+            text: `该 skill 由 Git 仓库${git?.branch ? `（branch ${git.branch}）` : ''}管控，修改请提交 PR`,
+          });
+        } else if (detail.source === 'oss') {
+          // OSS 来源：zip 导入托管，修改走重新导入
+          setRoBanner({
+            title: 'OSS 挂载 · 只读',
+            text: '该 skill 由 OSS 对象托管（zip 导入），请在 Skill 列表重新导入 zip 覆盖',
+          });
         }
       })
       .finally(() => setLoading(false));
@@ -87,12 +94,12 @@ export default function SkillDetailPage() {
         <Row gutter={16}>
           <Col xs={24} lg={12}>
             <Card title={isNew ? '新建 Skill' : `编辑 ${name}`}>
-              {gitBanner && (
+              {roBanner && (
                 <Alert
                   type="warning"
                   showIcon
-                  message="Git 管控 · 只读"
-                  description={gitBanner}
+                  message={roBanner.title}
+                  description={roBanner.text}
                   style={{ marginBottom: 16 }}
                 />
               )}
@@ -105,7 +112,7 @@ export default function SkillDetailPage() {
                     { pattern: /^[a-z][a-z0-9-]{1,63}$/, message: '小写字母开头，仅含小写字母/数字/短横线' },
                   ]}
                 >
-                  <Input disabled={!isNew || isGit} placeholder="如 code-review" />
+                  <Input disabled={!isNew || isReadOnly} placeholder="如 code-review" />
                 </Form.Item>
                 <Form.Item
                   name="description"
@@ -113,18 +120,18 @@ export default function SkillDetailPage() {
                   rules={[{ required: true, message: '请输入描述' }]}
                   extra="Agent 据此判断何时调用该 Skill，请写清适用场景"
                 >
-                  <Input.TextArea rows={2} disabled={isGit} />
+                  <Input.TextArea rows={2} disabled={isReadOnly} />
                 </Form.Item>
                 <Form.Item
                   name="instructions"
                   label="指令正文（instructions）"
                   extra="SKILL.md 正文，描述具体执行步骤；保存时与 name/description 合并为 frontmatter"
                 >
-                  <Input.TextArea rows={12} style={{ fontFamily: 'monospace' }} disabled={isGit} />
+                  <Input.TextArea rows={12} style={{ fontFamily: 'monospace' }} disabled={isReadOnly} />
                 </Form.Item>
               </Form>
 
-              {!isGit && (
+              {!isReadOnly && (
                 <>
                   <Divider orientation="left" plain>
                     附加资源（可选，单文件 ≤ 1MB）
@@ -148,7 +155,7 @@ export default function SkillDetailPage() {
                         <Button
                           size="small"
                           danger
-                          icon={<DeleteOutlined />}
+                          icon={<SparkDeleteLine />}
                           onClick={() => setResources((prev) => prev.filter((_, i) => i !== idx))}
                         />
                       }
@@ -166,7 +173,7 @@ export default function SkillDetailPage() {
                     </Card>
                   ))}
                   <Button
-                    icon={<PlusOutlined />}
+                    icon={<SparkPlusLine />}
                     onClick={() => setResources((prev) => [...prev, { path: '', content: '' }])}
                   >
                     添加资源
@@ -176,12 +183,12 @@ export default function SkillDetailPage() {
 
               <div style={{ marginTop: 16 }}>
                 <Space>
-                  {!isGit && (
-                    <Button type="primary" icon={<SaveOutlined />} onClick={onSave} loading={saving}>
+                  {!isReadOnly && (
+                    <Button type="primary" icon={<SparkSaveLine />} onClick={onSave} loading={saving}>
                       保存
                     </Button>
                   )}
-                  <Button icon={<EyeOutlined />} onClick={onPreview}>
+                  <Button icon={<SparkVisibleLine />} onClick={onPreview}>
                     预览 SKILL.md
                   </Button>
                 </Space>

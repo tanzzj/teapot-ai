@@ -1,5 +1,7 @@
 package com.teamer.teapot.ai.core.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.core.config.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
@@ -8,9 +10,17 @@ import com.teamer.teapot.ai.core.model.ModelEntryDO;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import com.teamer.teapot.ai.rbac.model.TeapotUser;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 
@@ -30,6 +40,19 @@ public class ModelService {
     private final ModelRegistry modelRegistry;
     private final AuditService auditService;
     private final TeapotAiProperties properties;
+
+    @Value("${DASHSCOPE_API_KEY:}")
+    private String dashscopeApiKey;
+
+    /** DashScope 模型清单缓存（列表庞大且变动低频，10 分钟 TTL） */
+    private volatile List<String> vendorModelsCache;
+    private volatile long vendorModelsCacheAt;
+    private static final long VENDOR_MODELS_TTL_MS = 10 * 60 * 1000L;
+    private static final String DASHSCOPE_MODELS_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10)).build();
 
     public ModelService(ModelEntryMapper modelEntryMapper, ModelRegistry modelRegistry,
                         AuditService auditService, TeapotAiProperties properties) {
@@ -57,6 +80,54 @@ public class ModelService {
     /** 启用入口的能力位（SPEC §19 前端 gating，任意登录用户可读，不含密钥） */
     public List<ModelEntryDO> listEnabledCapabilities() {
         return modelEntryMapper.selectAllEnabled();
+    }
+
+    /**
+     * DashScope 在售模型清单（新建/编辑模型入口的下拉数据源）。
+     * 服务器 DASHSCOPE_API_KEY 代拉，密钥不出后端；仅保留 qwen 系 chat 模型；10 分钟缓存。
+     */
+    public List<String> listDashScopeVendorModels() {
+        requireAdmin();
+        List<String> cached = vendorModelsCache;
+        if (cached != null && System.currentTimeMillis() - vendorModelsCacheAt < VENDOR_MODELS_TTL_MS) {
+            return cached;
+        }
+        if (dashscopeApiKey.isBlank()) {
+            throw new BizException("未配置 DASHSCOPE_API_KEY，无法拉取模型清单");
+        }
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(DASHSCOPE_MODELS_URL))
+                    .header("Authorization", "Bearer " + dashscopeApiKey)
+                    .timeout(Duration.ofSeconds(15))
+                    .GET().build();
+            HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                throw new BizException("DashScope 模型清单拉取失败：HTTP " + resp.statusCode());
+            }
+            JsonNode data = JSON.readTree(resp.body()).path("data");
+            List<String> ids = new ArrayList<>();
+            for (JsonNode node : data) {
+                String id = node.path("id").asText("");
+                String lower = id.toLowerCase();
+                // 只留 qwen 系；排除非文本对话模型（图像生成 / ASR / 实时语音）
+                if (id.isBlank() || !lower.startsWith("qwen")) {
+                    continue;
+                }
+                if (lower.contains("image") || lower.contains("asr") || lower.contains("realtime")) {
+                    continue;
+                }
+                ids.add(id);
+            }
+            ids.sort(Comparator.naturalOrder());
+            vendorModelsCache = ids;
+            vendorModelsCacheAt = System.currentTimeMillis();
+            return ids;
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("DashScope 模型清单拉取异常", e);
+            throw new BizException("DashScope 模型清单拉取失败：" + e.getMessage());
+        }
     }
 
     public ModelEntryDO create(ModelEntryDO request) {

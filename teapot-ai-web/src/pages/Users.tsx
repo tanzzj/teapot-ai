@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Space } from 'antd';
 import { Button, Form, Input, message, Modal, Popconfirm, Select, Table, Tag } from '@agentscope-ai/design';
-import { PlusOutlined } from '@ant-design/icons';
+import { SparkPlusLine } from '@agentscope-ai/icons';
 import { userCreate, userDisable, userPage, userUpdate } from '../api/auth';
 import { useAuthStore } from '../store/auth';
 import type { TeapotUser } from '../types';
@@ -76,7 +76,7 @@ export default function Users() {
   return (
     <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
       <Space style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+        <Button type="primary" icon={<SparkPlusLine />} onClick={() => setCreateOpen(true)}>
           新建用户
         </Button>
       </Space>

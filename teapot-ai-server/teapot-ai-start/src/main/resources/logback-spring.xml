@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 日志配置：沿用 Spring Boot 默认控制台格式，仅将 %m 替换为 %maskedMsg
+     （MaskingMessageConverter：URL userinfo 凭据脱敏，SPEC §15.12 补充） -->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <conversionRule conversionWord="maskedMsg"
+                    converterClass="com.teamer.teapot.ai.log.MaskingMessageConverter"/>
+    <!-- 覆盖默认控制台格式：%m -> %maskedMsg（其余部分与 Boot 默认一致） -->
+    <property name="CONSOLE_LOG_PATTERN"
+              value="%clr(%d{${LOG_DATEFORMAT_PATTERN:-yyyy-MM-dd'T'HH:mm:ss.SSSXXX}}){faint} %clr(${LOG_LEVEL_PATTERN:-%5p}) %clr(${PID:- }){magenta} %clr(---){faint} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %maskedMsg%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

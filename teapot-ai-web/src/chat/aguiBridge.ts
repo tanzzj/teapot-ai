@@ -308,12 +308,12 @@ export function createAguiFetch(opts: AguiFetchOptions) {
 
     const last = input[input.length - 1] as {
       role?: string;
-      content?: { type?: string; text?: string; image_url?: string }[];
+      content?: { type?: string; text?: string; image_url?: string; video_url?: string }[];
     } | undefined;
     // 按 AG-UI InputContent 协议转 parts（SPEC §19 多模态）：
-    //   text 段照旧；图片转 {type:'image', source:{type:'data'|'url', ...}}
-    // 模板 RequestBuilder 产出的图片 part 形如 {type:'image', image_url}，
-    // image_url 为前端本地压缩后的 data URL（云模型无法回访问内网，故不用 url 源）
+    //   text 段照旧；图片/视频转 {type:'image'|'video', source:{type:'data'|'url', ...}}
+    // 模板 RequestBuilder 产出的附件 part 形如 {type:'image', image_url} / {type:'video', video_url}，
+    // url 为前端本地压缩后的 data URL（base64 链路）或 OSS 直链（oss 链路，云模型可回访问）
     const parts: Record<string, unknown>[] = [];
     for (const c of last?.content ?? []) {
       if (c?.type === 'text') {
@@ -327,6 +327,16 @@ export function createAguiFetch(opts: AguiFetchOptions) {
           });
         } else {
           parts.push({ type: 'image', source: { type: 'url', value: c.image_url } });
+        }
+      } else if (c?.type === 'video' && c.video_url) {
+        const dataUrl = /^data:(video\/[a-z0-9.+-]+);base64,(.+)$/i.exec(c.video_url);
+        if (dataUrl) {
+          parts.push({
+            type: 'video',
+            source: { type: 'data', mimeType: dataUrl[1], value: dataUrl[2] },
+          });
+        } else {
+          parts.push({ type: 'video', source: { type: 'url', value: c.video_url } });
         }
       }
     }

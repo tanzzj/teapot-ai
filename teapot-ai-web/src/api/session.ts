@@ -2,7 +2,7 @@ import { http, unwrap } from './http';
 import type { ChatSession, Result } from '../types';
 
 /** 会话历史消息条目（后端按内容块拆分）：
- *  - user + type=text / type=image：用户文本与图片（imageUrl 为 data URL 或 http URL）
+ *  - user + type=text / type=image / type=video：用户文本与图片/视频（url 为 data URL、http URL 或取媒体端点引用）
  *  - assistant + type=text：文本消息
  *  - type=reasoning：深度思考
  *  - type=tool_call / tool_call_output：工具调用与结果 */
@@ -15,6 +15,9 @@ export interface SessionMessageItem {
   arguments?: string;
   output?: string;
   imageUrl?: string;
+  videoUrl?: string;
+  /** 消息时间戳（epoch millis，后端从 Msg.timestamp 解析；旧数据可能缺失） */
+  timestamp?: number;
 }
 
 export function sessionList(agentKey?: string) {

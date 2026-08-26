@@ -40,6 +40,15 @@ public class ModelController {
         return Result.ok(modelService.listEnabledCapabilities());
     }
 
+    /** DashScope 在售模型清单（admin；新建/编辑入口的模型名下拉数据源） */
+    @GetMapping("/vendor-models/{provider}")
+    public Result<List<String>> vendorModels(@PathVariable String provider) {
+        if (!"dashscope".equals(provider)) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(modelService.listDashScopeVendorModels());
+    }
+
     /** 全部模型入口（admin，含停用） */
     @GetMapping("/list")
     public Result<List<ModelEntryDO>> list() {
