@@ -258,11 +258,17 @@ function createRunParser() {
       }
 
       case 'RUN_ERROR': {
-        // 无 object 字段 → Builder 进入 failed 分支并渲染错误卡片
-        return {
-          code: String(ev.code ?? 'RUN_ERROR'),
-          message: String(ev.message ?? ev.error ?? '执行失败'),
-        };
+        // 无 object 字段 → Builder 进入 failed 分支并渲染错误卡片；
+        // 合约冲突重试预算耗尽后落到这里，给中文可读提示（SPEC §22.6）
+        const rawCode = String(ev.code ?? 'RUN_ERROR');
+        const rawMsg = String(ev.message ?? ev.error ?? '执行失败');
+        if (CONTRACT_ERROR_PATTERN.test(rawCode) || CONTRACT_ERROR_PATTERN.test(rawMsg)) {
+          return {
+            code: rawCode,
+            message: '上一轮回复仍在后台收尾（记忆整理/沙箱快照），等待超时。请稍等几秒后重新发送。',
+          };
+        }
+        return { code: rawCode, message: rawMsg };
       }
 
       case 'RAW': {
@@ -294,6 +300,100 @@ export interface AguiFetchOptions {
   agentKey: string;
   /** 取当前会话 id（作 AG-UI threadId，多轮上下文由后端 StateStore 保证） */
   getSessionId: () => string | undefined;
+}
+
+/**
+ * AG-UI 合约冲突（AGUI_INTERRUPT_CONTRACT_ERROR）：同 thread 已有活跃 run 时新请求被拒。
+ * 成因：后端回复文本流式结束后，harness 尾部后置处理（记忆 flush/整合、会话持久化、
+ * 沙箱快照）仍在执行，finishRun 挂接在事件流 doFinally，最长可达数分钟；此间用户已看到
+ * 完整回复并发送下一条 → 被合约拦截。尾部终会完成，故此处静默退避重试，
+ * 对 UI 表现为持续的「思考中」，预算耗尽才落错误卡片（SPEC §22.6）。
+ */
+const CONTRACT_ERROR_PATTERN = /AGUI_INTERRUPT_CONTRACT_ERROR|already has an active run/i;
+/** 合约重试总预算：覆盖实测最长约 3.6min 的尾部后置处理 */
+const CONTRACT_RETRY_BUDGET_MS = 5 * 60 * 1000;
+/** 首次重试等待，后续按 1.6 倍递增封顶 30s */
+const CONTRACT_RETRY_INITIAL_DELAY_MS = 3000;
+
+/** 可被 AbortSignal 打断的等待；abort 时以 AbortError 拒绝（模板按取消处理） */
+function sleepInterruptible(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    }, { once: true });
+  });
+}
+
+/**
+ * 探测响应是否为合约冲突：合约错误流固定为 RUN_STARTED → RUN_ERROR → RUN_FINISHED 三个短事件（约 1KB），
+ * 首事件不含特征，需扫到特征串或流结束；累计超阈值仍未命中则必是正常业务流，提前放行。
+ * 非合约路径通过 ReadableStream 回放已消费字节，调用方拿到与原响应等价的对象。
+ */
+async function peekContractError(resp: Response): Promise<{ retry: boolean; response: Response; firstData: string }> {
+  const body = resp.body;
+  if (!body) return { retry: false, response: resp, firstData: '' };
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
+  let buffer = '';
+  let firstData = '';
+  let verdict: 'retry' | 'pass' | null = null;
+  while (!verdict) {
+    const { done, value } = await reader.read();
+    if (value) {
+      chunks.push(value);
+      buffer += decoder.decode(value, { stream: true });
+    }
+    if (CONTRACT_ERROR_PATTERN.test(buffer)) {
+      verdict = 'retry';
+      break;
+    }
+    // 合约错误流仅约 1KB（三个短事件）；累计超过阈值仍未命中 → 必是正常业务流，提前放行减少缓存
+    if (buffer.length > 8192) {
+      verdict = 'pass';
+      break;
+    }
+    if (done) {
+      verdict = 'pass';
+      break;
+    }
+  }
+  // 预算耗尽重建错误响应时取含特征的 RUN_ERROR 行（首行是 RUN_STARTED，不含错误信息）
+  const errLine = buffer.split('\n').find(l => l.startsWith('data:') && CONTRACT_ERROR_PATTERN.test(l));
+  if (errLine) firstData = errLine.slice(5).trim();
+  const retry = verdict === 'retry';
+  const replayStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const c of chunks) controller.enqueue(c);
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      if (value) controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  const response = new Response(replayStream, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: resp.headers,
+  });
+  if (retry) {
+    // 重试路径下原响应不再使用，主动释放连接（预算耗尽时用 firstData 重建响应，不依赖回放）
+    void reader.cancel().catch(() => {});
+  }
+  return { retry, response, firstData };
 }
 
 /**
@@ -344,22 +444,46 @@ export function createAguiFetch(opts: AguiFetchOptions) {
       parts.push({ type: 'text', text: '' });
     }
 
-    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const threadId = opts.getSessionId() || `thread-${Date.now()}`;
-
-    return fetch(`/agui/run/${encodeURIComponent(opts.agentKey)}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem(ACCESS_TOKEN_KEY) || ''}`,
-        'X-Agent-Id': opts.agentKey,
-      },
-      body: JSON.stringify({
-        threadId,
-        runId,
-        messages: [{ id: `msg-${Date.now()}`, role: 'user', content: parts }],
-      }),
-      signal,
-    });
+    const url = `/agui/run/${encodeURIComponent(opts.agentKey)}`;
+    const deadline = Date.now() + CONTRACT_RETRY_BUDGET_MS;
+    let delay = CONTRACT_RETRY_INITIAL_DELAY_MS;
+    for (;;) {
+      const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem(ACCESS_TOKEN_KEY) || ''}`,
+          'X-Agent-Id': opts.agentKey,
+        },
+        body: JSON.stringify({
+          threadId,
+          runId,
+          messages: [{ id: `msg-${Date.now()}`, role: 'user', content: parts }],
+        }),
+        signal,
+      });
+      // 非 2xx 或无流：维持原行为交由上层处理（合约冲突走 200 + SSE 错误事件）
+      if (!resp.ok || !resp.body) return resp;
+      const peek = await peekContractError(resp);
+      if (!peek.retry) return peek.response;
+      if (Date.now() + delay > deadline) {
+        // 预算耗尽：用捕获的合约错误事件重建 SSE 响应 → RUN_ERROR 分支渲染中文提示卡片
+        return contractErrorResponse(peek.firstData);
+      }
+      console.warn(`[aguiBridge] 上一轮 run 仍在收尾，${Math.round(delay / 1000)}s 后重试 threadId=${threadId}`);
+      await sleepInterruptible(delay, signal);
+      delay = Math.min(Math.round(delay * 1.6), 30000);
+    }
   };
+}
+
+/** 预算耗尽时用捕获的合约错误事件构造 SSE 响应（原连接已释放，不可回放） */
+function contractErrorResponse(firstData: string): Response {
+  const payload = firstData || '{"type":"RUN_ERROR","code":"AGUI_INTERRUPT_CONTRACT_ERROR","message":"previous run still finishing"}';
+  return new Response(`data:${payload}\n\n`, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
 }

@@ -1929,6 +1929,25 @@ Agent 配置页（AgentDetail）不再内嵌全局凭证表单，改为**下拉�
 - `TeapotRuntimeContextResolver` 注入 JwtService：ContextUtil 无值时从请求头 `Authorization: Bearer` 补解析 uid（/agui/** 已经过滤器验签）；
 - 残留僵尸 run 为内存态，重启服务即清除。
 
+### 22.6 AG-UI 合约冲突静默重试（2026-08-26 线上复现）
+
+故障：连续对话再次出现 `AGUI_INTERRUPT_CONTRACT_ERROR: Thread already has an active run`（与 §22.5 不同根因）。
+
+根因链（digit-tim，E2B 沙箱 + LOCAL_SNAPSHOT）：
+1. `AguiRequestProcessor` 的 `finishRun` 挂接在 adapter 事件流 `doFinally`：回复文本流式结束后，
+   harness 尾部后置处理（记忆 flush/整合、会话持久化、沙箱快照）仍在同步执行，实测最长约 3.6min（PRE_CALL→POST_CALL）；
+2. 此间用户已看到完整回复并发送下一条 → `AguiResumeCoordinator.beginRun` 合约拦截，
+   事件流回 `RUN_STARTED → RUN_ERROR(AGUI_INTERRUPT_CONTRACT_ERROR) → RUN_FINISHED`；
+3. 尾部还会触发 `session-tree-mirror` 线程异常（沙箱已释放，`No active sandbox`），属无害噪声。
+   starter 无配置可让尾部异步化或提前 finishRun。
+
+修复（前端 `chat/aguiBridge.ts`，无后端改动）：
+- `createAguiFetch` 内置合约冲突探测（`peekContractError`：扫 SSE 首段，命中特征串即定性；
+  超 8KB 未命中必为正常业务流，回放已消费字节放行）；
+- 命中后静默退避重试（首等 3s，×1.6 递增封顶 30s，总预算 5min），UI 表现为持续「思考中」；
+  尾部终会完成，重试必能接上；预算耗尽才重建错误事件落卡片（中文可读提示）；
+- 被拒请求未触达 `beginRun` 之后的状态变更，重试同一条消息幂等安全；等待期可被模板 AbortSignal 打断。
+
 ---
 
 ## §23 头像上传（Agent + 用户，OSS 记录承载）
