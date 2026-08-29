@@ -6,6 +6,7 @@ import {
   SparkInternetLine,
   SparkDataLine,
   SparkLinkLine,
+  SparkMagicWandLine,
   SparkPlusLine,
   SparkSettingLine,
   SparkUserGroupLine,
@@ -21,6 +22,13 @@ import {
   updateChannelRecord,
 } from '../api/channelConfig';
 import {
+  createMCPRecord,
+  deleteMCPRecord,
+  mcpConfigList,
+  toggleMCPRecord,
+  updateMCPRecord,
+} from '../api/mcpConfig';
+import {
   createSandboxRecord,
   createStorageRecord,
   deleteSandboxRecord,
@@ -33,6 +41,9 @@ import {
 import type {
   ChannelListData,
   ChannelRecord,
+  MCPListData,
+  MCPRecord,
+  MCPTransport,
   SandboxListData,
   SandboxRecord,
   StorageListData,
@@ -47,13 +58,13 @@ import { ResponsiveModal } from '../components/ResponsiveModal';
  * 载体选择已下放 Agent 级（AgentConfig feature，§22.1/§22.2/§24.5），本页只维护记录。
  * 布局复刻 AgentDetail 左侧胶囊菜单。
  */
-type Section = 'models' | 'users' | 'storage' | 'sandbox' | 'channel';
+type Section = 'models' | 'users' | 'storage' | 'sandbox' | 'channel' | 'mcp';
 
 export default function SystemConfigPage() {
   const { section: rawSection } = useParams();
   const navigate = useNavigate();
   const { token } = theme.useToken();
-  const section: Section = (['models', 'users', 'storage', 'sandbox', 'channel'] as const)
+  const section: Section = (['models', 'users', 'storage', 'sandbox', 'channel', 'mcp'] as const)
     .includes(rawSection as Section)
     ? (rawSection as Section)
     : 'models';
@@ -64,6 +75,7 @@ export default function SystemConfigPage() {
     { key: 'storage', label: '存储', icon: <SparkDataLine /> },
     { key: 'sandbox', label: '沙箱', icon: <SparkInternetLine /> },
     { key: 'channel', label: '连接器', icon: <SparkLinkLine /> },
+    { key: 'mcp', label: 'MCP', icon: <SparkMagicWandLine /> },
   ];
 
   return (
@@ -71,7 +83,7 @@ export default function SystemConfigPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
         <SparkSettingLine style={{ fontSize: 18, color: 'rgba(26,26,29,0.7)' }} />
         <span style={{ fontWeight: 700, fontSize: 17, color: 'rgba(26, 26, 29, 0.92)' }}>系统配置</span>
-        <span style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>模型 · 用户 · 存储 · 沙箱 · 连接器（仅管理员）</span>
+        <span style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>模型 · 用户 · 存储 · 沙箱 · 连接器 · MCP（仅管理员）</span>
       </div>
 
       <Row gutter={20}>
@@ -113,6 +125,7 @@ export default function SystemConfigPage() {
           {section === 'storage' && <StorageSection />}
           {section === 'sandbox' && <SandboxSection />}
           {section === 'channel' && <ChannelSection />}
+          {section === 'mcp' && <MCPSection />}
         </Col>
       </Row>
       {/* token 仅用于保持主题上下文一致（与其他页面同风格） */}
@@ -866,6 +879,278 @@ function ChannelSection() {
                 </Form.Item>
               </>
             )}
+            <Form.Item name="remark" label="备注">
+              <Input placeholder="可选" />
+            </Form.Item>
+          </Form>
+        </ResponsiveModal>
+      </div>
+    </Spin>
+  );
+}
+
+/* ---------------- MCP Server 配置分区（参考 QwenPaw MCP 配置模型） ---------------- */
+
+/** 将 env/headers 的 Record<string,string> 转为 "KEY=VALUE" 逐行文本 */
+function mapToLines(m?: Record<string, string>): string {
+  if (!m || Object.keys(m).length === 0) return '';
+  return Object.entries(m).map(([k, v]) => `${k}=${v}`).join('\n');
+}
+
+/** 将 "KEY=VALUE" 逐行文本转为 Record<string,string> */
+function linesToMap(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!text) return result;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx <= 0) continue;
+    result[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
+  }
+  return result;
+}
+
+/** 将 args 数组转为逐行文本 */
+function argsToLines(args?: string[]): string {
+  return (args ?? []).join('\n');
+}
+
+/** 将逐行文本转为 args 数组 */
+function linesToArgs(text: string): string[] {
+  return text.split('\n').map(l => l.trim()).filter(Boolean);
+}
+
+function MCPSection() {
+  const [recordForm] = Form.useForm();
+  const [loading, setLoading] = useState(true);
+  const [savingRecord, setSavingRecord] = useState(false);
+  const [listData, setListData] = useState<MCPListData | null>(null);
+  const [modal, setModal] = useState<{ mode: 'create' | 'edit' } | null>(null);
+  const transport = Form.useWatch('transport', recordForm);
+  const isPhone = useIsPhone();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setListData(await mcpConfigList());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const onDelete = async (name: string) => {
+    const l = await deleteMCPRecord(name);
+    setListData(l);
+    message.success('MCP 配置已删除');
+  };
+
+  const onToggle = async (name: string, enabled: boolean) => {
+    const l = await toggleMCPRecord(name, !enabled);
+    setListData(l);
+    message.success(!enabled ? '已启用' : '已禁用');
+  };
+
+  const openCreate = () => {
+    recordForm.resetFields();
+    recordForm.setFieldsValue({ transport: 'streamable_http', enabled: true });
+    setModal({ mode: 'create' });
+  };
+
+  const openEdit = (record: MCPRecord) => {
+    recordForm.resetFields();
+    recordForm.setFieldsValue({
+      name: record.name,
+      transport: record.transport,
+      command: record.command,
+      args: argsToLines(record.args),
+      env: mapToLines(record.env),
+      url: record.url,
+      headers: mapToLines(record.headers),
+      description: record.description,
+      remark: record.remark,
+    });
+    setModal({ mode: 'edit' });
+  };
+
+  const onSaveRecord = async () => {
+    const values = await recordForm.validateFields();
+    setSavingRecord(true);
+    try {
+      const payload: Record<string, unknown> = {
+        name: values.name,
+        transport: values.transport || 'streamable_http',
+        command: values.command || '',
+        args: linesToArgs(values.args || ''),
+        env: linesToMap(values.env || ''),
+        url: values.url || '',
+        headers: linesToMap(values.headers || ''),
+        description: values.description || '',
+        remark: values.remark || '',
+      };
+      const l = modal?.mode === 'edit'
+        ? await updateMCPRecord(payload)
+        : await createMCPRecord(payload);
+      setListData(l);
+      setModal(null);
+      message.success(modal?.mode === 'edit' ? 'MCP 配置已更新' : 'MCP 配置已创建');
+    } finally {
+      setSavingRecord(false);
+    }
+  };
+
+  const transportLabel: Record<MCPTransport, string> = {
+    stdio: '本地进程',
+    streamable_http: 'Streamable HTTP',
+    sse: 'SSE',
+  };
+
+  return (
+    <Spin spinning={loading}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="glass-card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>MCP Server 配置</div>
+              <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)' }}>
+                管理 MCP（Model Context Protocol）Server 连接，支持本地进程（stdio）与远程服务（HTTP/SSE）；
+                Agent 可在各自配置页选择启用。
+              </div>
+            </div>
+            <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
+              新建配置
+            </Button>
+          </div>
+          <Table<MCPRecord>
+            rowKey="name"
+            size="small"
+            pagination={false}
+            dataSource={listData?.records ?? []}
+            scroll={isPhone ? { x: 720 } : undefined}
+            columns={[
+              { title: '名称', dataIndex: 'name' },
+              {
+                title: '传输协议',
+                dataIndex: 'transport',
+                render: (v: MCPTransport) => (
+                  <Tag color={v === 'stdio' ? 'green' : v === 'streamable_http' ? 'blue' : 'purple'}>
+                    {transportLabel[v] || v}
+                  </Tag>
+                ),
+              },
+              {
+                title: '连接目标',
+                render: (_: unknown, r: MCPRecord) =>
+                  r.transport === 'stdio' ? (r.command || '-') : (r.url || '-'),
+              },
+              {
+                title: '状态',
+                dataIndex: 'enabled',
+                render: (v: boolean) => (v ? <Tag color="blue">已启用</Tag> : <Tag>已禁用</Tag>),
+              },
+              {
+                title: '更新时间',
+                dataIndex: 'updatedAt',
+                render: (v?: string) => (v ? v.replace('T', ' ').slice(0, 16) : '-'),
+              },
+              {
+                title: '操作',
+                render: (_: unknown, r: MCPRecord) => (
+                  <span style={{ display: 'flex', gap: 10, fontSize: 13 }}>
+                    <a onClick={() => onToggle(r.name, r.enabled)}>{r.enabled ? '禁用' : '启用'}</a>
+                    <a onClick={() => openEdit(r)}>编辑</a>
+                    <Popconfirm title={`删除 MCP 配置 ${r.name}？`} onConfirm={() => onDelete(r.name)}>
+                      <a style={{ color: '#cf1322' }}>删除</a>
+                    </Popconfirm>
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </div>
+
+        <ResponsiveModal
+          title={modal?.mode === 'edit' ? '编辑 MCP 配置' : '新建 MCP 配置'}
+          open={modal !== null}
+          confirmLoading={savingRecord}
+          onOk={onSaveRecord}
+          onCancel={() => setModal(null)}
+          destroyOnClose
+          width={620}
+        >
+          <Form form={recordForm} layout="vertical" style={{ marginTop: 12 }}>
+            <Row gutter={16}>
+              <Col xs={24} sm={12}>
+                <Form.Item name="name" label="名称" rules={[{ required: true, message: '必填' }]}>
+                  <Input placeholder="如 filesystem、github-mcp" disabled={modal?.mode === 'edit'} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12}>
+                <Form.Item name="transport" label="传输协议" rules={[{ required: true, message: '必选' }]}>
+                  <Select
+                    style={{ width: '100%' }}
+                    options={[
+                      { value: 'streamable_http', label: 'Streamable HTTP（远程）' },
+                      { value: 'sse', label: 'SSE（远程）' },
+                      { value: 'stdio', label: 'Stdio（本地进程）' },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            {transport === 'stdio' ? (
+              <>
+                <Form.Item
+                  name="command"
+                  label="启动命令"
+                  rules={[{ required: true, message: '必填' }]}
+                  tooltip="本地进程的启动命令，如 npx、uvx、node 等"
+                >
+                  <Input placeholder="如 npx、uvx、node" />
+                </Form.Item>
+                <Form.Item
+                  name="args"
+                  label="命令参数"
+                  tooltip="每行一个参数，如 @modelcontextprotocol/server-filesystem"
+                >
+                  <Input.TextArea rows={3} placeholder={"@modelcontextprotocol/server-filesystem\n/path/to/dir"} style={{ fontFamily: 'monospace' }} />
+                </Form.Item>
+                <Form.Item
+                  name="env"
+                  label="环境变量"
+                  tooltip="每行 KEY=VALUE 格式"
+                >
+                  <Input.TextArea rows={3} placeholder={"API_KEY=your-key\nDEBUG=true"} style={{ fontFamily: 'monospace' }} />
+                </Form.Item>
+              </>
+            ) : (
+              <>
+                <Form.Item
+                  name="url"
+                  label="服务 URL"
+                  rules={[{ required: true, message: '必填' }]}
+                  tooltip="MCP Server 的 HTTP/SSE 端点地址"
+                >
+                  <Input placeholder={transport === 'sse' ? 'http://localhost:3001/sse' : 'http://localhost:3001/mcp'} />
+                </Form.Item>
+                <Form.Item
+                  name="headers"
+                  label="请求头"
+                  tooltip="每行 KEY=VALUE 格式，如 Authorization=Bearer xxx"
+                >
+                  <Input.TextArea rows={3} placeholder={"Authorization=Bearer your-token"} style={{ fontFamily: 'monospace' }} />
+                </Form.Item>
+              </>
+            )}
+
+            <Form.Item name="description" label="描述">
+              <Input placeholder="可选，简述该 MCP Server 提供的能力" />
+            </Form.Item>
             <Form.Item name="remark" label="备注">
               <Input placeholder="可选" />
             </Form.Item>

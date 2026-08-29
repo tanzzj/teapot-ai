@@ -36,6 +36,7 @@ import {
 } from '../api/agent';
 import { sandboxOptions, sandboxRecordNames, storageRecordNames } from '../api/config';
 import { channelRegistry } from '../api/channelConfig';
+import { mcpRegistry } from '../api/mcpConfig';
 import HistoryChatPanel from '../chat/HistoryChatPanel';
 import { uploadAgentAvatar } from '../api/avatar';
 import { skillList } from '../api/skill';
@@ -45,18 +46,20 @@ import { useIsPhone } from '../hooks/useIsPhone';
 import { PHONE_BP } from '../theme/breakpoints';
 import type {
   AgentChannelConfig,
+  AgentMCPConfig,
   AgentMemoryConfig,
   AgentMultiAgentConfig,
   AgentRuntimeConfig,
   AgentSandboxConfig,
   ChannelRecordName,
+  MCPRecordName,
   SandboxOptions,
   SandboxRecordName,
   SkillListItem,
   StorageRecordName,
 } from '../types';
 
-type Section = 'profile' | 'basic' | 'tools' | 'multiagent' | 'memory' | 'sandbox' | 'channel' | 'skills' | 'history';
+type Section = 'profile' | 'basic' | 'tools' | 'multiagent' | 'memory' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
 
 /** 胶囊菜单展开宽度（移动端悬浮展开层同宽） */
 const MENU_W = 208;
@@ -153,12 +156,14 @@ export default function AgentDetailPage() {
   const [storageNames, setStorageNames] = useState<StorageRecordName[]>([]);
   const [sandboxNames, setSandboxNames] = useState<SandboxRecordName[]>([]);
   const [channelNames, setChannelNames] = useState<ChannelRecordName[]>([]);
+  const [mcpNames, setMcpNames] = useState<MCPRecordName[]>([]);
   /** 已加载的原始 feature 命名空间：分区保存时合并，避免单分区覆盖另一分区（§22） */
   const [loadedFeature, setLoadedFeature] = useState<Record<string, unknown>>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
   const sbEnabled = Form.useWatch(['sandbox', 'enabled'], form);
   const sbPersistence = Form.useWatch(['sandbox', 'persistence'], form);
   const chEnabled = Form.useWatch(['channel', 'enabled'], form);
+  const mcpEnabled = Form.useWatch(['mcp', 'enabled'], form);
   /** 上下文压缩显式开关（映射 compactionTrigger：关 = -1，SPEC §25） */
   const compactionEnabled = Form.useWatch('compactionEnabled', form);
   /** 记忆落盘策略（throttled 时展示节流间隔，SPEC §25） */
@@ -215,7 +220,7 @@ export default function AgentDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [d, presets, skills, sbOpts, ossNames, sbRecordNames, chNames] = await Promise.all([
+      const [d, presets, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList] = await Promise.all([
         agentDetail(agentKey),
         modelPresets(),
         skillList(),
@@ -223,11 +228,13 @@ export default function AgentDetailPage() {
         storageRecordNames().catch(() => [] as StorageRecordName[]),
         sandboxRecordNames().catch(() => [] as SandboxRecordName[]),
         channelRegistry().catch(() => [] as ChannelRecordName[]),
+        mcpRegistry().catch(() => [] as MCPRecordName[]),
       ]);
       setSbOptions(sbOpts);
       setStorageNames(ossNames);
       setSandboxNames(sbRecordNames);
       setChannelNames(chNames);
+      setMcpNames(mcpList);
       setDetail({
         name: d.agent.name,
         description: d.agent.description,
@@ -238,6 +245,7 @@ export default function AgentDetailPage() {
       // feature.sandbox / feature.storage / feature.channel / feature.runtime 回显（SPEC §16.11/§22/§24.5）
       let sb: Partial<AgentSandboxConfig> = {};
       let ch: Partial<AgentChannelConfig> = {};
+      let mcp: Partial<AgentMCPConfig> = {};
       let rt: Partial<AgentRuntimeConfig> = {};
       let ma: Partial<AgentMultiAgentConfig> = {};
       let mem: Partial<AgentMemoryConfig> = {};
@@ -253,6 +261,9 @@ export default function AgentDetailPage() {
             }
             if (f.channel) {
               ch = f.channel;
+            }
+            if (f.mcp) {
+              mcp = f.mcp;
             }
             if (f.runtime) {
               rt = f.runtime;
@@ -297,6 +308,10 @@ export default function AgentDetailPage() {
           channelRecord: ch.channelRecord,
           dmScope: ch.dmScope ?? 'PER_CHANNEL_PEER',
         },
+        mcp: {
+          enabled: !!mcp.enabled,
+          mcpRecords: mcp.mcpRecords ?? [],
+        },
         runtime: {
           thinkingMode: !!rt.thinkingMode,
           temperature: rt.temperature,
@@ -334,10 +349,11 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, channel, runtime, multiagent, memory, compactionEnabled, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, compactionEnabled, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
       channel?: Partial<AgentChannelConfig>;
+      mcp?: Partial<AgentMCPConfig>;
       runtime?: Partial<AgentRuntimeConfig>;
       multiagent?: Partial<AgentMultiAgentConfig>;
       memory?: Partial<AgentMemoryConfig>;
@@ -379,6 +395,13 @@ export default function AgentDetailPage() {
       }
       feature.channel = chOut.enabled ? chOut : { enabled: false };
     }
+    if (mcp !== undefined) {
+      const mcpOut = { ...mcp };
+      if (Array.isArray(mcpOut.mcpRecords)) {
+        mcpOut.mcpRecords = mcpOut.mcpRecords.map((s: string) => s.trim()).filter(Boolean);
+      }
+      feature.mcp = mcpOut.enabled ? mcpOut : { enabled: false };
+    }
     if (runtime !== undefined) {
       // runtime 跨 Basic Info / Tool & Advanced 两分区提交：仅合并本次挂载字段，null = 清除该项
       const merged: Record<string, unknown> = { ...((loadedFeature.runtime as Record<string, unknown>) || {}) };
@@ -419,6 +442,7 @@ export default function AgentDetailPage() {
     { key: 'memory', label: '记忆', icon: <SparkMemoryLine /> },
     { key: 'sandbox', label: 'Sandbox', icon: <SparkInternetLine /> },
     { key: 'channel', label: 'Channel', icon: <SparkLinkLine /> },
+    { key: 'mcp', label: 'MCP', icon: <SparkMagicWandLine /> },
     { key: 'skills', label: 'Skills', icon: <SparkMagicWandLine /> },
     ...(isAdmin ? [{ key: 'history' as Section, label: '会话历史', icon: <SparkHistoryLine /> }] : []),
   ];
@@ -1153,6 +1177,63 @@ export default function AgentDetailPage() {
                     </div>
                     <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginTop: 12 }}>
                       当前共 {channelNames.length} 条渠道连接记录；启用时必选其一，凭证由记录决定。
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {section === 'mcp' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {mcpNames.length === 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="MCP 未配置"
+                    description="请联系管理员在「系统配置 - MCP」中新建 MCP Server 配置后再启用。"
+                  />
+                )}
+                <div className="glass-card" style={{ padding: 24 }}>
+                  <Form form={form} layout="vertical">
+                    <Form.Item
+                      name={['mcp', 'enabled']}
+                      label="启用 MCP 工具"
+                      valuePropName="checked"
+                      tooltip="启用后 Agent 可调用系统配置中注册的 MCP Server 提供的工具能力"
+                    >
+                      <Switch disabled={mcpNames.length === 0} />
+                    </Form.Item>
+                    {mcpEnabled && (
+                      <Form.Item
+                        name={['mcp', 'mcpRecords']}
+                        label="MCP Server 记录"
+                        tooltip="选择该 Agent 要使用的 MCP Server（可多选）；记录在系统配置 - MCP 中维护"
+                        rules={[{ required: true, message: '启用 MCP 必须选择至少一条记录' }]}
+                      >
+                        <Select
+                          mode="multiple"
+                          placeholder="选择 MCP Server 记录"
+                          options={mcpNames.map((r) => ({
+                            value: r.name,
+                            label: `${r.name}（${r.transport === 'stdio' ? '本地进程' : r.transport === 'streamable_http' ? 'Streamable HTTP' : 'SSE'}${r.description ? ' - ' + r.description : ''}）`,
+                          }))}
+                        />
+                      </Form.Item>
+                    )}
+                  </Form>
+                </div>
+
+                {isAdmin && (
+                  <div className="glass-card" style={{ padding: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>MCP Server 配置</div>
+                      <div style={{ flex: 1 }} />
+                      <Button icon={<SparkSettingLine />} onClick={() => navigate('/system/mcp')}>
+                        前往系统配置
+                      </Button>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginTop: 12 }}>
+                      当前共 {mcpNames.length} 条 MCP Server 配置；启用时至少选择一条。
                     </div>
                   </div>
                 )}

@@ -1,4 +1,5 @@
 import { ACCESS_TOKEN_KEY } from '../api/http';
+import { consumeResume, registerInterrupts, resetForRun } from './askUserStore';
 
 /**
  * AG-UI ↔ AgentScope Runtime WebUI 协议桥接（参照 sparkdesign chat template）。
@@ -247,6 +248,17 @@ function createRunParser() {
             content: [textContent(ANSWER_MSG_ID, state.answerText, true)],
           });
         }
+        // 中断登记（ask_user_question 等工具挂起）：outcome={type:'interrupt', interrupts:[...]}；
+        // 全量登记——AguiResumeCoordinator 要求下一次请求的 resume[] 精确覆盖所有未决中断
+        resetForRun();
+        const outcome = ev.outcome as { type?: string; interrupts?: Record<string, unknown>[] } | undefined;
+        if (outcome?.type === 'interrupt' && Array.isArray(outcome.interrupts)) {
+          registerInterrupts(outcome.interrupts.map((i) => ({
+            interruptId: String(i.id ?? ''),
+            toolCallId: String(i.toolCallId ?? ''),
+            toolName: String((i.metadata as Record<string, unknown> | undefined)?.toolName ?? ''),
+          })));
+        }
         return {
           object: 'response',
           id: `resp-${Date.now()}`,
@@ -458,6 +470,9 @@ export function createAguiFetch(opts: AguiFetchOptions) {
     const memoryMode = opts.getMemoryMode?.();
     const planMode = opts.getPlanMode?.();
     const url = `/agui/run/${encodeURIComponent(opts.agentKey)}`;
+    // 未决中断恢复（ask_user_question）：点选答案携带 resolved；用户直接打字则全部 cancelled 兜底。
+    // 在重试循环外消费一次，合约冲突重试复用同一份，避免重复消费
+    const resume = consumeResume();
     const deadline = Date.now() + CONTRACT_RETRY_BUDGET_MS;
     let delay = CONTRACT_RETRY_INITIAL_DELAY_MS;
     for (;;) {
@@ -473,6 +488,8 @@ export function createAguiFetch(opts: AguiFetchOptions) {
           threadId,
           runId,
           messages: [{ id: `msg-${Date.now()}`, role: 'user', content: parts }],
+          // 未决中断恢复：携带则后端按 resume 契约恢复被挂起的工具（如 ask_user_question）
+          ...(resume ? { resume } : {}),
           // 请求级开关（SPEC §25）：仅显式选择时才携带，后端缺失 = 跟随 Agent 配置
           ...((memoryMode === undefined && planMode === undefined)
             ? {}

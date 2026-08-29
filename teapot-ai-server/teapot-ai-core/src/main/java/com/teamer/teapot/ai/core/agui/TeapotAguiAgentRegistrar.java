@@ -3,7 +3,9 @@ package com.teamer.teapot.ai.core.agui;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.service.AgentRegistry;
+import com.teamer.teapot.ai.core.tool.AskUserQuestionTool;
 import io.agentscope.core.agui.registry.AguiAgentRegistry;
+import io.agentscope.harness.agent.HarnessAgent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -45,7 +47,12 @@ public class TeapotAguiAgentRegistrar implements ApplicationRunner {
 
     /** 注册（惰性 supplier，首次 AG-UI 请求才构建 HarnessAgent 实例） */
     public void register(String agentKey) {
-        aguiAgentRegistry.registerFactory(agentKey, () -> agentRegistry.getOrCreate(agentKey));
+        aguiAgentRegistry.registerFactory(agentKey, () -> {
+            HarnessAgent agent = agentRegistry.getOrCreate(agentKey);
+            // ask_user_question 仅挂 Web/AG-UI 链路：渠道无法渲染选项卡片，挂起将无人应答
+            agent.getToolkit().registerTool(new AskUserQuestionTool());
+            return agent;
+        });
     }
 
     /** 注销（软删/停用时调用） */

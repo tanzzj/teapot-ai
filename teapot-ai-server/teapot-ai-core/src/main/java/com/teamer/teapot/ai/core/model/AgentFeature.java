@@ -28,6 +28,8 @@ public class AgentFeature {
     public static final String NS_MULTIAGENT = "multiagent";
     /** 长期记忆（SPEC §25）：两层记忆管线开关与 flush 触发策略（缺省开启，对齐 SDK 默认） */
     public static final String NS_MEMORY = "memory";
+    /** MCP Server 引用：Agent 启用的 MCP 工具来源（引用 t_mcp_config 记录名） */
+    public static final String NS_MCP = "mcp";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
@@ -196,6 +198,26 @@ public class AgentFeature {
         }
     }
 
+    /** mcp 命名空间；未配置返回 null */
+    @SuppressWarnings("unchecked")
+    public MCP getMcp() {
+        Object raw = namespaces.get(NS_MCP);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, MCP.class);
+    }
+
+    /** 写入/替换 mcp 命名空间 */
+    public void setMcp(MCP mcp) {
+        if (mcp == null) {
+            namespaces.remove(NS_MCP);
+        } else {
+            namespaces.put(NS_MCP, MAPPER.convertValue(mcp, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
     /**
      * 保存时强校验（SPEC §16.6/§22 校验表）：不合法直接抛 BizException 拒绝。
      * 记录存在性由 AgentService 补充校验（模型层不依赖 Service）。
@@ -205,6 +227,7 @@ public class AgentFeature {
     public void validate(boolean agentRunConfigured) {
         validateStorage();
         validateChannel();
+        validateMcp();
         validateRuntime();
         validateMemory();
         Sandbox sb = getSandbox();
@@ -319,6 +342,17 @@ public class AgentFeature {
         }
     }
 
+    /** mcp 命名空间校验：启用时 mcpRecords 不能为空 */
+    private void validateMcp() {
+        MCP mcp = getMcp();
+        if (mcp == null || !mcp.isEnabled()) {
+            return;
+        }
+        if (mcp.getMcpRecords() == null || mcp.getMcpRecords().isEmpty()) {
+            throw new BizException("启用 MCP 必须选择至少一条 MCP Server 记录（系统配置 - MCP 中维护）");
+        }
+    }
+
     /** storage 命名空间结构（SPEC §22.1：图片存储载体按 Agent 选择，非全局） */
     @Data
     public static class Storage {
@@ -354,6 +388,15 @@ public class AgentFeature {
         private String flushTrigger;
         /** flushTrigger=throttled 时的最小间隔分钟数（1–1440） */
         private Integer flushThrottleMinutes;
+    }
+
+    /** mcp 命名空间结构：Agent 引用的 MCP Server 记录列表（引用 t_mcp_config.name） */
+    @Data
+    public static class MCP {
+        /** 是否启用 MCP 工具 */
+        private boolean enabled;
+        /** 引用的 t_mcp_config 记录名列表（启用时非空） */
+        private List<String> mcpRecords;
     }
 
     /** runtime 命名空间结构：字段全部可空（null = 未配置，回落 SDK 默认 / 存量行为） */

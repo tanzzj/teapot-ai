@@ -95,7 +95,7 @@ function extractTodos(argsStr: string): TodoItem[] {
 }
 
 /** 计划卡片外壳（与聊天区玻璃拟态风格一致） */
-function CardShell(props: { header: React.ReactNode; children: React.ReactNode }) {
+export function CardShell(props: { header: React.ReactNode; children: React.ReactNode }) {
   return (
     <div
       style={{
@@ -116,7 +116,7 @@ function CardShell(props: { header: React.ReactNode; children: React.ReactNode }
   );
 }
 
-function headerRow(icon: React.ReactNode, title: string, extra?: React.ReactNode) {
+export function headerRow(icon: React.ReactNode, title: string, extra?: React.ReactNode) {
   return (
     <div
       style={{

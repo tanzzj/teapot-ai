@@ -117,6 +117,14 @@ export interface AgentMemoryConfig {
   flushThrottleMinutes?: number;
 }
 
+/** feature.mcp 结构：Agent 级 MCP Server 引用（引用系统配置中的 MCP 记录名） */
+export interface AgentMCPConfig {
+  /** 是否启用 MCP 工具 */
+  enabled: boolean;
+  /** 引用的 t_mcp_config 记录名列表（启用时非空） */
+  mcpRecords?: string[];
+}
+
 /** feature.channel 结构（SPEC §24.5：Agent 渠道连接器配置，可与 sandbox 共存） */
 export interface AgentChannelConfig {
   enabled: boolean;
@@ -341,4 +349,37 @@ export interface ChatSession {
   title?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/* ---------------- MCP Server 配置（参考 QwenPaw MCP 配置模型） ---------------- */
+
+/** MCP 传输协议 */
+export type MCPTransport = 'stdio' | 'streamable_http' | 'sse';
+
+/** MCP Server 配置记录（GET /api/mcp-config/list） */
+export interface MCPRecord {
+  name: string;
+  transport: MCPTransport;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  enabled: boolean;
+  description?: string;
+  remark?: string;
+  updatedAt?: string;
+}
+
+/** GET /api/mcp-config/list 出参 */
+export interface MCPListData {
+  records: MCPRecord[];
+}
+
+/** MCP 记录轻量名单行（developer/viewer 可读，Agent 配置下拉用） */
+export interface MCPRecordName {
+  name: string;
+  transport: MCPTransport;
+  enabled: boolean;
+  description?: string;
 }

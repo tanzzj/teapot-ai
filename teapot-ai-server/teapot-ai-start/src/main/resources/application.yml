@@ -41,6 +41,7 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/config/storage-record-names     # OSS 记录名单（仅名称，Agent 配置下拉，SPEC §22.1）
         - /api/config/sandbox-record-names     # 沙箱记录名单（仅名称/linkType，Agent 配置下拉，SPEC §22.2）
         - /api/channel-config/registry         # 连接器记录名单（仅名称/类型，Agent 配置下拉，SPEC §24.4）
+        - /api/mcp-config/registry             # MCP 配置名单（仅名称/transport，Agent 配置下拉）
         - /api/avatar/*                        # Agent/用户头像上传（SPEC §23）
         - /api/user/profile
         - /agui/*
@@ -57,6 +58,7 @@ rbac:                                            # 登录-用户体系（SPEC §
         - /api/config/storage-record-names     # OSS 记录名单（仅名称，Agent 配置下拉，SPEC §22.1）
         - /api/config/sandbox-record-names     # 沙箱记录名单（仅名称/linkType，Agent 配置下拉，SPEC §22.2）
         - /api/channel-config/registry         # 连接器记录名单（仅名称/类型，Agent 配置下拉，SPEC §24.4）
+        - /api/mcp-config/registry             # MCP 配置名单（仅名称/transport，Agent 配置下拉）
         - /api/avatar/user                     # 仅本人头像上传（SPEC §23）
         - /api/user/profile
         - /agui/*

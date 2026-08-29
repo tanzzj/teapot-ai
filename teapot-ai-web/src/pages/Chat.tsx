@@ -11,11 +11,13 @@ import {
   useChatAnywhereSessions,
   useChatAnywhereSessionsState,
 } from '@agentscope-ai/chat';
-import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
+import type { IAgentScopeRuntimeWebUIOptions, IAgentScopeRuntimeWebUIRef } from '@agentscope-ai/chat';
 import type { SessionItem } from '../chat/sessionBridge';
 import { agentList } from '../api/agent';
 import { modelCapabilities } from '../api/model';
 import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
+import { AskUserCard } from '../chat/AskUserCard';
+import { registerSubmit } from '../chat/askUserStore';
 import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
 import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
@@ -198,6 +200,13 @@ export default function Chat() {
     sessionGetterRef.current = getter;
   }, []);
 
+  /** WebUI ref：ask_user_question 卡片点选后经 input.submit 程序化提交触发恢复 */
+  const webUIRef = useRef<IAgentScopeRuntimeWebUIRef>(null);
+  useEffect(() => {
+    registerSubmit((query) => webUIRef.current?.input.submit({ query }));
+    return () => registerSubmit(null);
+  }, []);
+
   useEffect(() => {
     const onResize = () => {
       setIsPhone(window.innerWidth < PHONE_BP);
@@ -346,6 +355,7 @@ export default function Chat() {
         plan_write: PlanWriteCard,
         plan_exit: PlanExitCard,
         todo_write: TodoWriteCard,
+        ask_user_question: AskUserCard,
       },
       session: {
         multiple: true,
@@ -517,7 +527,7 @@ export default function Chat() {
       )}
       <div style={{ height: '100%', flex: 1, minWidth: 0, display: showHome ? 'none' : undefined }}>
         {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
-        <AgentScopeRuntimeWebUI key={currentAgent} options={options} />
+        <AgentScopeRuntimeWebUI key={currentAgent} options={options} ref={webUIRef} />
       </div>
       {/* 记忆模式请求级开关（SPEC §25）：右上角悬浮，覆盖 Agent 配置，仅本次会话页生效并持久 */}
       {!showHome && (
