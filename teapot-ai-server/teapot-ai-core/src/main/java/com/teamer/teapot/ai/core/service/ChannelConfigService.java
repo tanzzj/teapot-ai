@@ -37,9 +37,10 @@ import java.util.Map;
 @Service
 public class ChannelConfigService {
 
-    /** 渠道类型（SPEC §24.3 枚举：dingtalk v1；discord §24 修订，自实现 JDA 适配器） */
+    /** 渠道类型（SPEC §24.3 枚举：dingtalk v1；discord §24 修订；github §24 修订，webhook 回调适配器） */
     public static final String TYPE_DINGTALK = "dingtalk";
     public static final String TYPE_DISCORD = "discord";
+    public static final String TYPE_GITHUB = "github";
 
     /** 测试连接专用 HTTP 客户端（走 JVM 系统代理，Discord 经 clash 出海，§24.10） */
     private static final HttpClient TEST_HTTP_CLIENT = HttpClient.newBuilder()
@@ -66,7 +67,7 @@ public class ChannelConfigService {
         return channelConfigMapper.selectAll();
     }
 
-    /** 按名取记录（app_secret 已解密，只读使用）；不存在返回 null */
+    /** 按名取记录（app_secret/webhook_secret 已解密，只读使用）；不存在返回 null */
     public ChannelConfigDO getPlain(String name) {
         if (name == null || name.isBlank()) {
             return null;
@@ -76,13 +77,17 @@ public class ChannelConfigService {
             return null;
         }
         row.setAppSecret(decryptQuiet(row.getAppSecret(), row.getName()));
+        row.setWebhookSecret(decryptQuiet(row.getWebhookSecret(), row.getName()));
         return row;
     }
 
-    /** 记录凭证是否齐备（解密后明文判断）：钉钉 appKey+appSecret；Discord 仅 botToken（app_secret 列） */
+    /** 记录凭证是否齐备（解密后明文判断）：钉钉 appKey+appSecret；Discord 仅 botToken；GitHub token+webhookSecret */
     public static boolean configured(ChannelConfigDO plain) {
         if (plain == null || !notBlank(plain.getAppSecret())) {
             return false;
+        }
+        if (TYPE_GITHUB.equals(plain.getChannelType())) {
+            return notBlank(plain.getWebhookSecret());
         }
         return TYPE_DISCORD.equals(plain.getChannelType()) || notBlank(plain.getAppKey());
     }
@@ -95,8 +100,9 @@ public class ChannelConfigService {
             throw new BizException("记录名已存在：" + record.getName());
         }
         normalizeChannelType(record);
-        requireCredentials(record.getChannelType(), record.getAppKey(), record.getAppSecret());
+        requireCredentials(record.getChannelType(), record.getAppKey(), record.getAppSecret(), record.getWebhookSecret());
         record.setAppSecret(encryptOrNull(record.getAppSecret()));
+        record.setWebhookSecret(encryptOrNull(record.getWebhookSecret()));
         record.setUpdatedBy(operator());
         channelConfigMapper.insert(record);
         auditService.log("channel.record.create", record.getName(), "type=" + record.getChannelType());
@@ -120,8 +126,11 @@ public class ChannelConfigService {
         String mergedKey = firstNotBlank(record.getAppKey(), existing.getAppKey());
         String mergedSecret = firstNotBlank(record.getAppSecret(),
                 decryptQuiet(existing.getAppSecret(), existing.getName()));
-        requireCredentials(mergedType, mergedKey, mergedSecret);
+        String mergedWebhookSecret = firstNotBlank(record.getWebhookSecret(),
+                decryptQuiet(existing.getWebhookSecret(), existing.getName()));
+        requireCredentials(mergedType, mergedKey, mergedSecret, mergedWebhookSecret);
         record.setAppSecret(encryptOrNull(record.getAppSecret()));
+        record.setWebhookSecret(encryptOrNull(record.getWebhookSecret()));
         record.setUpdatedBy(operator());
         channelConfigMapper.updateByName(record);
         auditService.log("channel.record.update", record.getName(), null);
@@ -154,7 +163,8 @@ public class ChannelConfigService {
 
     /**
      * 测试连接（§24.10）：轻量调平台 API 验证凭证与网络，不落库不触发 channel 建连。
-     * Discord：GET users/@me 验 Bot Token；钉钉：gettoken 验 AppKey/AppSecret。
+     * Discord：GET users/@me 验 Bot Token；钉钉：gettoken 验 AppKey/AppSecret；
+     * GitHub：GET /user 验 PAT Token（服务器境内直连，不经 clash 代理）。
      */
     public Map<String, Object> testConnection(ChannelConfigDO record) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -170,6 +180,11 @@ public class ChannelConfigService {
                     return fail(result, "请填写 AppKey 与 AppSecret 后测试");
                 }
                 testDingtalk(record.getAppKey().trim(), record.getAppSecret().trim(), result);
+            } else if (TYPE_GITHUB.equals(type)) {
+                if (!notBlank(record.getAppSecret())) {
+                    return fail(result, "请填写 PAT Token 后测试");
+                }
+                testGithub(record.getAppSecret().trim(), result);
             } else {
                 return fail(result, "不支持的渠道类型：" + type);
             }
@@ -217,6 +232,39 @@ public class ChannelConfigService {
         }
     }
 
+    /**
+     * GitHub：PAT → GET /user；200 凭证有效，401 Token 无效。
+     * 显式 Proxy.NO_PROXY 直连：服务器境内可直达 api.github.com，且 JDK 21 的 HttpClient
+     * 不支持 -Dhttp.nonProxyHosts，走 clash 系统代理时出海线路不稳会握手失败（§24.11）。
+     */
+    private void testGithub(String token, Map<String, Object> result) throws Exception {
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                URI.create("https://api.github.com/user").toURL()
+                        .openConnection(java.net.Proxy.NO_PROXY);
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(12000);
+        conn.setRequestProperty("Authorization", "Bearer " + token);
+        conn.setRequestProperty("Accept", "application/vnd.github+json");
+        conn.setRequestProperty("User-Agent", "teapot-ai");
+        int status = conn.getResponseCode();
+        String body;
+        try (var in = status >= 200 && status < 300 ? conn.getInputStream() : conn.getErrorStream()) {
+            body = in == null ? "" : new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } finally {
+            conn.disconnect();
+        }
+        if (status == 200) {
+            JsonNode node = TEST_JSON.readTree(body);
+            String login = node.path("login").asText("unknown");
+            ok(result, "连接成功，账号：" + login);
+        } else if (status == 401) {
+            fail(result, "PAT Token 无效（401），请检查是否复制完整/已过期");
+        } else {
+            fail(result, "GitHub API 返回异常状态：" + status);
+        }
+    }
+
     private static Map<String, Object> ok(Map<String, Object> result, String message) {
         result.put("success", true);
         result.put("message", message);
@@ -231,17 +279,26 @@ public class ChannelConfigService {
 
     private static void normalizeChannelType(ChannelConfigDO record) {
         String type = record.getChannelType() == null ? "" : record.getChannelType().trim().toLowerCase();
-        if (!TYPE_DINGTALK.equals(type) && !TYPE_DISCORD.equals(type)) {
-            throw new BizException("channelType 非法，可选值：dingtalk / discord");
+        if (!TYPE_DINGTALK.equals(type) && !TYPE_DISCORD.equals(type) && !TYPE_GITHUB.equals(type)) {
+            throw new BizException("channelType 非法，可选值：dingtalk / discord / github");
         }
         record.setChannelType(type);
     }
 
-    /** 按渠道类型校验凭证：钉钉 App Key+App Secret 双必填；Discord 仅 Bot Token（存 app_secret 列）必填 */
-    private static void requireCredentials(String channelType, String appKey, String appSecret) {
+    /**
+     * 按渠道类型校验凭证：钉钉 App Key+App Secret 双必填；Discord 仅 Bot Token（app_secret 列）必填；
+     * GitHub PAT Token（app_secret 列）+ Webhook Secret 必填（app_key 列为可选 bot login）。
+     */
+    private static void requireCredentials(String channelType, String appKey, String appSecret, String webhookSecret) {
         if (TYPE_DISCORD.equals(channelType)) {
             if (!notBlank(appSecret)) {
                 throw new BizException("Discord 连接器需填写 Bot Token");
+            }
+            return;
+        }
+        if (TYPE_GITHUB.equals(channelType)) {
+            if (!notBlank(appSecret) || !notBlank(webhookSecret)) {
+                throw new BizException("GitHub 连接器需填写 PAT Token 与 Webhook Secret");
             }
             return;
         }

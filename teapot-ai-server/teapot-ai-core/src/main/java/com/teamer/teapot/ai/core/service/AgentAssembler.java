@@ -15,13 +15,15 @@ import io.agentscope.core.skill.repository.AgentSkillRepository;
 import io.agentscope.core.skill.repository.GitSkillRepository;
 import io.agentscope.core.skill.repository.mysql.MysqlSkillRepository;
 import com.teamer.teapot.ai.core.storage.OssSkillRepository;
-import io.agentscope.extensions.mysql.state.MysqlAgentStateStore;
+import com.teamer.teapot.ai.core.storage.RedisMemoryFilesystems;
+import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunFilesystemSpec;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunNasMountConfig;
 import io.agentscope.extensions.sandbox.e2b.E2bCodec;
 import io.agentscope.extensions.sandbox.e2b.E2bFilesystemSpec;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
+import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
 import io.agentscope.harness.agent.sandbox.snapshot.LocalSnapshotSpec;
@@ -33,6 +35,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -52,22 +55,25 @@ public class AgentAssembler {
     private final AgentMapper agentMapper;
     private final AgentSkillMapper agentSkillMapper;
     private final ModelRegistry modelRegistry;
-    private final MysqlAgentStateStore stateStore;
+    private final AgentStateStore stateStore;
     private final MysqlSkillRepository skillRepositoryAgent;
     private final TeapotAiProperties properties;
     /** Git skill 来源（enabled=false 时缺席，SPEC §15.6） */
     private final ObjectProvider<GitSkillRepository> gitRepoProvider;
     /** OSS skill 来源（enabled=false 时缺席：zip 导入 → OSS 对象挂载） */
     private final ObjectProvider<OssSkillRepository> ossRepoProvider;
+    /** 记忆文件系统路由（memory-store=false 时缺席，SPEC §27） */
+    private final ObjectProvider<RedisMemoryFilesystems> memoryRoutesProvider;
     private final AgentRunConnection agentRunConnection;
     private final SandboxConfigService sandboxConfigService;
 
     public AgentAssembler(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
-                          ModelRegistry modelRegistry, MysqlAgentStateStore stateStore,
+                          ModelRegistry modelRegistry, AgentStateStore stateStore,
                           @Qualifier("skillRepositoryAgent") MysqlSkillRepository skillRepositoryAgent,
                           TeapotAiProperties properties,
                           ObjectProvider<GitSkillRepository> gitRepoProvider,
                           ObjectProvider<OssSkillRepository> ossRepoProvider,
+                          ObjectProvider<RedisMemoryFilesystems> memoryRoutesProvider,
                           AgentRunConnection agentRunConnection,
                           SandboxConfigService sandboxConfigService) {
         this.agentMapper = agentMapper;
@@ -78,6 +84,7 @@ public class AgentAssembler {
         this.properties = properties;
         this.gitRepoProvider = gitRepoProvider;
         this.ossRepoProvider = ossRepoProvider;
+        this.memoryRoutesProvider = memoryRoutesProvider;
         this.agentRunConnection = agentRunConnection;
         this.sandboxConfigService = sandboxConfigService;
     }
@@ -137,13 +144,38 @@ public class AgentAssembler {
                     .build());
         }
         applyRuntime(builder, rt);
+        // 请求级计划模式覆盖（chat 界面 forwardedProps.planMode，SPEC §25）：
+        // 优先于 Agent 配置；null = 未传参，回落 applyRuntime 已设置的值
+        Boolean planHint = AgentRuntimeHints.getPlanMode();
+        if (planHint != null) {
+            builder.enablePlanMode(planHint);
+            log.info("Agent 计划模式已覆盖（请求级开关={} 配置={}）", planHint,
+                    rt != null && Boolean.TRUE.equals(rt.getEnablePlanMode()));
+        }
+        // MultiAgent（SPEC §25）：关闭时剥夺 subagent 委派能力；缺省（无命名空间）启用，对齐 SDK 默认
+        AgentFeature.MultiAgent ma = feature.getMultiAgent();
+        if (ma != null && !ma.isEnabled()) {
+            builder.disableSubagents();
+            builder.disableDynamicSubagents();
+        }
+        // 记忆（SPEC §25）：请求级开关（chat 界面参数）优先于 Agent 配置
+        applyMemory(builder, feature.getMemory());
         // shell 门控：显式配置优先；未配置（存量）跟随沙箱启用，保证存量行为不回退
         boolean shellEnabled = rt != null && rt.getEnableShell() != null
                 ? rt.getEnableShell() : (sb != null && sb.isEnabled());
         if (!shellEnabled) {
             builder.disableShellTool();
         }
-        applySandbox(builder, agentKey, sb);
+        boolean sandboxApplied = applySandbox(builder, agentKey, sb);
+        // 记忆路由（SPEC §27）：memory-store 启用时，非沙箱（含降级）路径的 MEMORY.md/memory/ 改走 Redis；
+        // 沙箱文件系统为 2.0.1 固定实现，无路由挂载点，记忆留在沙箱。降级路径已禁 shell，路由仍保留本地叠加能力
+        if (!sandboxApplied) {
+            RedisMemoryFilesystems memoryRoutes = memoryRoutesProvider.getIfAvailable();
+            if (memoryRoutes != null) {
+                builder.abstractFilesystem(memoryRoutes.localShellOverlay(agentKey, workspace));
+                log.info("记忆文件系统已路由到 Redis agentKey={}", agentKey);
+            }
+        }
         if (extraMiddlewares != null) {
             for (MiddlewareBase middleware : extraMiddlewares) {
                 builder.middleware(middleware);
@@ -188,15 +220,45 @@ public class AgentAssembler {
     }
 
     /**
+     * memory 命名空间 → HarnessAgent 映射（SPEC §25，对齐官方 Memory 文档）：
+     * 请求级提示（chat 界面 forwardedProps.memoryMode，ThreadLocal 同线程传递）优先于 Agent 配置；
+     * 关闭 = disableMemoryHooks（flush+后台维护）+ disableMemoryTools（memory_search 等）；
+     * 开启时按配置设 flush 触发策略（always / never / throttled，缺省 always = SDK 默认）。
+     */
+    private void applyMemory(HarnessAgent.Builder builder, AgentFeature.Memory mem) {
+        Boolean hint = AgentRuntimeHints.getMemoryMode();
+        AgentRuntimeHints.clear();
+        boolean enabled = hint != null
+                ? hint
+                : (mem == null || mem.getEnabled() == null || mem.getEnabled());
+        if (!enabled) {
+            builder.disableMemoryHooks();
+            builder.disableMemoryTools();
+            log.info("Agent 记忆已关闭（请求级开关={} 配置={}）", hint, mem == null ? "-" : mem.getEnabled());
+            return;
+        }
+        if (mem != null && mem.getFlushTrigger() != null) {
+            MemoryConfig.FlushTrigger trigger = switch (mem.getFlushTrigger()) {
+                case "never" -> MemoryConfig.FlushTrigger.never();
+                case "throttled" -> MemoryConfig.FlushTrigger.throttled(Duration.ofMinutes(
+                        mem.getFlushThrottleMinutes() == null ? 10 : mem.getFlushThrottleMinutes()));
+                default -> MemoryConfig.FlushTrigger.always();
+            };
+            builder.memory(MemoryConfig.builder().flushTrigger(trigger).build());
+        }
+    }
+
+    /**
      * 按 feature.sandbox 装配沙箱（SPEC §16.7 / §22.2 修订）：
      * shell 工具门控由 assemble() 统一负责（runtime.enableShell 优先，存量跟随沙箱）；
      * 启用且指定 sandboxRecord → 链路与凭证由记录决定（§22.2）；
      * 启用无记录（存量）→ 按 sandbox.link 全局路由（e2b / agentrun），首选不可用时自动回落。
+     * 返回是否实际装配了沙箱文件系统（false = 非沙箱或降级，供记忆路由决策，SPEC §27）。
      */
-    private void applySandbox(HarnessAgent.Builder builder, String agentKey, AgentFeature.Sandbox sb) {
+    private boolean applySandbox(HarnessAgent.Builder builder, String agentKey, AgentFeature.Sandbox sb) {
         if (sb == null || !sb.isEnabled()) {
             // 无沙箱：不装配文件系统，shell 门控见 assemble()
-            return;
+            return false;
         }
         // §22.2 记录优先：指定 sandboxRecord 时链路与凭证由记录决定
         SandboxConfigDO record = null;
@@ -207,7 +269,7 @@ public class AgentAssembler {
                 log.error("沙箱记录不可用（不存在或凭证不齐）record={} agentKey={}，降级为无 shell",
                         sb.getSandboxRecord(), agentKey);
                 builder.disableShellTool();
-                return;
+                return false;
             }
         }
         String link = record != null ? record.getLinkType() : resolveSandboxLink(sb.getLink());
@@ -215,11 +277,11 @@ public class AgentAssembler {
             // 防御：正常已在保存时拦截（AgentService 校验），此处兜底降级不阻断对话
             log.error("沙箱链路未接入但 Agent 已启用沙箱，降级为无 shell agentKey={}", agentKey);
             builder.disableShellTool();
-            return;
+            return false;
         }
         if ("e2b".equals(link)) {
             applyE2b(builder, agentKey, sb, record);
-            return;
+            return true;
         }
         TeapotAiProperties.Sandbox.Agentrun defaults = properties.getSandbox().getAgentrun();
         String persistence = sb.getPersistence() == null ? "LOCAL_SNAPSHOT" : sb.getPersistence();
@@ -251,6 +313,7 @@ public class AgentAssembler {
         log.info("Agent 沙箱已启用 agentKey={} record={} isolation={} persistence={} template={}",
                 agentKey, record == null ? "-" : record.getName(),
                 spec.getIsolationScope(), persistence, resolveTemplate(sb, record));
+        return true;
     }
 
     /**

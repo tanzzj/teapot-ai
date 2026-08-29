@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Col, Row, Spin, theme } from 'antd';
-import { Button, Form, Input, message, Modal, Popconfirm, Radio, Table, Tag } from '@agentscope-ai/design';
+import { Button, Form, Input, message, Popconfirm, Radio, Select, Table, Tag } from '@agentscope-ai/design';
 import {
   SparkApiLine,
   SparkInternetLine,
@@ -38,6 +38,8 @@ import type {
   StorageListData,
   StorageRecord,
 } from '../types';
+import { useIsPhone } from '../hooks/useIsPhone';
+import { ResponsiveModal } from '../components/ResponsiveModal';
 
 /**
  * 系统配置页（SPEC §21/§22/§24，admin 一站式管理台）：
@@ -127,6 +129,7 @@ function StorageSection() {
   const [savingRecord, setSavingRecord] = useState(false);
   const [listData, setListData] = useState<StorageListData | null>(null);
   const [modal, setModal] = useState<{ mode: 'create' | 'edit' } | null>(null);
+  const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -215,7 +218,7 @@ function StorageSection() {
             size="small"
             pagination={false}
             dataSource={listData?.records ?? []}
-            scroll={window.innerWidth < 768 ? { x: 720 } : undefined}
+            scroll={isPhone ? { x: 720 } : undefined}
             columns={[
               { title: '记录名', dataIndex: 'name' },
               { title: 'Region', dataIndex: 'region' },
@@ -246,7 +249,7 @@ function StorageSection() {
         </div>
 
         {/* 新建 / 编辑记录 Modal */}
-        <Modal
+        <ResponsiveModal
           title={modal?.mode === 'edit' ? '编辑 OSS 连接记录' : '新建 OSS 连接记录'}
           open={modal !== null}
           confirmLoading={savingRecord}
@@ -311,7 +314,7 @@ function StorageSection() {
               <Input placeholder="可选" />
             </Form.Item>
           </Form>
-        </Modal>
+        </ResponsiveModal>
       </div>
     </Spin>
   );
@@ -340,6 +343,7 @@ function SandboxSection() {
   const [modal, setModal] = useState<{ mode: 'create' | 'edit' } | null>(null);
   const linkType = Form.useWatch('linkType', recordForm);
   const e2bRegionWatch = Form.useWatch('e2bRegion', recordForm);
+  const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -438,7 +442,7 @@ function SandboxSection() {
             size="small"
             pagination={false}
             dataSource={listData?.records ?? []}
-            scroll={window.innerWidth < 768 ? { x: 720 } : undefined}
+            scroll={isPhone ? { x: 720 } : undefined}
             columns={[
               { title: '记录名', dataIndex: 'name' },
               {
@@ -474,7 +478,7 @@ function SandboxSection() {
         </div>
 
         {/* 新建 / 编辑记录 Modal */}
-        <Modal
+        <ResponsiveModal
           title={modal?.mode === 'edit' ? '编辑沙箱连接记录' : '新建沙箱连接记录'}
           open={modal !== null}
           confirmLoading={savingRecord}
@@ -577,7 +581,7 @@ function SandboxSection() {
               <Input placeholder="可选" />
             </Form.Item>
           </Form>
-        </Modal>
+        </ResponsiveModal>
       </div>
     </Spin>
   );
@@ -593,6 +597,9 @@ function ChannelSection() {
   const [modal, setModal] = useState<{ mode: 'create' | 'edit' } | null>(null);
   const [testing, setTesting] = useState(false);
   const channelType = Form.useWatch('channelType', recordForm);
+  /** github 回调地址提示随记录名实时刷新 */
+  const watchedName = Form.useWatch('name', recordForm);
+  const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -628,15 +635,16 @@ function ChannelSection() {
     }
   };
 
-  /** 弹窗内测试：取当前表单值（botToken 映射 app_secret，同保存逻辑） */
+  /** 弹窗内测试：取当前表单值（botToken/PAT 映射 app_secret，同保存逻辑） */
   const onTestFromForm = () => {
     const values = recordForm.getFieldsValue();
-    const isDiscord = (values.channelType || channelType) === 'discord';
+    const type: string = values.channelType || channelType || 'dingtalk';
     onTest({
       name: values.name || '',
-      channelType: values.channelType || channelType || 'dingtalk',
-      appKey: isDiscord ? '' : (values.appKey || ''),
-      appSecret: isDiscord ? (values.botToken || '') : (values.appSecret || ''),
+      channelType: type,
+      appKey: type === 'github' ? (values.botLogin || '') : type === 'discord' ? '' : (values.appKey || ''),
+      appSecret: type === 'discord' ? (values.botToken || '') : type === 'github' ? (values.patToken || '') : (values.appSecret || ''),
+      webhookSecret: type === 'github' ? (values.webhookSecret || '') : '',
     });
   };
 
@@ -653,24 +661,29 @@ function ChannelSection() {
       channelType: record.channelType,
       appKey: record.appKey,
       robotCode: record.robotCode,
+      // github：app_key 列复用为 bot 账号 login（防环）；凭证留空不修改由后端合并处理
+      botLogin: record.channelType === 'github' ? record.appKey : undefined,
       remark: record.remark,
     });
     setModal({ mode: 'edit' });
   };
 
-  /** Modal 提交：新建 / 更新记录（凭证编辑时留空不修改；钉钉 AppKey+AppSecret，Discord 仅 Bot Token） */
+  /** Modal 提交：新建 / 更新记录（凭证编辑时留空不修改；钉钉 AppKey+AppSecret，Discord 仅 Bot Token，GitHub PAT+Webhook Secret） */
   const onSaveRecord = async () => {
     const values = await recordForm.validateFields();
     setSavingRecord(true);
     try {
       const isDiscord = values.channelType === 'discord';
+      const isGithub = values.channelType === 'github';
       const payload: Record<string, string> = {
         name: values.name,
         channelType: values.channelType || 'dingtalk',
-        appKey: isDiscord ? '' : (values.appKey || ''),
-        // Discord 的 Bot Token 存 app_secret 列（后端按类型校验/解密）
-        appSecret: isDiscord ? (values.botToken || '') : (values.appSecret || ''),
-        robotCode: isDiscord ? '' : (values.robotCode || ''),
+        // GitHub 的 bot 账号 login 存 app_key 列（可选，防环比对）
+        appKey: isGithub ? (values.botLogin || '') : isDiscord ? '' : (values.appKey || ''),
+        // Discord Bot Token / GitHub PAT 均存 app_secret 列（后端按类型校验/加密）
+        appSecret: isDiscord ? (values.botToken || '') : isGithub ? (values.patToken || '') : (values.appSecret || ''),
+        robotCode: isDiscord || isGithub ? '' : (values.robotCode || ''),
+        webhookSecret: isGithub ? (values.webhookSecret || '') : '',
         remark: values.remark || '',
       };
       const l = modal?.mode === 'edit'
@@ -693,7 +706,7 @@ function ChannelSection() {
             <div>
               <div style={{ fontSize: 15, fontWeight: 700 }}>渠道连接记录</div>
               <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)' }}>
-                支持钉钉机器人（Stream 模式）与 Discord（Gateway 长连），均为出站长连无需公网回调；
+                支持钉钉机器人（Stream 模式）与 Discord（Gateway 长连）出站长连，及 GitHub（公网 Webhook 回调）；
                 Agent 在各自配置页（Channel）选择其一启用。凭证加密入库，界面不回显明文。
               </div>
             </div>
@@ -706,15 +719,15 @@ function ChannelSection() {
             size="small"
             pagination={false}
             dataSource={listData?.records ?? []}
-            scroll={window.innerWidth < 768 ? { x: 720 } : undefined}
+            scroll={isPhone ? { x: 720 } : undefined}
             columns={[
               { title: '记录名', dataIndex: 'name' },
               {
                 title: '类型',
                 dataIndex: 'channelType',
                 render: (v: string) => (
-                  <Tag color={v === 'dingtalk' ? 'blue' : v === 'discord' ? 'purple' : undefined}>
-                    {v === 'dingtalk' ? '钉钉' : v === 'discord' ? 'Discord' : v}
+                  <Tag color={v === 'dingtalk' ? 'blue' : v === 'discord' ? 'purple' : v === 'github' ? 'cyan' : undefined}>
+                    {v === 'dingtalk' ? '钉钉' : v === 'discord' ? 'Discord' : v === 'github' ? 'GitHub' : v}
                   </Tag>
                 ),
               },
@@ -747,7 +760,7 @@ function ChannelSection() {
         </div>
 
         {/* 新建 / 编辑记录 Modal */}
-        <Modal
+        <ResponsiveModal
           title={modal?.mode === 'edit' ? '编辑渠道连接记录' : '新建渠道连接记录'}
           open={modal !== null}
           confirmLoading={savingRecord}
@@ -773,12 +786,51 @@ function ChannelSection() {
               <Input placeholder="如 dingtalk-teamer" disabled={modal?.mode === 'edit'} />
             </Form.Item>
             <Form.Item name="channelType" label="渠道类型">
-              <Radio.Group>
-                <Radio value="dingtalk">钉钉（Stream 模式）</Radio>
-                <Radio value="discord">Discord（Gateway 长连）</Radio>
-              </Radio.Group>
+              <Select
+                style={{ width: '100%' }}
+                options={[
+                  { value: 'dingtalk', label: '钉钉（Stream 模式）' },
+                  { value: 'discord', label: 'Discord（Gateway 长连）' },
+                  { value: 'github', label: 'GitHub（Webhook 回调）' },
+                ]}
+              />
             </Form.Item>
-            {channelType === 'discord' ? (
+            {channelType === 'github' ? (
+              <>
+                <Form.Item
+                  name="patToken"
+                  label="PAT Token"
+                  rules={[{ required: modal?.mode === 'create', message: '必填' }]}
+                  tooltip={
+                    modal?.mode === 'edit'
+                      ? '留空不修改；AES-GCM 加密入库'
+                      : 'GitHub 个人访问令牌（fine-grained 或 classic），需对目标仓库具备 Issue/PR 评论权限；AES-GCM 加密入库'
+                  }
+                >
+                  <Input.Password placeholder={modal?.mode === 'edit' ? '留空不修改' : 'ghp_… / github_pat_…'} />
+                </Form.Item>
+                <Form.Item
+                  name="webhookSecret"
+                  label="Webhook Secret"
+                  rules={[{ required: modal?.mode === 'create', message: '必填' }]}
+                  tooltip={modal?.mode === 'edit' ? '留空不修改；AES-GCM 加密入库' : '与 GitHub webhook 配置中的 Secret 一致，用于签名校验；AES-GCM 加密入库'}
+                >
+                  <Input.Password placeholder={modal?.mode === 'edit' ? '留空不修改' : ''} />
+                </Form.Item>
+                <Form.Item
+                  name="botLogin"
+                  label="Bot 账号 login（可选）"
+                  tooltip="PAT 对应的 GitHub 账号名，用于过滤 bot 自身评论防环；留空时按评论者 user.type==Bot 自动判断"
+                >
+                  <Input placeholder="my-bot" />
+                </Form.Item>
+                <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', lineHeight: 1.7 }}>
+                  回调地址：{window.location.origin}/api/webhook/github/{watchedName || '《记录名》'}
+                  <br />
+                  保存后将其填入 GitHub 仓库/组织 Settings → Webhooks，勾选 Issue comments 与 Pull request review comments 事件。
+                </div>
+              </>
+            ) : channelType === 'discord' ? (
               <Form.Item
                 name="botToken"
                 label="Bot Token"
@@ -818,7 +870,7 @@ function ChannelSection() {
               <Input placeholder="可选" />
             </Form.Item>
           </Form>
-        </Modal>
+        </ResponsiveModal>
       </div>
     </Spin>
   );

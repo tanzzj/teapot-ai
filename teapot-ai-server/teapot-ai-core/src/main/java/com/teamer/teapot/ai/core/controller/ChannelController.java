@@ -52,6 +52,8 @@ public class ChannelController {
             item.put("robotCode", row.getRobotCode());
             item.put("remark", row.getRemark());
             item.put("appSecretMasked", ConfigCryptoService.mask(plain == null ? null : plain.getAppSecret()));
+            // GitHub webhook secret 同为敏感凭证，只回掩码（其他渠道该列为空，掩码为 null）
+            item.put("webhookSecretMasked", ConfigCryptoService.mask(plain == null ? null : plain.getWebhookSecret()));
             item.put("configured", ChannelConfigService.configured(plain));
             item.put("updatedAt", row.getUpdatedAt() == null ? null : row.getUpdatedAt().toString());
             records.add(item);
@@ -91,11 +93,15 @@ public class ChannelController {
         merged.setChannelType(record.getChannelType());
         merged.setAppKey(record.getAppKey());
         merged.setAppSecret(record.getAppSecret());
+        merged.setWebhookSecret(record.getWebhookSecret());
         if (isBlank(merged.getAppSecret()) && !isBlank(record.getName())) {
             ChannelConfigDO plain = channelConfigService.getPlain(record.getName());
             if (plain != null) {
                 if (isBlank(merged.getAppSecret())) {
                     merged.setAppSecret(plain.getAppSecret());
+                }
+                if (isBlank(merged.getWebhookSecret())) {
+                    merged.setWebhookSecret(plain.getWebhookSecret());
                 }
                 if (isBlank(merged.getAppKey())) {
                     merged.setAppKey(plain.getAppKey());

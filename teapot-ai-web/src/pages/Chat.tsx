@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { Empty, message, Upload } from 'antd';
-import { IconButton } from '@agentscope-ai/design';
-import { SparkEnlargeLine, SparkLeftArrowLine, SparkShrinkLine } from '@agentscope-ai/icons';
+import { Empty, message, Tooltip, Upload } from 'antd';
+import { IconButton, Select } from '@agentscope-ai/design';
+import { SparkEnlargeLine, SparkLeftArrowLine, SparkMemoryLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
   useChatAnywhereInput,
@@ -15,10 +16,12 @@ import type { SessionItem } from '../chat/sessionBridge';
 import { agentList } from '../api/agent';
 import { modelCapabilities } from '../api/model';
 import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
+import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
 import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
 import { newChatCoordinator } from '../chat/newChatCoordinator';
 import { useMobileUIStore } from '../store/mobileUI';
+import { PHONE_BP, NARROW_BP } from '../theme/breakpoints';
 import {
   ACCEPTED_IMAGE_MIME,
   ACCEPTED_VIDEO_MIME,
@@ -29,13 +32,11 @@ import {
 } from '../chat/imageUpload';
 import type { Agent } from '../types';
 
-// 双断点设计：
+// 双断点设计（常量源：src/theme/breakpoints.ts，SPEC-mobile M5）：
 // - PHONE_BP(768)：手机双态（全屏会话首页 ↔ 全屏聊天），与 AppLayout 断点一致；
-// - MOBILE_BP(992)：必须与模板内置 narrowMode 断点一致（ahooks useResponsive 的 lg=992px），
+// - NARROW_BP(992)：必须与模板内置 narrowMode 断点一致（ahooks useResponsive 的 lg=992px），
 //   低于 992 时模板不渲染内置左栏（改渲染窄屏头部）。768–991 区间（平板 / 手机浏览器
 //   桌面模式）由本页自渲染左栏槽位补齐双栏，经 ChatBridge Portal 填充。
-const MOBILE_BP = 992;
-const PHONE_BP = 768;
 
 /** 消息时间展示（气泡下方小字）：created_at 实时链路用户卡为秒、响应流为毫秒，统一归一 */
 function msgTimeSlot(ts?: number, alignRight?: boolean) {
@@ -171,7 +172,7 @@ export default function Chat() {
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [isPhone, setIsPhone] = useState(window.innerWidth < PHONE_BP);
   const [isTablet, setIsTablet] = useState(
-    window.innerWidth >= PHONE_BP && window.innerWidth < MOBILE_BP,
+    window.innerWidth >= PHONE_BP && window.innerWidth < NARROW_BP,
   );
   /** 手机双态：首页（全屏会话面板）↔ 聊天（chat pane 全屏）——同步到全局 store 供 AppLayout 顶栏使用 */
   const { mobileView, setMobileView } = useMobileUIStore();
@@ -186,6 +187,10 @@ export default function Chat() {
   /** 移动端输入框焦点（focus 后显示放大按钮）与放大态（单行 ↔ 多行） */
   const [senderFocused, setSenderFocused] = useState(false);
   const [senderExpanded, setSenderExpanded] = useState(false);
+  /** 请求级记忆模式覆盖（SPEC §25）：'' = 跟随 Agent 配置；'on'/'off' 强制，按 Agent 持久化 */
+  const [memoryOverride, setMemoryOverride] = useState('');
+  /** 请求级计划模式覆盖（SPEC §25）：'' = 跟随 Agent 配置；'on'/'off' 强制，按 Agent 持久化 */
+  const [planModeOverride, setPlanModeOverride] = useState('');
 
   /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
@@ -196,7 +201,7 @@ export default function Chat() {
   useEffect(() => {
     const onResize = () => {
       setIsPhone(window.innerWidth < PHONE_BP);
-      setIsTablet(window.innerWidth >= PHONE_BP && window.innerWidth < MOBILE_BP);
+      setIsTablet(window.innerWidth >= PHONE_BP && window.innerWidth < NARROW_BP);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -232,6 +237,30 @@ export default function Chat() {
     () => agents.find((a) => a.agentKey === currentAgent),
     [agents, currentAgent],
   );
+
+  // 切换 Agent 时回读各自的记忆/计划模式选择（无记录 = 跟随 Agent 配置）
+  useEffect(() => {
+    setMemoryOverride(
+      currentAgent ? localStorage.getItem(`teapot.memoryMode.${currentAgent}`) || '' : '',
+    );
+    setPlanModeOverride(
+      currentAgent ? localStorage.getItem(`teapot.planMode.${currentAgent}`) || '' : '',
+    );
+  }, [currentAgent]);
+
+  const onMemoryOverride = useCallback((v: string) => {
+    setMemoryOverride(v);
+    if (!currentAgent) return;
+    if (v) localStorage.setItem(`teapot.memoryMode.${currentAgent}`, v);
+    else localStorage.removeItem(`teapot.memoryMode.${currentAgent}`);
+  }, [currentAgent]);
+
+  const onPlanModeOverride = useCallback((v: string) => {
+    setPlanModeOverride(v);
+    if (!currentAgent) return;
+    if (v) localStorage.setItem(`teapot.planMode.${currentAgent}`, v);
+    else localStorage.removeItem(`teapot.planMode.${currentAgent}`);
+  }, [currentAgent]);
 
   // 移动端监听发送框 textarea 焦点：focus 后浮出放大按钮，失焦收起（放大态常驻）
   useEffect(() => {
@@ -302,9 +331,21 @@ export default function Chat() {
         fetch: createAguiFetch({
           agentKey: currentAgent,
           getSessionId: () => sessionGetterRef.current?.(),
+          // 请求级记忆开关（SPEC §25）：经 forwardedProps.memoryMode 传后端，未选择则跟随 Agent 配置
+          getMemoryMode: () => (memoryOverride === '' ? undefined : memoryOverride === 'on'),
+          // 请求级计划开关（SPEC §25）：经 forwardedProps.planMode 传后端，未选择则跟随 Agent 配置
+          getPlanMode: () => (planModeOverride === '' ? undefined : planModeOverride === 'on'),
         }),
         // 模板实际按「每行 SSE data 字符串」调用（类型标注为 Response 是上游笔误）
         responseParser: aguiResponseParser as never,
+      },
+      // 计划模式自定义工具渲染（SPEC §25）：plan_write 计划卡片 / todo_write 进度清单，
+      // 替代默认 ToolCall 折叠面板；数据全部来自既有 TOOL_CALL_* 事件流，无需后端改动
+      customToolRenderConfig: {
+        plan_enter: PlanEnterCard,
+        plan_write: PlanWriteCard,
+        plan_exit: PlanExitCard,
+        todo_write: TodoWriteCard,
       },
       session: {
         multiple: true,
@@ -397,9 +438,31 @@ export default function Chat() {
         // 懒创建会话：提交前无会话则先创建（含等待 loader 冲刷），规避模板内部竞态
         beforeSubmit: () =>
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
+        // 底部操作栏前置：计划模式请求级开关（SPEC §25），位于附件按钮附近
+        prefix: (
+          <Tooltip title="计划模式：请求级开关，优先于 Agent 配置">
+            <span
+              onClick={() => onPlanModeOverride(planModeOverride === 'on' ? '' : 'on')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 8px',
+                borderRadius: 999,
+                cursor: 'pointer',
+                fontSize: 12,
+                color: planModeOverride === 'on' ? '#fff' : 'rgba(26,26,29,0.6)',
+                background: planModeOverride === 'on' ? '#1a1a1d' : 'rgba(0,0,0,0.04)',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              <SparkTextBoxLine /> 计划
+            </span>
+          </Tooltip>
+        ),
       },
     };
-  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable]);
+  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable, memoryOverride, planModeOverride, onPlanModeOverride]);
 
   if (loadingAgents) {
     return null;
@@ -456,17 +519,51 @@ export default function Chat() {
         {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
         <AgentScopeRuntimeWebUI key={currentAgent} options={options} />
       </div>
-      {/* 手机端输入框放大按钮：聚焦发送框后浮出，点击切换单行/多行 */}
+      {/* 记忆模式请求级开关（SPEC §25）：右上角悬浮，覆盖 Agent 配置，仅本次会话页生效并持久 */}
+      {!showHome && (
+        <div
+          className="glass-card"
+          style={{
+            position: 'absolute',
+            top: 10,
+            right: 14,
+            zIndex: 5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '4px 8px',
+            borderRadius: 999,
+          }}
+        >
+          <Tooltip title="记忆模式：请求级开关，优先于 Agent 配置；「跟随配置」由 Agent 管理页决定">
+            <span style={{ display: 'inline-flex', alignItems: 'center', color: 'rgba(26,26,29,0.6)' }}>
+              <SparkMemoryLine />
+            </span>
+          </Tooltip>
+          <Select
+            size="small"
+            variant="borderless"
+            value={memoryOverride}
+            onChange={onMemoryOverride}
+            style={{ width: 96 }}
+            options={[
+              { value: '', label: '跟随配置' },
+              { value: 'on', label: '开启记忆' },
+              { value: 'off', label: '关闭记忆' },
+            ]}
+          />
+        </div>
+      )}
+      {/* 手机端输入框放大按钮（IconButton，SPEC-mobile M8）：聚焦发送框后浮出，点击切换单行/多行 */}
       {isPhone && !showHome && (senderFocused || senderExpanded) && (
-        <button
-          type="button"
+        <IconButton
           className="teapot-sender-expand-btn"
           aria-label={senderExpanded ? '收起输入框' : '放大输入框'}
-          onMouseDown={(e) => e.preventDefault()}
+          style={{ width: 30, height: 30 }}
+          icon={senderExpanded ? <SparkShrinkLine size={16} /> : <SparkEnlargeLine size={16} />}
+          onMouseDown={(e: ReactMouseEvent) => e.preventDefault()}
           onClick={() => setSenderExpanded((v) => !v)}
-        >
-          {senderExpanded ? <SparkShrinkLine size={16} /> : <SparkEnlargeLine size={16} />}
-        </button>
+        />
       )}
     </div>
   );

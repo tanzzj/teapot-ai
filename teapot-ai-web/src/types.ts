@@ -101,6 +101,22 @@ export interface AgentStorageConfig {
   storageRecord?: string;
 }
 
+/** feature.multiagent 结构（SPEC §25：MultiAgent/Subagent 开关，缺省该命名空间 = 启用） */
+export interface AgentMultiAgentConfig {
+  /** false = 禁用 subagent 与动态 subagent 生成 */
+  enabled?: boolean;
+}
+
+/** feature.memory 结构（SPEC §25：记忆模式配置，缺省该命名空间 = 启用） */
+export interface AgentMemoryConfig {
+  /** false = 关闭记忆落盘钩子与 memory_search 等记忆工具 */
+  enabled?: boolean;
+  /** 记忆落盘策略：always（每轮，默认）/ never / throttled（节流） */
+  flushTrigger?: 'always' | 'never' | 'throttled';
+  /** 仅 flushTrigger=throttled 生效：落盘节流间隔（分钟，1–1440） */
+  flushThrottleMinutes?: number;
+}
+
 /** feature.channel 结构（SPEC §24.5：Agent 渠道连接器配置，可与 sandbox 共存） */
 export interface AgentChannelConfig {
   enabled: boolean;
@@ -119,6 +135,8 @@ export interface ChannelRecord {
   remark?: string;
   /** 列表行不回明文，只回掩码 */
   appSecretMasked?: string;
+  /** GitHub webhook secret 掩码（仅 github 类型，§24 修订） */
+  webhookSecretMasked?: string;
   configured?: boolean;
   updatedAt?: string;
 }

@@ -300,6 +300,16 @@ export interface AguiFetchOptions {
   agentKey: string;
   /** 取当前会话 id（作 AG-UI threadId，多轮上下文由后端 StateStore 保证） */
   getSessionId: () => string | undefined;
+  /**
+   * 请求级记忆模式开关（SPEC §25）：经 RunAgentInput.forwardedProps.memoryMode 传给后端，
+   * 覆盖 Agent 配置；返回 undefined = 不传，跟随 Agent 配置。
+   */
+  getMemoryMode?: () => boolean | undefined;
+  /**
+   * 请求级计划模式开关（SPEC §25）：经 RunAgentInput.forwardedProps.planMode 传给后端，
+   * 覆盖 Agent 配置；返回 undefined = 不传，跟随 Agent 配置。
+   */
+  getPlanMode?: () => boolean | undefined;
 }
 
 /**
@@ -445,6 +455,8 @@ export function createAguiFetch(opts: AguiFetchOptions) {
     }
 
     const threadId = opts.getSessionId() || `thread-${Date.now()}`;
+    const memoryMode = opts.getMemoryMode?.();
+    const planMode = opts.getPlanMode?.();
     const url = `/agui/run/${encodeURIComponent(opts.agentKey)}`;
     const deadline = Date.now() + CONTRACT_RETRY_BUDGET_MS;
     let delay = CONTRACT_RETRY_INITIAL_DELAY_MS;
@@ -461,6 +473,13 @@ export function createAguiFetch(opts: AguiFetchOptions) {
           threadId,
           runId,
           messages: [{ id: `msg-${Date.now()}`, role: 'user', content: parts }],
+          // 请求级开关（SPEC §25）：仅显式选择时才携带，后端缺失 = 跟随 Agent 配置
+          ...((memoryMode === undefined && planMode === undefined)
+            ? {}
+            : { forwardedProps: {
+                ...(memoryMode !== undefined ? { memoryMode } : {}),
+                ...(planMode !== undefined ? { planMode } : {}),
+              } }),
         }),
         signal,
       });

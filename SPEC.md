@@ -2015,10 +2015,11 @@ Web ──AG-UI SSE──▶ TeapotAguiAgentRegistrar ─▶ AgentRegistry(每�
 |---|---|---|
 | id | BIGINT UNSIGNED PK | 自增 |
 | name | VARCHAR(64) UK | 记录名，Agent feature 引用 |
-| channel_type | VARCHAR(16) | `dingtalk` / `discord`（§24 修订，枚举留扩展） |
-| app_key | VARCHAR(128) | 钉钉应用 ClientID（明文）；discord 不使用（空） |
-| app_secret | TEXT | 钉钉 ClientSecret / **Discord Bot Token**（§24 修订），AES-GCM 密文（同 §22.2 加密方案） |
-| robot_code | VARCHAR(128) | 机器人 robotCode，可空（缺省同 appKey）；discord 不使用 |
+| channel_type | VARCHAR(16) | `dingtalk` / `discord` / `github`（§24 修订，枚举留扩展） |
+| app_key | VARCHAR(128) | 钉钉应用 ClientID（明文）；discord 不使用（空）；github 复用为可选 bot 账号 login（防环） |
+| app_secret | TEXT | 钉钉 ClientSecret / **Discord Bot Token** / **GitHub PAT Token**（§24 修订），AES-GCM 密文（同 §22.2 加密方案） |
+| robot_code | VARCHAR(128) | 机器人 robotCode，可空（缺省同 appKey）；discord/github 不使用 |
+| webhook_secret | VARCHAR(512) | GitHub webhook secret，AES-GCM 密文（V11 新增，校验 X-Hub-Signature-256）；其他渠道不使用 |
 | remark / updated_by / created_at / updated_at | | 同 t_sandbox_config |
 
 **AgentFeature 新增 `channel` 命名空间**（与 sandbox/storage 同构，未知命名空间保留机制天然兼容）：
@@ -2040,7 +2041,7 @@ Web ──AG-UI SSE──▶ TeapotAguiAgentRegistrar ─▶ AgentRegistry(每�
 | `AgentAssembler`（自 AgentRegistry.build 抽出） | 同一份装配规则供 Web/channel 双链路复用 |
 | `ChannelHub` | `Map<agentKey, GatewayBootstrap>`：`start(agentKey)`（读 feature+记录 → build agent → 建 channel → gw.start）、`stop(agentKey)`（gw.stop）、`restart(agentKey)`；app_secret 只在此处解密消费 |
 | 生命周期接线 | `ApplicationReadyEvent` 扫描全部启用 Agent，channel.enabled=true 者 start（单个失败仅告警不阻断启动）；`@PreDestroy` 全部 stop；AgentService.update/delete 及 ChannelConfig 变更 → 相关 Agent restart；Agent 停用同 delete 处理 |
-| `ChannelFactory` | channel_type → Channel 构造（dingtalk 官方扩展 / discord 自实现 JDA 适配器，§24.10），后续飞书/企微只加分支 |
+| `ChannelFactory` | channel_type → Channel 构造（dingtalk 官方扩展 / discord 自实现 JDA 适配器 / github 自实现 webhook 适配器，§24.10/§24 修订），后续飞书/企微只加分支 |
 
 钉钉 channel 构造：`DingTalkChannel.fromProperties("dingtalk-"+name, ChannelConfig.builder(channelId).defaultAgentId(agentKey).dmScope(...).build(), Map.of("appKey",..,"appSecret",..,"robotCode",..))`。
 
@@ -2140,7 +2141,18 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 
 **py 版平台开关的取舍**：`only_at_reply` 固定 true（v1 不暴露配置）；`show_thinking`/`show_tool_process` 不实现（v1 仅发最终文本，与钉钉一致）；交互式按钮审批不做（harness HITL 渠道化后续 §）。
 
-**测试连接**：`POST /api/channel-config/test`（仅 admin）轻量调平台 API 验凭证/网络，不落库不触发建连：Discord GET `users/@me`（200 有效/401 Token 无效），钉钉 `gettoken`（errcode=0 有效）；凭证留空时回落库内解密值（支持已保存记录直测与编辑弹窗空密测试）。前端入口两处：记录列表行「测试」+ 新建/编辑弹窗「测试连接」按钮。Discord 测试经 JVM 系统代理（clash）出海，钉钉/阿里云境内域名在 nonProxyHosts 直连。
+### 24.11 GitHub channel（webhook 回调，§24 修订）
+
+官方 `agentscope-extensions-channel-github` 随 2.2.0-RC2 发布，平台锁 2.0.1 不可用，故参考其源码自实现（模式同 Discord 自实现）：
+- **入站**：GitHub 将 `issue_comment` / `pull_request_review_comment` 事件 POST 到 `POST /api/webhook/github/{记录名}`（`GitHubWebhookController`，rbac permit-list 免 JWT）；处理管线（对齐官方）：HMAC-SHA256 签名校验（X-Hub-Signature-256，常量时间比较，失败 401）→ 事件过滤（其他事件 204）→ 仅 `action=created` → 幂等去重（comment.id，内存 LRU 512）→ 防环（评论者 == 记录的 bot login，缺省回退 `user.type==Bot`）→ 映射 `InboundMessage`（peer=THREAD `owner/repo#number`，senderId=`github`）→ `dispatch`（202 受理异步）；
+- **出站**：`deliver` 从 `OutboundAddress.to` 末段还原 `owner/repo#number`，以 PAT 身份 `POST /repos/{owner}/{repo}/issues/{n}/comments` 追加评论（issue 与 PR 会话评论共用端点；**GitHub API 服务器境内可直达，用 `HttpURLConnection` + 显式 `Proxy.NO_PROXY` 直连，不经 clash 代理**——JDK 21 的 java.net.http.HttpClient 不支持 `-Dhttp.nonProxyHosts`，且出海线路不稳）；
+- **注册表**：`GitHubChannel` 静态 `Map<记录名, channel>`，start 注册 / stop 反注册，webhook 按记录名路由；仅当有 Agent 启用该记录时 channel 才存活（同其他渠道，由 ChannelHub 托管）；
+- **凭证**：PAT Token 存 app_secret 列、webhook secret 存 webhook_secret 列（均 AES-GCM，V11 新增列）；app_key 列复用为可选 bot login；`configured()` 要求 token+webhookSecret 齐备；测试连接：`GET api.github.com/user` 验 PAT；
+- **会话隔离**：peer=THREAD，dmScope 生效同其他渠道（缺省 PER_CHANNEL_PEER = 每 issue/PR 独立会话）；索引写 t_channel_session（channel_type=github）。
+
+**接入步骤（运营）**：GitHub 建 bot 账号并生成 PAT（目标仓库 Issue/PR 评论权限）→ 系统配置新建 github 记录（PAT + 自定义 webhook secret）→ 将界面展示的回调地址填入仓库/组织 Settings → Webhooks（Content type=JSON，Secret 与记录一致，勾 Issue comments 与 Pull request review comments 事件）→ Agent 启用该记录。注：GitHub 要求回调地址公网可达（平台域名为 HTTP，GitHub 允许但会提示不安全）。
+
+**测试连接**：`POST /api/channel-config/test`（仅 admin）轻量调平台 API 验凭证/网络，不落库不触发建连：Discord GET `users/@me`（200 有效/401 Token 无效），钉钉 `gettoken`（errcode=0 有效）；凭证留空时回落库内解密值（支持已保存记录直测与编辑弹窗空密测试）。前端入口两处：记录列表行「测试」+ 新建/编辑弹窗「测试连接」按钮。Discord 测试经 JVM 系统代理（clash）出海，钉钉/阿里云境内域名在 nonProxyHosts 直连；GitHub 同钉钉直连（代码层显式 `Proxy.NO_PROXY`，不受 nonProxyHosts 对 HttpClient 不生效的限制）。
 
 **验收（并入 §24.7）**：
 
@@ -2148,6 +2160,55 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 9.1 「测试连接」：正确 Token 返回成功（含 bot 名）；错误 Token 提示 401；代理不通时提示超时；钉钉凭证同理（errcode 回显）；
 10. Agent 绑定 discord 记录启用后重启，日志见 Discord Gateway 建连成功；服务器频道 @ 机器人/DM 均收到回复，同会话第二轮有上下文；
 11. 超长回复（>2000 字符）自动分段不截断报错；会话历史中该会话来源前缀为 Discord。
+
+---
+
+## 25. Agent 高级能力开关（MultiAgent / 记忆 / 压缩 / 计划模式，MVP）
+
+基于 AgentScope 2.0.1 Builder 能力（javap 验证）开放四项配置的界面化：
+- **MultiAgent（Subagent）**：agentconfig 新增「MultiAgent」菜单，单开关 `feature.multiagent.enabled`。缺省命名空间 = 启用；`{enabled:false}` 时装配调 `disableSubagents()` + `disableDynamicSubagents()`；
+- **记忆**：agentconfig 新增「记忆」菜单，`feature.memory = {enabled, flushTrigger(always|never|throttled), flushThrottleMinutes}`。缺省 = 启用（官方两层语义：对话日志落盘 + MEMORY.md 整合注入，不显式配置即默认开启）；`enabled=false` 调 `disableMemoryHooks()` + `disableMemoryTools()`；flushTrigger 映射 `MemoryConfig.FlushTrigger.always()/never()/throttled(Duration)`（throttled 间隔 1–1440 分钟，保存时强校验）；
+- **上下文压缩**：复用既有 `t_agent.compaction_trigger/compaction_keep` 列（-1 = 关），Tool & Advanced 新增「启用上下文压缩」总开关：关 → 提交 -1/-1，开且未填有效值 → 默认 30/10；该分区补上 Save 按钮；
+- **计划模式**：`feature.runtime.enablePlanMode`（Basic Info 既有开关，后端 `enablePlanMode` 已接线，本次仅确认）；
+- **请求级记忆/计划开关（参数传递）**：chat 界面右上角悬浮三态选择（跟随配置/开启/关闭，按 Agent 存 localStorage `teapot.memoryMode.<agentKey>`）→ `RunAgentInput.forwardedProps.memoryMode`；发送框底部操作栏（附件按钮附近）悬浮「计划」按钮（点击切换开启/跟随，存 `teapot.planMode.<agentKey>`）→ `forwardedProps.planMode` → `TeapotRuntimeContextResolver` 解析写 `AgentRuntimeHints`（ThreadLocal，AG-UI 整请求单线程，resolver 先于 agent 解析）→ `AgentAssembler` 同线程消费后清理；优先级：请求级 > Agent 配置；未传参 = 跟随配置。AgentRegistry 每请求重建，开关即时生效。
+- **计划模式可视化（计划卡片 + 进度清单）**：经模板 `customToolRenderConfig` 按工具名挂载自定义渲染（`src/chat/PlanCards.tsx`），替代默认 ToolCall 折叠面板：`plan_enter` → 「已进入计划模式」轻提示；`plan_write` → 计划 markdown 卡片（流式实时可见，完成后默认收起可点击展开）；`plan_exit` → 「计划已就绪 · 等待批准/已批准」卡片（含 summary）；`todo_write` → 执行进度清单（进度条 + pending/in_progress/completed 状态点，SDK 保证同一时刻恰好一个 in_progress）。数据全部来自既有 TOOL_CALL_* 事件流（aguiBridge 无需改动），解析容错流式不完整 JSON；output 合并消息（无 arguments）不重复渲染。批准交互（Interrupt/确认链路）前端尚未接入，为后续项。无后端改动。
+- **前端附修**：系统配置渠道类型 Radio 改下拉；渠道/沙箱记录名提交前 trim（历史数据带尾随空格会被记录引用校验拒绝）。
+- **无 SQL 变更**（feature 为 JSON 列）。
+- **冒烟**：multiagent/memory 落库回显✓；非法 flushTrigger 拒绝✓；`memoryMode=false` 发起 run 日志见「Agent 记忆已关闭（请求级开关=false 配置=true）」✓；`planMode=true` 发起 run 日志见「Agent 计划模式已覆盖（请求级开关=true 配置=false）」+ `plan_enter/plan_write/plan_exit` 工具已注册✓。
+
+---
+
+## §26 会话状态存储（Redis 接入与回切）
+
+会话状态（AgentState）后端曾切到本机 Redis，后经配置开关回切 MySQL（见 §27 存储拆分）：
+- **服务器 Redis**：既有源码编译的 Redis 5.0.5，新建 `/main/redis/redis.conf`（bind 127.0.0.1、requirepass、AOF everysec、maxmemory 512mb/noeviction）+ systemd `redis.service`（Type=simple，非 notify——源码编译无 libsystemd）；开机自启。
+- **依赖**：bom/core 新增 `agentscope-extensions-redis`（中央仓 2.0.1，与既有 SDK 同版本），Jedis 客户端传递引入。
+- **接线（§27 修订后）**：`AgentScopeConfig` 共享 `JedisPooled` bean（会话/记忆任一启用才装配）；`agentStateStore` 按 `teapot.ai.agentscope.redis.session-store` 开关二选一：`true` → `RedisAgentStateStore`（keyPrefix `teapot:session:`，不校验 sessionId 斜杠），`false`（当前生产取值）→ `LenientMysqlAgentStateStore`（§22.5 宽校验补丁）。注入点一律 `AgentStateStore` 接口。
+- **配置**：application-prod.yml `teapot.ai.agentscope.redis.*`；密码经 app.env `TEAPOT_REDIS_PASSWORD` 注入（SPEC §14）。注意前缀类值含冒号必须加引号（不加则 YAML 解析报错应用起不来，踩过一次）。开关：`TEAPOT_REDIS_SESSION_STORE`（默认 false）/ `TEAPOT_REDIS_MEMORY_STORE`（默认 true）；旧的 `enabled` 键已废弃（app.env 里残留无害）。
+- **Redis 键结构（会话，当前不用）**：`teapot:session:{userId}/{sessionId}:{stateKey}` + `:_keys` 集合；支持版本化写入（saveIfVersion）。回切后存量键已清理。
+- **已知代价**：Redis 期间（§26 上线 → 回切之间）产生的会话历史留在 Redis 已清理，不迁移；`agentscope_sessions` 表一直保留，回切后继续写入。
+- **冒烟（回切后）**：新会话写入 `agentscope_sessions`（`tmp-verify-0816b:smoke-mem-1` 行✓）；`teapot:session:*` 键数归零✓。
+
+---
+
+## §27 存储拆分：会话状态在 MySQL，长期记忆路由 Redis（文件系统路由）
+
+用户指令：“会话存储放在 mysql，记忆存储放在 redis”。落地为两条独立开关：
+- **会话状态 → MySQL**：`redis.session-store=false`（生产默认），见 §26 修订。
+- **长期记忆 → Redis**：`redis.memory-store=true`（生产默认）。harness 两层记忆（`MEMORY.md` + `memory/YYYY-MM-DD.md`，含 watermark `memory/.consolidation_state`）全部经 WorkspaceManager → AbstractFilesystem I/O，因此用“文件系统路由”把记忆路径改指 Redis，不碰会话链路。
+- **实现（仅 2.0.1 可用能力）**：2.0.1 无 `filesystemRoute`（仅 2.0.3 开发线），用既有逃生舱 `HarnessAgent.Builder.abstractFilesystem(...)`（与 `filesystem(spec)` 互斥）：
+  - `RedisMemoryFilesystems`（core/storage）：用 `LocalFilesystemSpec.toFilesystem(workspace, IsolationScope.USER.toNamespaceFactory())` 完整复刻 SDK 默认本地装配（上层 LocalFilesystemWithShell + project 下层、USER 命名空间），再以 `CompositeFilesystem` 前缀/精确文件路由：`memory/` 与 `MEMORY.md` → **直达 `RemoteFilesystem(RedisStore)`（Redis 为记忆唯一来源，不读磁盘）**，其余路径走原叠加。两条路由经 Composite 归一后落同一命名空间（`/MEMORY.md` 与 `/<name>`，`memory/` 前缀被剥离），故共用一个 RemoteFilesystem 实例。
+  - **历史坑（已修）**：初版路由后端用 `OverlayFilesystem(Redis, LocalFilesystem 只读基线)` 想保住存量本地记忆可见，但基线**从未生效**——Composite 给路由后端的 backendPath 带前导斜杠（`/MEMORY.md`），而 `LocalFilesystem.isAbsolutePathString` 见 `/` 即视为绝对路径**跳过命名空间前缀**，基线永远读的是 `workspace/MEMORY.md`（无 `<uid>/` 段）而非真实的 `workspace/<uid>/MEMORY.md`。叠加用户指令“不想读磁盘记忆”，改为 Redis-only + 一次性存量迁移。
+  - `RedisMemoryLocalFilesystem`：`extends OverlayFilesystem implements AbstractSandboxFilesystem`，继承只为保住三处类型判定（`getUpper() instanceof LocalFilesystemWithShell`：路径归一化 + skill shell 策略；`AbstractSandboxFilesystem`：ShellExecuteTool 注册）；文件操作全部委托内部 Composite（默认后端必须是平行等价叠加实例，用 `this` 会递归）；`execute()/id()` 直接透传上层。**shell 能力完整保留**。
+  - `AgentAssembler.applySandbox` 改返 boolean；非沙箱（含降级）路径且路由工厂在场 → `builder.abstractFilesystem(...)`。
+- **命名空间**：`teapot:memory:item:agents\0<agentKey>\0users\0<uid>\0<path>`（RedisStore 以 NUL 拼接命名空间）；uid 缺失回落 sessionId，对齐 IsolationScope.USER 降级语义。键前缀 `teapot:memory:`（`memory-key-prefix`）。
+- **存量迁移**（`redis.migrate-legacy-memory=true` + `memory-store=true` 时，启动 `ApplicationRunner`）：`RedisMemoryFilesystems.migrateLegacyMemory(workspaceRoot)` 扫 `workspaceRoot/<agentKey>/<uid>/` 布局，把 `MEMORY.md` → `/MEMORY.md`、`memory/*` → `/<name>`（含 `.consolidation_state`），用运行时同款 `RemoteFilesystem.write`（create-if-absent）导入 Redis，**幂等可重跑**，磁盘文件保留作只读归档。生产已执行：`migrated=13 skipped=0`（teapot/admin 5 + digit-tim/discord 3 + digit-tim/admin 1 + general-assistant/anonymous 4），完成后已置回 `false`。
+- **适用范围**：仅非沙箱 Agent（teapot）。**沙箱 Agent（general-assistant/digit-tim）无法路由**：2.0.1 沙箱模式文件系统固定为 `SandboxBackedFilesystem`，无任何注入点，记忆留在沙箱内（如实声明，升级 2.0.3 的 `filesystemRoute` 才可解）。
+- **回切**：`TEAPOT_REDIS_MEMORY_STORE=false` 重启即回纯本地（但迁移后新写的记忆仅在 Redis、未回写磁盘，回切后这部分不可见；磁盘存量仍在）。
+- **子代理**：2.0.1 父代理的 `abstractFilesystem` 会自动传给子代理（`HarnessAgentBuilderSupport` capturedBackend），子代理记忆同走 Redis。
+- **冒烟**：teapot 对话（含 shell `echo` 执行✓）后：Redis 出现 `agents\0teapot\0users\0tmp-verify-0816b` 命名空间下 `/MEMORY.md`（consolidator 合并产物）、`/2026-08-28.md`（每日台账）、`/.consolidation_state`（watermark）✓，冒烟暗号写入并可在 Redis 值中命中✓；日志“记忆文件系统已路由到 Redis agentKey=teapot”✓。
+- **迁移后复验**（Redis-only）：tmpverify 登录后，Agent 从 Redis 读回旧暗号 `teapot-redis-mem-ok`（OLD_MARKER_RECITED✓）、shell `echo` 正常、新暗号 `migrate-mem-ok-8888` 落入 `/2026-08-28.md`（MARKER_FOUND✓）；`users\admin` 命名空间下 5 个迁移键完整（`/MEMORY.md` ver=1 内容为存量服务器架构记忆）。
+- **坑记录**：RedisStore 键含 NUL 字节，bash 变量/`redis-cli --scan` 管道会截断键名（显示为 `…:item:agents`），检查需用 Lua 脚本服务端内联或 `od` 直接读管道。
 
 ---
 

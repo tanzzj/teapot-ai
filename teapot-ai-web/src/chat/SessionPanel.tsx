@@ -1,12 +1,13 @@
-import { Button, message } from '@agentscope-ai/design';
+import { AlertDialog, Button, MobileAlertDialog, message } from '@agentscope-ai/design';
 import { SparkCopyLine, SparkDeleteLine, SparkMoreLine, SparkPlusLine } from '@agentscope-ai/icons';
-import { Dropdown, Modal } from 'antd';
+import { Dropdown } from 'antd';
 import { useMemo } from 'react';
 import {
   useChatAnywhereSessions,
   useChatAnywhereSessionsState,
 } from '@agentscope-ai/chat';
 import type { SessionItem } from './sessionBridge';
+import { useIsPhone } from '../hooks/useIsPhone';
 
 /**
  * 自定义会话面板（桌面接管模板 leftHeader 插槽 / 移动端置于自定义抽屉）。
@@ -64,6 +65,7 @@ export default function SessionPanel(props: { title: string; onNavigate?: () => 
   const { sessions, currentSessionId } = useChatAnywhereSessionsState();
   const { changeCurrentSessionId, removeSession } = useChatAnywhereSessions();
   const list = (sessions || []) as SessionItem[];
+  const isPhone = useIsPhone();
 
   // 按更新时间倒序（后端返回顺序不保证），再按时间分组展示（今天/昨天/最近 7 天…）
   const sorted = useMemo(
@@ -228,7 +230,10 @@ export default function SessionPanel(props: { title: string; onNavigate?: () => 
                       if (key === 'copy') {
                         copyText(s.sessionId || (s.id as string));
                       } else if (key === 'delete') {
-                        Modal.confirm({
+                        // 删除确认（SPEC-mobile M3）：design 包 AlertDialog，
+                        // 手机端走 MobileAlertDialog（自带滚动锁与移动端规格）
+                        const confirm = isPhone ? MobileAlertDialog.confirm : AlertDialog.confirm;
+                        confirm({
                           title: '删除该会话？',
                           okText: '删除',
                           cancelText: '取消',

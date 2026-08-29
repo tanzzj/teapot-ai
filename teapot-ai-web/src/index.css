@@ -51,8 +51,9 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-/* 移动端输入框不自动缩放（iOS 16px 以下会 zoom） */
-@media (max-width: 768px) {
+/* 移动端输入框不自动缩放（iOS 16px 以下会 zoom）；
+   边界统一 max-width:767px，与 JS `< 768`（PHONE_BP）同界（SPEC-mobile M5） */
+@media (max-width: 767px) {
   input,
   textarea,
   select {
@@ -105,7 +106,7 @@ body {
     box-shadow: 0 2px 10px rgba(31, 38, 135, 0.05), 0 0 22px 3px rgba(97, 92, 237, 0.16);
   }
 }
-@media (min-width: 769px) {
+@media (min-width: 768px) {
   .teapot-new-chat-btn {
     animation: teapot-breath-glow 3.2s ease-in-out infinite;
   }
@@ -124,6 +125,19 @@ body {
 }
 .agentscope-runtime-webui-sender {
   animation: teapot-sender-breath 3.2s ease-in-out infinite;
+}
+
+/* ── 发送按钮禁用态置灰可见 ──
+   模板禁用态背景为 15% 透明浅灰 + 白图标，白底上几乎不可见（观感等同隐藏）；
+   覆盖为不透明灰底 + 灰图标：无文字时始终展示置灰的发送按钮（不可点击） */
+.agentscope-runtime-webui-sender-actions-btn.agentscope-runtime-webui-sender-actions-btn-disabled,
+.agentscope-runtime-webui-sender-actions-btn.agentscope-runtime-webui-sender-actions-btn-disabled:hover {
+  background: rgba(26, 26, 29, 0.12) !important;
+  color: rgba(26, 26, 29, 0.35) !important;
+}
+.agentscope-runtime-webui-sender-actions-btn-disabled .anticon,
+.agentscope-runtime-webui-sender-actions-btn-disabled svg {
+  color: rgba(26, 26, 29, 0.35) !important;
 }
 
 /* ── 会话面板接管（leftHeader 插槽换成 SessionPanel） ──
@@ -255,8 +269,9 @@ button[class*='btn-primary'] {
   justify-content: center;
   border: none;
   border-radius: 8px;
-  background: rgba(26, 26, 29, 0.78);
-  color: #fff;
+  /* IconButton 自带背景/悬浮样式，这里强约束保持暗色胶囊观感 */
+  background: rgba(26, 26, 29, 0.78) !important;
+  color: #fff !important;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }

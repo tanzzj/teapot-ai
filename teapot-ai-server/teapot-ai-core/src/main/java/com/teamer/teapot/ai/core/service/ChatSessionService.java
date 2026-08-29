@@ -20,7 +20,7 @@ import io.agentscope.core.message.Source;
 import io.agentscope.core.message.URLSource;
 import io.agentscope.core.message.VideoBlock;
 import io.agentscope.core.state.AgentState;
-import io.agentscope.extensions.mysql.state.MysqlAgentStateStore;
+import io.agentscope.core.state.AgentStateStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,16 +41,16 @@ import java.util.UUID;
 @Service
 public class ChatSessionService {
 
-    /** agentscope_sessions 中 Runtime 写入的状态键（整个 AgentState 单槽存储） */
+    /** AgentStateStore 中 Runtime 写入的状态键（整个 AgentState 单槽存储，Redis/MySQL 后端一致） */
     private static final String AGENT_STATE_KEY = "agent_state";
 
     private final ChatSessionMapper chatSessionMapper;
     private final AgentMapper agentMapper;
-    private final MysqlAgentStateStore stateStore;
+    private final AgentStateStore stateStore;
 
     public ChatSessionService(ChatSessionMapper chatSessionMapper,
                               AgentMapper agentMapper,
-                              MysqlAgentStateStore stateStore) {
+                              AgentStateStore stateStore) {
         this.chatSessionMapper = chatSessionMapper;
         this.agentMapper = agentMapper;
         this.stateStore = stateStore;
@@ -208,7 +208,7 @@ public class ChatSessionService {
      * 双槽上下文合并（回放读取专用，不影响 AG-UI 写入链路）：
      * 两槽都存在时 anonymous 旧段在前拼接用户槽新段（消息 id 去重）；仅单槽存在时直接返回。
      */
-    static List<Msg> mergeSlotContexts(String userId, String sessionId, MysqlAgentStateStore stateStore) {
+    static List<Msg> mergeSlotContexts(String userId, String sessionId, AgentStateStore stateStore) {
         Optional<AgentState> anon = stateStore.get("anonymous", sessionId, AGENT_STATE_KEY, AgentState.class);
         Optional<AgentState> user = stateStore.get(userId, sessionId, AGENT_STATE_KEY, AgentState.class);
         if (anon.isEmpty()) {

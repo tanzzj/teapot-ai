@@ -14,7 +14,8 @@ import java.util.Map;
 
 /**
  * Channel 工厂（SPEC §24.4）：channel_type → Channel 构造；
- * 已支持 dingtalk（官方扩展）与 discord（自实现 JDA 适配器，§24 修订），后续飞书/企微只加分支。
+ * 已支持 dingtalk（官方扩展）、discord（自实现 JDA 适配器，§24 修订）与
+ * github（自实现 webhook 适配器，参考官方 channel-github 源码），后续飞书/企微只加分支。
  */
 public final class ChannelFactory {
 
@@ -31,6 +32,9 @@ public final class ChannelFactory {
         }
         if (ChannelConfigService.TYPE_DISCORD.equals(type)) {
             return discord(plain, agentKey, feature);
+        }
+        if (ChannelConfigService.TYPE_GITHUB.equals(type)) {
+            return github(plain, agentKey, feature);
         }
         throw new BizException("不支持的 channel 类型：" + type);
     }
@@ -66,5 +70,20 @@ public final class ChannelFactory {
         // 第 5 参为 channel 链路统一身份（渠道名称，§24.2 修订）
         return new DiscordChannel(channelId, config, plain.getAppSecret(), true,
                 ChannelConfigService.TYPE_DISCORD);
+    }
+
+    /** GitHub channel（公网 webhook 回调 + PAT 出站评论，参考官方 channel-github 实现；§24 修订） */
+    private static Channel github(ChannelConfigDO plain, String agentKey, AgentFeature.Channel feature) {
+        String channelId = ChannelConfigService.TYPE_GITHUB + "-" + plain.getName();
+        DmScope dmScope = feature.getDmScope() == null || feature.getDmScope().isBlank()
+                ? DEFAULT_DM_SCOPE : DmScope.valueOf(feature.getDmScope().trim());
+        ChannelConfig config = ChannelConfig.builder(channelId)
+                .defaultAgentId(agentKey)
+                .dmScope(dmScope)
+                .build();
+        // PAT token 存 app_secret 列（AES-GCM）；webhook secret 存 webhook_secret 列（AES-GCM）；
+        // app_key 列复用为 bot 账号 login（可选，防环比对）；身份同取渠道名称（§24.2 修订）
+        return new GitHubChannel(channelId, config, plain.getAppSecret(), plain.getWebhookSecret(),
+                null, plain.getAppKey(), ChannelConfigService.TYPE_GITHUB);
     }
 }

@@ -11,7 +11,7 @@ import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import com.teamer.teapot.ai.rbac.model.TeapotUser;
 import io.agentscope.core.message.Msg;
-import io.agentscope.extensions.mysql.state.MysqlAgentStateStore;
+import io.agentscope.core.state.AgentStateStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -36,11 +36,11 @@ public class SessionHistoryService {
 
     private final ChatSessionMapper chatSessionMapper;
     private final ChannelSessionMapper channelSessionMapper;
-    private final MysqlAgentStateStore stateStore;
+    private final AgentStateStore stateStore;
 
     public SessionHistoryService(ChatSessionMapper chatSessionMapper,
                                  ChannelSessionMapper channelSessionMapper,
-                                 MysqlAgentStateStore stateStore) {
+                                 AgentStateStore stateStore) {
         this.chatSessionMapper = chatSessionMapper;
         this.channelSessionMapper = channelSessionMapper;
         this.stateStore = stateStore;

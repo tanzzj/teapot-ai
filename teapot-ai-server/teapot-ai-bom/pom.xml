@@ -66,6 +66,12 @@
                 <artifactId>agentscope-extensions-mysql</artifactId>
                 <version>${agentscope.version}</version>
             </dependency>
+            <!-- Redis 会话状态存储（SPEC §26：RedisAgentStateStore，本机 Redis） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-redis</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.agentscope</groupId>
                 <artifactId>agentscope-extensions-skill-mysql-repository</artifactId>

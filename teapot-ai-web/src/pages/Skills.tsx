@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Col, Dropdown, Input, Row, Space, Spin, Typography, Upload } from 'antd';
 import type { UploadFile } from 'antd';
-import { Button, Empty, message, Modal, Popconfirm, Radio, Tag } from '@agentscope-ai/design';
+import { Button, Empty, message, Popconfirm, Radio, Tag } from '@agentscope-ai/design';
 import {
   SparkDownArrowLine,
   SparkPlusLine,
@@ -21,9 +21,12 @@ import {
   skillOssStatus,
 } from '../api/skill';
 import { useAuthStore } from '../store/auth';
+import { useIsPhone } from '../hooks/useIsPhone';
+import { ResponsiveModal } from '../components/ResponsiveModal';
 import type { SkillGitStatus, SkillListItem, SkillOssStatus } from '../types';
 
 /** Skill 工坊列表（SPEC §12.2 + §15.13 + §22.3 扩展：三来源 source 标签 / git·oss 只读 / zip 导入） */
+
 export default function Skills() {
   const navigate = useNavigate();
   const [list, setList] = useState<SkillListItem[]>([]);
@@ -38,9 +41,9 @@ export default function Skills() {
   const [gitImportOpen, setGitImportOpen] = useState(false);
   const [gitImportUrl, setGitImportUrl] = useState('');
   const [gitImportBranch, setGitImportBranch] = useState('');
-  const [gitImportTarget, setGitImportTarget] = useState<'oss' | 'mysql'>('mysql');
   const [gitImporting, setGitImporting] = useState(false);
   const canSync = useAuthStore((s) => s.hasRole('admin', 'developer'));
+  const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,8 +104,9 @@ export default function Skills() {
     }
     setGitImporting(true);
     try {
-      const result = await skillImportFromGit(gitImportUrl.trim(), gitImportBranch.trim(), gitImportTarget);
-      message.success(`导入完成（${result.target === 'oss' ? 'OSS' : '平台库'}）：${result.imported.join('、')}`);
+      // 落点固定平台数据库（agentscope_skills）：导入即内容入库，无需选择存储位置
+      const result = await skillImportFromGit(gitImportUrl.trim(), gitImportBranch.trim(), 'mysql');
+      message.success(`导入完成：${result.imported.join('、')}`);
       setGitImportOpen(false);
       setGitImportUrl('');
       setGitImportBranch('');
@@ -113,7 +117,7 @@ export default function Skills() {
   };
 
   return (
-    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
+    <div style={{ padding: isPhone ? 12 : 24 }}>
       <Space style={{ marginBottom: 16 }}>
         {/* 新建/导入收进单个下拉：新建 / zip 导入 / git 导入（任意仓库地址） */}
         <Dropdown
@@ -138,7 +142,6 @@ export default function Skills() {
               } else if (key === 'git') {
                 setGitImportUrl('');
                 setGitImportBranch('');
-                setGitImportTarget('mysql');
                 setGitImportOpen(true);
               }
             },
@@ -309,7 +312,7 @@ export default function Skills() {
         )}
       </Spin>
 
-      <Modal
+      <ResponsiveModal
         title="导入 Skill zip"
         open={importOpen}
         onOk={onImport}
@@ -346,9 +349,9 @@ export default function Skills() {
             同名导入即覆盖，导入后绑定该 skill 的 Agent 下一轮生效。
           </Typography.Text>
         </Space>
-      </Modal>
+      </ResponsiveModal>
 
-      <Modal
+      <ResponsiveModal
         title="从 Git 仓库导入 Skill"
         open={gitImportOpen}
         onOk={onGitImport}
@@ -375,19 +378,12 @@ export default function Skills() {
               allowClear
             />
           </div>
-          <Radio.Group
-            value={gitImportTarget}
-            onChange={(e) => setGitImportTarget(e.target.value)}
-            options={[
-              { label: '存入平台库（同名更新）', value: 'mysql' },
-              ...(ossStatus?.enabled ? [{ label: '存入 OSS（同名覆盖）', value: 'oss' }] : []),
-            ]}
-          />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            仅支持可公开访问的仓库；需含 SKILL.md（根级或首层子目录），导入后源仓库不会持续同步。
+            仅支持可公开访问的仓库；需含 SKILL.md（根级或首层子目录）。
+            导入时从远程拉取一次，内容存入平台数据库，同名再次导入即更新。
           </Typography.Text>
         </Space>
-      </Modal>
+      </ResponsiveModal>
     </div>
   );
 }

@@ -24,6 +24,10 @@ public class AgentFeature {
     public static final String NS_CHANNEL = "channel";
     /** 运行期高级配置：thinking/采样参数/工具与迭代开关等（Agent 配置页 Basic Info + Tool & Advanced） */
     public static final String NS_RUNTIME = "runtime";
+    /** MultiAgent（SPEC §25）：subagent 能力开关（缺省开启，对齐 SDK 默认） */
+    public static final String NS_MULTIAGENT = "multiagent";
+    /** 长期记忆（SPEC §25）：两层记忆管线开关与 flush 触发策略（缺省开启，对齐 SDK 默认） */
+    public static final String NS_MEMORY = "memory";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
@@ -32,6 +36,8 @@ public class AgentFeature {
     private static final Set<String> SANDBOX_LINKS = Set.of("auto", "e2b", "agentrun");
     /** channel 会话粒度可选值（SPEC §24.3） */
     private static final Set<String> DM_SCOPES = Set.of("MAIN", "PER_PEER", "PER_CHANNEL_PEER");
+    /** 记忆 flush 触发策略可选值（SPEC §25，对齐 MemoryConfig.FlushTrigger） */
+    private static final Set<String> FLUSH_TRIGGERS = Set.of("always", "never", "throttled");
     private static final List<String> NAS_MOUNT_PREFIXES = List.of("/home/", "/mnt/", "/data/");
     /** 闲置超时合法区间（SPEC §16.6） */
     private static final int IDLE_MIN_SECONDS = 300;
@@ -150,6 +156,46 @@ public class AgentFeature {
         }
     }
 
+    /** multiagent 命名空间；未配置返回 null（按启用处理，对齐 SDK 默认） */
+    @SuppressWarnings("unchecked")
+    public MultiAgent getMultiAgent() {
+        Object raw = namespaces.get(NS_MULTIAGENT);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, MultiAgent.class);
+    }
+
+    /** 写入/替换 multiagent 命名空间 */
+    public void setMultiAgent(MultiAgent multiAgent) {
+        if (multiAgent == null) {
+            namespaces.remove(NS_MULTIAGENT);
+        } else {
+            namespaces.put(NS_MULTIAGENT, MAPPER.convertValue(multiAgent, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
+    /** memory 命名空间；未配置返回 null（按启用处理，对齐 SDK 默认） */
+    @SuppressWarnings("unchecked")
+    public Memory getMemory() {
+        Object raw = namespaces.get(NS_MEMORY);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, Memory.class);
+    }
+
+    /** 写入/替换 memory 命名空间 */
+    public void setMemory(Memory memory) {
+        if (memory == null) {
+            namespaces.remove(NS_MEMORY);
+        } else {
+            namespaces.put(NS_MEMORY, MAPPER.convertValue(memory, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
     /**
      * 保存时强校验（SPEC §16.6/§22 校验表）：不合法直接抛 BizException 拒绝。
      * 记录存在性由 AgentService 补充校验（模型层不依赖 Service）。
@@ -160,6 +206,7 @@ public class AgentFeature {
         validateStorage();
         validateChannel();
         validateRuntime();
+        validateMemory();
         Sandbox sb = getSandbox();
         if (sb == null) {
             return;
@@ -255,6 +302,23 @@ public class AgentFeature {
         }
     }
 
+    /** memory 命名空间校验（SPEC §25）：flushTrigger 枚举；throttled 时节流分钟数区间 */
+    private void validateMemory() {
+        Memory mem = getMemory();
+        if (mem == null) {
+            return;
+        }
+        if (mem.getFlushTrigger() != null && !FLUSH_TRIGGERS.contains(mem.getFlushTrigger())) {
+            throw new BizException("flushTrigger 非法，可选值：" + FLUSH_TRIGGERS);
+        }
+        if ("throttled".equals(mem.getFlushTrigger())) {
+            Integer minutes = mem.getFlushThrottleMinutes();
+            if (minutes == null || minutes < 1 || minutes > 1440) {
+                throw new BizException("flushThrottleMinutes 超出范围（1–1440）");
+            }
+        }
+    }
+
     /** storage 命名空间结构（SPEC §22.1：图片存储载体按 Agent 选择，非全局） */
     @Data
     public static class Storage {
@@ -272,6 +336,24 @@ public class AgentFeature {
         private String channelRecord;
         /** 会话粒度：MAIN / PER_PEER / PER_CHANNEL_PEER，缺省 PER_CHANNEL_PEER */
         private String dmScope;
+    }
+
+    /** multiagent 命名空间结构（SPEC §25：subagent 委派能力） */
+    @Data
+    public static class MultiAgent {
+        /** false 时装配 disableSubagents + disableDynamicSubagents；缺省（无命名空间）启用 */
+        private boolean enabled;
+    }
+
+    /** memory 命名空间结构（SPEC §25：两层长期记忆管线） */
+    @Data
+    public static class Memory {
+        /** false 时装配 disableMemoryHooks + disableMemoryTools；缺省（无命名空间）启用 */
+        private Boolean enabled;
+        /** flush 触发策略：always（每次对话后）/ never（仅随压缩）/ throttled（节流）；缺省 always */
+        private String flushTrigger;
+        /** flushTrigger=throttled 时的最小间隔分钟数（1–1440） */
+        private Integer flushThrottleMinutes;
     }
 
     /** runtime 命名空间结构：字段全部可空（null = 未配置，回落 SDK 默认 / 存量行为） */

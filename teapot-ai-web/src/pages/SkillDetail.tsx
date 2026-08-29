@@ -12,6 +12,7 @@ import { SparkDeleteLine, SparkVisibleLine, SparkPlusLine, SparkSaveLine } from 
 import { useNavigate, useParams } from 'react-router-dom';
 import { skillDetail, skillGitStatus, skillPreview, skillSave } from '../api/skill';
 import type { SkillResourceItem } from '../types';
+import { useIsPhone } from '../hooks/useIsPhone';
 
 /** Skill 编辑器（SPEC §12.2：name/description/instructions + 资源 + 实时预览） */
 export default function SkillDetailPage() {
@@ -25,6 +26,7 @@ export default function SkillDetailPage() {
   const [preview, setPreview] = useState('');
   const [roBanner, setRoBanner] = useState<{ title: string; text: string } | null>(null);
   const isReadOnly = roBanner !== null;
+  const isPhone = useIsPhone();
 
   useEffect(() => {
     if (isNew) return;
@@ -82,7 +84,7 @@ export default function SkillDetailPage() {
   };
 
   return (
-    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
+    <div style={{ padding: isPhone ? 12 : 24 }}>
       <Breadcrumb
         style={{ marginBottom: 16 }}
         items={[

@@ -3,8 +3,8 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { Select } from '@agentscope-ai/design';
 import { agentList } from '../api/agent';
 import type { Agent } from '../types';
+import { PHONE_BP } from '../theme/breakpoints';
 
-const MOBILE_BP = 768;
 const LS_KEY = 'teapot:lastAgent';
 
 /**
@@ -17,10 +17,10 @@ export default function AgentSelector() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BP);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < PHONE_BP);
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < MOBILE_BP);
+    const onResize = () => setIsMobile(window.innerWidth < PHONE_BP);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);

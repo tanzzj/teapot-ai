@@ -1,6 +1,7 @@
 package com.teamer.teapot.ai.core.agui;
 
 import com.auth0.jwt.interfaces.DecodedJWT;
+import com.teamer.teapot.ai.core.service.AgentRuntimeHints;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import com.teamer.teapot.ai.rbac.service.JwtService;
 import io.agentscope.core.agent.RuntimeContext;
@@ -16,6 +17,9 @@ import org.springframework.stereotype.Component;
  * AgentscopeAguiMvcAutoConfiguration 通过 ObjectProvider 优先取本 Bean。
  * 注：starter 在异步线程池回调 resolve，ContextUtil（ThreadLocal）不会传播，
  * 故兼容从请求头 Authorization 直接解析 JWT（§22.5）。
+ * 同线程内后续才解析 agent（AguiRequestProcessor.process 顺序），因此本方法同时从
+ * forwardedProps 提取请求级开关（memoryMode / planMode）写入 AgentRuntimeHints，
+ * 由 AgentAssembler 装配时消费（SPEC §25：chat 界面参数传递）。
  */
 @Slf4j
 @Component
@@ -45,10 +49,34 @@ public class TeapotRuntimeContextResolver implements AguiRuntimeContextResolver 
         if (sessionId == null || sessionId.isBlank()) {
             sessionId = "default";
         }
+        // 请求级开关（chat 界面 forwardedProps，SPEC §25）：
+        // 未传参时清理旧值（线程池线程复用），装配回落 Agent 配置
+        AgentRuntimeHints.setMemoryMode(parseBooleanProp(request, "memoryMode"));
+        AgentRuntimeHints.setPlanMode(parseBooleanProp(request, "planMode"));
         return RuntimeContext.builder()
                 .userId(userId)
                 .sessionId(sessionId)
                 .build();
+    }
+
+    /** forwardedProps 布尔开关通用解析：缺失/非法返回 null（跟随 Agent 配置） */
+    private Boolean parseBooleanProp(AguiRuntimeContextRequest request, String key) {
+        if (request.getInput() == null) {
+            return null;
+        }
+        Object raw = request.getInput().getForwardedProp(key);
+        if (raw instanceof Boolean b) {
+            return b;
+        }
+        if (raw instanceof String s) {
+            if ("true".equalsIgnoreCase(s)) {
+                return Boolean.TRUE;
+            }
+            if ("false".equalsIgnoreCase(s)) {
+                return Boolean.FALSE;
+            }
+        }
+        return null;
     }
 
     /** 从 Authorization: Bearer 头解析 uid；无效/缺失返回 null */

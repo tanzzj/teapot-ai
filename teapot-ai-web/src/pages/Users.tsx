@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Space } from 'antd';
-import { Button, Form, Input, message, Modal, Popconfirm, Select, Table, Tag } from '@agentscope-ai/design';
+import { Button, Form, Input, message, Popconfirm, Select, Table, Tag } from '@agentscope-ai/design';
 import { SparkPlusLine } from '@agentscope-ai/icons';
 import { userCreate, userDisable, userPage, userUpdate } from '../api/auth';
 import { useAuthStore } from '../store/auth';
 import type { TeapotUser } from '../types';
+import { useIsPhone } from '../hooks/useIsPhone';
+import { ResponsiveModal } from '../components/ResponsiveModal';
 
 const ROLE_OPTIONS = [
   { label: 'admin（管理员）', value: 'admin' },
@@ -23,6 +25,7 @@ export default function Users() {
   const [editTarget, setEditTarget] = useState<TeapotUser | null>(null);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,7 +77,7 @@ export default function Users() {
   };
 
   return (
-    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
+    <div style={{ padding: isPhone ? 12 : 24 }}>
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<SparkPlusLine />} onClick={() => setCreateOpen(true)}>
           新建用户
@@ -85,7 +88,7 @@ export default function Users() {
         rowKey="userId"
         loading={loading}
         dataSource={list}
-        scroll={window.innerWidth < 768 ? { x: 720 } : undefined}
+        scroll={isPhone ? { x: 720 } : undefined}
         pagination={{
           current: page,
           pageSize: 10,
@@ -157,7 +160,7 @@ export default function Users() {
       />
       </div>
 
-      <Modal
+      <ResponsiveModal
         title="新建用户"
         open={createOpen}
         onOk={onCreate}
@@ -187,9 +190,9 @@ export default function Users() {
             <Select mode="multiple" options={ROLE_OPTIONS} />
           </Form.Item>
         </Form>
-      </Modal>
+      </ResponsiveModal>
 
-      <Modal
+      <ResponsiveModal
         title={`编辑用户 ${editTarget?.username || ''}`}
         open={!!editTarget}
         onOk={onEdit}
@@ -209,7 +212,7 @@ export default function Users() {
             <Input.Password placeholder="留空表示不修改" />
           </Form.Item>
         </Form>
-      </Modal>
+      </ResponsiveModal>
     </div>
   );
 }

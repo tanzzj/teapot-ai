@@ -6,7 +6,6 @@ import {
   Form,
   Input,
   message,
-  Modal,
   Pagination,
   Popconfirm,
   Select,
@@ -22,6 +21,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { agentCreate, agentDelete, agentList, modelPresets } from '../api/agent';
 import type { Agent } from '../types';
+import { ResponsiveModal } from '../components/ResponsiveModal';
 
 /**
  * Agent 管理列表（Barley 设计语言复刻：大标题 + 三列毛玻璃卡片网格）。
@@ -243,7 +243,7 @@ export default function Agents() {
         <Pagination current={page} pageSize={12} total={total} onChange={setPage} showSizeChanger={false} />
       </div>
 
-      <Modal
+      <ResponsiveModal
         title="新建 Agent"
         open={createOpen}
         onOk={onCreate}
@@ -277,7 +277,7 @@ export default function Agents() {
             <Input.TextArea rows={4} placeholder="可留空使用默认提示词" />
           </Form.Item>
         </Form>
-      </Modal>
+      </ResponsiveModal>
     </div>
   );
 }

@@ -39,12 +39,29 @@ public class TeapotAiProperties {
         /** 每 agent 独立 workspace 的根目录 */
         private String workspaceRoot = "./workspace";
         private boolean createIfNotExist = true;
+        /** Redis 存储拆分（SPEC §26 修订/§27）：会话状态与记忆文件系统各自独立开关 */
+        private Redis redis = new Redis();
 
         @Data
         public static class Datasource {
             private String url;
             private String username;
             private String password;
+        }
+
+        @Data
+        public static class Redis {
+            private String host = "127.0.0.1";
+            private int port = 6379;
+            private String password;
+            /** 会话状态存储（SPEC §26 修订）：true = Redis，false = MySQL（默认） */
+            private boolean sessionStore = false;
+            /** 记忆文件系统路由（SPEC §27）：true = MEMORY.md/memory/ 落 Redis，false = 纯本地 */
+            private boolean memoryStore = false;
+            /** 存量本地记忆一次性迁移（SPEC §27）：true 且 memory-store=true 时，启动扫描 workspace 导入 Redis（幂等） */
+            private boolean migrateLegacyMemory = false;
+            private String sessionKeyPrefix = "teapot:session:";
+            private String memoryKeyPrefix = "teapot:memory:";
         }
     }
 

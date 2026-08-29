@@ -34,10 +34,15 @@
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-model-openai</artifactId>
         </dependency>
-        <!-- MySQL 会话状态存储（MysqlAgentStateStore / JdbcStore） -->
+        <!-- MySQL 会话状态存储（MysqlAgentStateStore / JdbcStore，Redis 禁用时的降级后端） -->
         <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-mysql</artifactId>
+        </dependency>
+        <!-- Redis 会话状态存储（SPEC §26：RedisAgentStateStore） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-redis</artifactId>
         </dependency>
         <!-- MySQL Skill 仓库 -->
         <dependency>

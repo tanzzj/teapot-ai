@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Drawer, Menu, Segmented, Space, message, theme, Dropdown } from 'antd';
+import { Menu, Segmented, Space, message, theme, Dropdown } from 'antd';
 import { Button, Avatar } from '@agentscope-ai/design';
 import {
   SparkRoboticsLine,
@@ -10,14 +10,14 @@ import {
   SparkEscapeLine,
   SparkMenuLine,
   SparkCameraLine,
+  SparkCircleArrowDownLine,
 } from '@agentscope-ai/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { useMobileUIStore } from '../store/mobileUI';
 import { uploadUserAvatar } from '../api/avatar';
+import { PHONE_BP } from '../theme/breakpoints';
 import AgentSelector from './AgentSelector';
-
-const MOBILE_BP = 768;
 
 /**
  * 主框架布局（Barley 设计语言复刻）：
@@ -30,7 +30,7 @@ export default function AppLayout() {
   const { user, logout, hasRole, setUserPatch } = useAuthStore();
   const { token } = theme.useToken();
   const { mobileView, sessionTitle } = useMobileUIStore();
-  const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BP);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < PHONE_BP);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,7 +66,7 @@ export default function AppLayout() {
   );
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < MOBILE_BP);
+    const onResize = () => setIsMobile(window.innerWidth < PHONE_BP);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -105,10 +105,7 @@ export default function AppLayout() {
     [navigate],
   );
 
-  // 路由切换时关闭 Drawer（已移除 Drawer，保留注释）
-  // useEffect(() => {
-  //   setDrawerOpen(false);
-  // }, [location.pathname]);
+  // 移动端导航已改顶栏下拉菜单，无 Drawer 打开态需随路由关闭
 
   return (
     <div style={{ height: '100dvh', padding: isMobile ? 6 : 12, boxSizing: 'border-box' }}>
@@ -156,9 +153,7 @@ export default function AppLayout() {
                   <span style={{ fontWeight: 600 }}>
                     {items.find((i) => i.key === selectedKey)?.label || '对话'}
                   </span>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
+                  <SparkCircleArrowDownLine size={14} />
                 </Button>
               </Dropdown>
             </>
@@ -258,7 +253,8 @@ export default function AppLayout() {
               </Space>
             </Dropdown>
           )}
-          {/* 头像选择器（SPEC §23）：Dropdown 菜单项触发 */}
+          {/* 头像选择器（SPEC §23）：Dropdown 菜单项触发；
+              原生 input[file] 为浏览器文件选择唯一通道，豁免于禁用原生表单标签规则（SPEC-mobile M8） */}
           <input
             ref={avatarInputRef}
             type="file"
@@ -274,7 +270,7 @@ export default function AppLayout() {
         </main>
       </div>
 
-      {/* 移动端不再使用 Drawer，统一用顶栏下拉菜单 */}
+      {/* 移动端导航采用顶栏下拉菜单（产品决策，见 SPEC-mobile A3） */}
     </div>
   );
 }

@@ -25,6 +25,7 @@ rbac:                                            # 登录-用户体系（SPEC §
   permit-list:
     - /api/auth/login
     - /api/auth/refresh
+    - /api/webhook/github/*                      # GitHub 渠道回调（HMAC 签名校验，无平台令牌，SPEC §24 修订）
     - /actuator/health
   resource-list:
     - roleId: admin

@@ -40,6 +40,9 @@ Thumbs.db
 tools/
 target_spec_api.txt
 
+# ===== 参考仓库（只读参考，不入库） =====
+reference/
+
 # ===== 部署脚本（仅存服务器/本地工作区，不入库） =====
 deploy/
 

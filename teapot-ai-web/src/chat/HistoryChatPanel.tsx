@@ -11,9 +11,7 @@ import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
 import { createHistorySessionBridge } from './sessionBridge';
 import SessionPanel from './SessionPanel';
 import type { SessionItem } from './sessionBridge';
-
-// 左栏会话列表 vs 抽屉的切换断点：更窄的手机屏放不下两栏
-const NARROW_BP = 768;
+import { PHONE_BP } from '../theme/breakpoints';
 /** 左栏 Portal 挂载点（单实例页面，id 唯一） */
 const LEFT_SLOT_ID = 'teapot-history-left-slot';
 
@@ -87,12 +85,12 @@ function HistoryBridge(props: {
  * 窄屏改顶栏按钮 + Drawer；输入区经 CSS 隐藏、beforeSubmit 兜底拦截。
  */
 export default function HistoryChatPanel({ agentKey }: { agentKey: string }) {
-  const [narrow, setNarrow] = useState(window.innerWidth < NARROW_BP);
+  const [narrow, setNarrow] = useState(window.innerWidth < PHONE_BP);
   // 窄屏会话列表藏在 Drawer 里，顶栏图标入口不直观——进入分区自动展开，列表直接可见
-  const [drawerOpen, setDrawerOpen] = useState(() => window.innerWidth < NARROW_BP);
+  const [drawerOpen, setDrawerOpen] = useState(() => window.innerWidth < PHONE_BP);
 
   useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < NARROW_BP);
+    const onResize = () => setNarrow(window.innerWidth < PHONE_BP);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);

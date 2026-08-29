@@ -10,6 +10,7 @@
         <result property="appKey" column="app_key"/>
         <result property="appSecret" column="app_secret"/>
         <result property="robotCode" column="robot_code"/>
+        <result property="webhookSecret" column="webhook_secret"/>
         <result property="remark" column="remark"/>
         <result property="updatedBy" column="updated_by"/>
         <result property="createdAt" column="created_at"/>
@@ -17,7 +18,7 @@
     </resultMap>
 
     <sql id="allColumns">
-        id, name, channel_type, app_key, app_secret, robot_code,
+        id, name, channel_type, app_key, app_secret, robot_code, webhook_secret,
         remark, updated_by, created_at, updated_at
     </sql>
 
@@ -31,9 +32,9 @@
 
     <insert id="insert">
         INSERT INTO t_channel_config
-            (name, channel_type, app_key, app_secret, robot_code, remark, updated_by)
+            (name, channel_type, app_key, app_secret, robot_code, webhook_secret, remark, updated_by)
         VALUES
-            (#{name}, #{channelType}, #{appKey}, #{appSecret}, #{robotCode}, #{remark}, #{updatedBy})
+            (#{name}, #{channelType}, #{appKey}, #{appSecret}, #{robotCode}, #{webhookSecret}, #{remark}, #{updatedBy})
     </insert>
 
     <update id="updateByName">
@@ -43,6 +44,7 @@
             <if test="appKey != null">app_key = #{appKey},</if>
             <if test="appSecret != null">app_secret = #{appSecret},</if>
             <if test="robotCode != null">robot_code = #{robotCode},</if>
+            <if test="webhookSecret != null">webhook_secret = #{webhookSecret},</if>
             <if test="remark != null">remark = #{remark},</if>
             updated_by = #{updatedBy}
         </set>

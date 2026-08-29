@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AutoComplete, Space, Typography } from 'antd';
-import { Button, Form, Input, message, Modal, Popconfirm, Select, Switch, Table, Tag } from '@agentscope-ai/design';
+import { Button, Form, Input, message, Popconfirm, Select, Switch, Table, Tag } from '@agentscope-ai/design';
 import { SparkPlusLine } from '@agentscope-ai/icons';
 import {
   modelCreate,
@@ -10,6 +10,8 @@ import {
   modelVendorModels,
   type ModelEntry,
 } from '../api/model';
+import { useIsPhone } from '../hooks/useIsPhone';
+import { ResponsiveModal } from '../components/ResponsiveModal';
 
 const PROVIDER_OPTIONS = [
   { label: 'DashScope（通义千问系）', value: 'dashscope' },
@@ -33,6 +35,7 @@ export default function Models() {
   /** DashScope 在售模型清单（模型名下拉数据源；拉取失败降级为手输） */
   const [vendorModels, setVendorModels] = useState<string[]>([]);
   const [vendorLoading, setVendorLoading] = useState(false);
+  const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -94,7 +97,7 @@ export default function Models() {
   };
 
   return (
-    <div style={{ padding: window.innerWidth < 768 ? 12 : 24 }}>
+    <div style={{ padding: isPhone ? 12 : 24 }}>
       <Space style={{ marginBottom: 8 }} align="center">
         <Button type="primary" icon={<SparkPlusLine />} onClick={() => setCreateOpen(true)}>
           新建模型入口
@@ -109,7 +112,7 @@ export default function Models() {
         rowKey="id"
         loading={loading}
         dataSource={list}
-        scroll={window.innerWidth < 768 ? { x: 800 } : undefined}
+        scroll={isPhone ? { x: 800 } : undefined}
         pagination={false}
         columns={[
           {
@@ -196,7 +199,7 @@ export default function Models() {
       />
       </div>
 
-      <Modal
+      <ResponsiveModal
         title="新建模型入口"
         open={createOpen}
         onOk={onCreate}
@@ -260,9 +263,9 @@ export default function Models() {
             }
           </Form.Item>
         </Form>
-      </Modal>
+      </ResponsiveModal>
 
-      <Modal
+      <ResponsiveModal
         title={`编辑 ${editTarget?.provider || ''}:${editTarget?.modelName || ''}`}
         open={!!editTarget}
         onOk={onEdit}
@@ -317,7 +320,7 @@ export default function Models() {
             <Input placeholder="留空使用环境变量 OPENAI_BASE_URL" />
           </Form.Item>
         </Form>
-      </Modal>
+      </ResponsiveModal>
     </div>
   );
 }

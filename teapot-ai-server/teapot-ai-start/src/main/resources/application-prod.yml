@@ -7,6 +7,16 @@ teapot:
   ai:
     agentscope:
       workspace-root: ${AGENTSCOPE_WORKSPACE:/main/apps/teapot-ai/workspace}
+      # 存储拆分（SPEC §26 修订/§27）：会话状态默认 MySQL，记忆文件系统路由 Redis；密码由 app.env 注入
+      redis:
+        session-store: ${TEAPOT_REDIS_SESSION_STORE:false}
+        memory-store: ${TEAPOT_REDIS_MEMORY_STORE:true}
+        migrate-legacy-memory: ${TEAPOT_REDIS_MIGRATE_LEGACY_MEMORY:false}
+        host: 127.0.0.1
+        port: 6379
+        password: ${TEAPOT_REDIS_PASSWORD:}
+        session-key-prefix: "teapot:session:"
+        memory-key-prefix: "teapot:memory:"
 
 logging:
   file:
