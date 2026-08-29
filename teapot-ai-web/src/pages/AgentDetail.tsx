@@ -562,11 +562,12 @@ export default function AgentDetailPage() {
                   : null),
               }}
             >
-              {/* 收起/展开按钮：移动端菜单默认收起，靠它手动展开 */}
+              {/* 收起/展开按钮：移动端菜单默认收起，靠它手动展开（收起态卡面仅 28px，按钮需收紧） */}
               <div style={{ display: 'flex', justifyContent: menuCollapsed ? 'center' : 'flex-end' }}>
                 <Tooltip title={menuCollapsed ? '展开菜单' : '收起菜单'}>
                   <IconButton
                     bordered={false}
+                    style={isPhone && menuCollapsed ? { width: 28, height: 28, minWidth: 28, padding: 0 } : undefined}
                     icon={menuCollapsed ? <SparkMenuExpandLine size={16} /> : <SparkMenuFoldLine size={16} />}
                     onClick={() => {
                       menuTouched.current = true;
