@@ -396,6 +396,8 @@ export default function AgentDetailPage() {
           enableShell: rt.enableShell ?? !!sb.enabled,
           enableOssFile: !!rt.enableOssFile,
           enableMcpConfig: !!rt.enableMcpConfig,
+          enableMediaGen: !!rt.enableMediaGen,
+          permissionMode: rt.permissionMode,
           allowedTools: rt.allowedTools,
           maxIterations: rt.maxIterations,
         },
@@ -1046,6 +1048,23 @@ export default function AgentDetailPage() {
                         <InputNumber min={1} max={100} style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'permissionMode']}
+                        label="权限模式"
+                        tooltip="AgentScope 权限系统：只读探索 = 仅放行只读工具；阻止危险命令 = 拦截 rm -rf / dd 等高危 shell 命令；全部放行 = 不询问直接执行。留空 = 不设置权限上下文。chat 面板的同名开关优先级更高"
+                      >
+                        <Select
+                          allowClear
+                          placeholder="默认（不设置）"
+                          options={[
+                            { value: 'EXPLORE', label: '只读探索' },
+                            { value: 'BLOCK_DANGEROUS', label: '阻止危险命令' },
+                            { value: 'BYPASS', label: '全部放行' },
+                          ]}
+                        />
+                      </Form.Item>
+                    </Col>
                   </Row>
                   <Form.Item
                     name={['runtime', 'allowedTools']}
@@ -1071,6 +1090,16 @@ export default function AgentDetailPage() {
                         label="MCP 配置查询"
                         valuePropName="checked"
                         tooltip="开启后 Agent 获得 list_mcp_servers / get_mcp_server 只读工具，可向用户说明自身 MCP 配置（凭据字段不回显值）"
+                      >
+                        <Switch />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'enableMediaGen']}
+                        label="生图/生视频"
+                        valuePropName="checked"
+                        tooltip="开启后 Agent 获得 DashScope 文生图/文生视频/图生视频等工具（密钥取服务端 DASHSCOPE_API_KEY，未配置时不生效）；视频生成耗时可达分钟级"
                       >
                         <Switch />
                       </Form.Item>

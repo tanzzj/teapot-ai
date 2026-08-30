@@ -14,6 +14,8 @@ public final class AgentRuntimeHints {
     private static final ThreadLocal<Boolean> MEMORY_MODE = new ThreadLocal<>();
     /** 本次请求的计划模式覆盖：TRUE 强制开启 / FALSE 强制关闭 / null 跟随 Agent 配置 */
     private static final ThreadLocal<Boolean> PLAN_MODE = new ThreadLocal<>();
+    /** 本次请求的权限模式覆盖：EXPLORE / BLOCK_DANGEROUS / BYPASS / null 跟随 Agent 配置 */
+    private static final ThreadLocal<String> PERMISSION_MODE = new ThreadLocal<>();
 
     private AgentRuntimeHints() {
     }
@@ -42,9 +44,22 @@ public final class AgentRuntimeHints {
         return PLAN_MODE.get();
     }
 
+    public static void setPermissionMode(String mode) {
+        if (mode == null) {
+            PERMISSION_MODE.remove();
+        } else {
+            PERMISSION_MODE.set(mode);
+        }
+    }
+
+    public static String getPermissionMode() {
+        return PERMISSION_MODE.get();
+    }
+
     /** 请求结束时清理（线程池线程复用，防脏读） */
     public static void clear() {
         MEMORY_MODE.remove();
         PLAN_MODE.remove();
+        PERMISSION_MODE.remove();
     }
 }

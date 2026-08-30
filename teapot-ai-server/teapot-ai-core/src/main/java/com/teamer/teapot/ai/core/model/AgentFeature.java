@@ -40,6 +40,8 @@ public class AgentFeature {
     private static final Set<String> DM_SCOPES = Set.of("MAIN", "PER_PEER", "PER_CHANNEL_PEER");
     /** 记忆 flush 触发策略可选值（SPEC §25，对齐 MemoryConfig.FlushTrigger） */
     private static final Set<String> FLUSH_TRIGGERS = Set.of("always", "never", "throttled");
+    /** 权限模式可选值（permission-system 落地：只读探索 / 阻止危险命令 / 全部放行） */
+    private static final Set<String> PERMISSION_MODES = Set.of("EXPLORE", "BLOCK_DANGEROUS", "BYPASS");
     private static final List<String> NAS_MOUNT_PREFIXES = List.of("/home/", "/mnt/", "/data/");
     /** 闲置超时合法区间（SPEC §16.6） */
     private static final int IDLE_MIN_SECONDS = 300;
@@ -309,6 +311,9 @@ public class AgentFeature {
         if (rt.getMaxIterations() != null && (rt.getMaxIterations() < 1 || rt.getMaxIterations() > 100)) {
             throw new BizException("maxIterations 超出范围（1–100）");
         }
+        if (rt.getPermissionMode() != null && !PERMISSION_MODES.contains(rt.getPermissionMode())) {
+            throw new BizException("permissionMode 非法，可选值：" + PERMISSION_MODES);
+        }
     }
 
     /** channel 命名空间校验（SPEC §24.3）：启用必选记录、dmScope 枚举；与沙箱可共存（§24.2 修订） */
@@ -455,6 +460,10 @@ public class AgentFeature {
         private Boolean enableOssFile;
         /** MCP 配置查询工具开关（list_mcp_servers / get_mcp_server，ToolProvidedMiddleware 挂载） */
         private Boolean enableMcpConfig;
+        /** 生图/生视频工具开关（DashScopeMultiModalTool，ToolProvidedMiddleware 挂载，SPEC-media-gen §4.1） */
+        private Boolean enableMediaGen;
+        /** 权限模式（Agent 级默认，chat 面板可按请求覆盖）：EXPLORE / BLOCK_DANGEROUS / BYPASS；null = 不设权限上下文（存量行为） */
+        private String permissionMode;
         /** 工具白名单（空 = 不限制） */
         private List<String> allowedTools;
         /** ReAct 最大迭代轮数 [1,100]；null = SDK 默认 */

@@ -53,10 +53,27 @@ public class TeapotRuntimeContextResolver implements AguiRuntimeContextResolver 
         // 未传参时清理旧值（线程池线程复用），装配回落 Agent 配置
         AgentRuntimeHints.setMemoryMode(parseBooleanProp(request, "memoryMode"));
         AgentRuntimeHints.setPlanMode(parseBooleanProp(request, "planMode"));
+        AgentRuntimeHints.setPermissionMode(parsePermissionProp(request));
         return RuntimeContext.builder()
                 .userId(userId)
                 .sessionId(sessionId)
                 .build();
+    }
+
+    /** forwardedProps.permissionMode 解析：EXPLORE / BLOCK_DANGEROUS / BYPASS（大小写不敏感），缺失/非法返回 null */
+    private String parsePermissionProp(AguiRuntimeContextRequest request) {
+        if (request.getInput() == null) {
+            return null;
+        }
+        Object raw = request.getInput().getForwardedProp("permissionMode");
+        if (!(raw instanceof String s) || s.isBlank()) {
+            return null;
+        }
+        String normalized = s.trim().toUpperCase();
+        return switch (normalized) {
+            case "EXPLORE", "BLOCK_DANGEROUS", "BYPASS" -> normalized;
+            default -> null;
+        };
     }
 
     /** forwardedProps 布尔开关通用解析：缺失/非法返回 null（跟随 Agent 配置） */

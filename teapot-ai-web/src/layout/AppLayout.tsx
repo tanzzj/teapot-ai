@@ -1,23 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Menu, Segmented, Space, message, theme, Dropdown } from 'antd';
-import { Button, Avatar } from '@agentscope-ai/design';
+import { useEffect, useMemo, useState } from 'react';
+import { Menu, Segmented, theme, Dropdown } from 'antd';
+import { Button } from '@agentscope-ai/design';
 import {
   SparkRoboticsLine,
   SparkMagicWandLine,
   SparkMessageLine,
   SparkSettingLine,
-  SparkUserLine,
-  SparkEscapeLine,
-  SparkMenuLine,
-  SparkCameraLine,
   SparkCircleArrowDownLine,
 } from '@agentscope-ai/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { useMobileUIStore } from '../store/mobileUI';
-import { uploadUserAvatar } from '../api/avatar';
 import { PHONE_BP } from '../theme/breakpoints';
 import AgentSelector from './AgentSelector';
+import UserMenu from './UserMenu';
 
 /**
  * 主框架布局（Barley 设计语言复刻）：
@@ -27,48 +23,33 @@ import AgentSelector from './AgentSelector';
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout, hasRole, setUserPatch } = useAuthStore();
+  const { hasRole } = useAuthStore();
   const { token } = theme.useToken();
   const { mobileView, sessionTitle } = useMobileUIStore();
   const [isMobile, setIsMobile] = useState(window.innerWidth < PHONE_BP);
-  const [avatarUploading, setAvatarUploading] = useState(false);
-  const avatarInputRef = useRef<HTMLInputElement>(null);
-
-  /** 用户头像上传（SPEC §23）：客户端预检 2MB/图片类型，服务端复检 */
-  const onAvatarFile = useCallback(
-    async (file: File | undefined) => {
-      if (!file || avatarUploading) {
-        return;
-      }
-      if (!file.type.startsWith('image/')) {
-        message.error('仅支持图片格式头像');
-        return;
-      }
-      if (file.size > 2 * 1024 * 1024) {
-        message.error('头像超过 2MB 限制');
-        return;
-      }
-      setAvatarUploading(true);
-      try {
-        const { url } = await uploadUserAvatar(file);
-        setUserPatch({ avatar: url });
-        message.success('头像已更新');
-      } catch (e) {
-        message.error(e instanceof Error ? e.message : '头像上传失败');
-      } finally {
-        setAvatarUploading(false);
-        if (avatarInputRef.current) {
-          avatarInputRef.current.value = '';
-        }
-      }
-    },
-    [avatarUploading, setUserPatch],
-  );
+  /** 可视视口高度（visualViewport）：部分手机浏览器（Edge 等）底部地址栏浮在页面上方，
+   * 100dvh 仍按全高计算导致底部内容被遮挡；改用实际可视高度保证底部可见 */
+  const [vvHeight, setVvHeight] = useState<number | null>(null);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < PHONE_BP);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) {
+      return;
+    }
+    const update = () => setVvHeight(vv.height);
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
   }, []);
 
   const items = useMemo(() => {
@@ -88,27 +69,24 @@ export default function AppLayout() {
 
   const selectedKey = items.find((i) => location.pathname.startsWith(i.key))?.key || '/chat';
 
+  /** 对话页：用户信息 + 系统配置入口已下沉到左栏底部（UserFooter），顶栏导航同步去掉「系统配置」 */
+  const isChatPage = location.pathname.startsWith('/chat');
+  const navItems = isChatPage ? items.filter((i) => i.key !== '/system') : items;
+
   /** 移动端下拉菜单选项（对话/Agent/Skill/系统配置） */
   const mobileMenuItems = useMemo(() => {
-    return items.map((i) => ({
+    return navItems.map((i) => ({
       key: i.key,
       label: i.label,
       icon: i.icon,
       onClick: () => navigate(i.key),
     }));
-  }, [items, navigate]);
-
-  const onMenuClick = useCallback(
-    ({ key }: { key: string }) => {
-      navigate(key);
-    },
-    [navigate],
-  );
+  }, [navItems, navigate]);
 
   // 移动端导航已改顶栏下拉菜单，无 Drawer 打开态需随路由关闭
 
   return (
-    <div style={{ height: '100dvh', padding: isMobile ? 6 : 12, boxSizing: 'border-box' }}>
+    <div style={{ height: vvHeight ?? '100dvh', padding: isMobile ? 6 : 12, boxSizing: 'border-box' }}>
       {/* 悬浮毛玻璃大卡片（Barley 应用容器） */}
       <div
         className="glass-panel"
@@ -151,7 +129,7 @@ export default function AppLayout() {
                   style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', fontSize: 16 }}
                 >
                   <span style={{ fontWeight: 600 }}>
-                    {items.find((i) => i.key === selectedKey)?.label || '对话'}
+                    {navItems.find((i) => i.key === selectedKey)?.label || '对话'}
                   </span>
                   <SparkCircleArrowDownLine size={14} />
                 </Button>
@@ -207,7 +185,7 @@ export default function AppLayout() {
               <Segmented
                 value={selectedKey}
                 onChange={(v) => navigate(String(v))}
-                options={items.map((i) => ({ value: i.key, label: i.label, icon: i.icon }))}
+                options={navItems.map((i) => ({ value: i.key, label: i.label, icon: i.icon }))}
               />
             </>
           )}
@@ -221,47 +199,10 @@ export default function AppLayout() {
           {/* 对话页顶栏 Agent 选择器（原聊天区右上角，移至全局 header） */}
           <AgentSelector />
 
-          {/* 移动端聊天态：隐藏头像（SPEC：mobile chat 模式不需要展示登录人状态） */}
-          {!(isMobile && mobileView === 'chat') && (
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  { key: 'roles', label: `角色：${user?.roles || '-'}`, disabled: true },
-                  { type: 'divider' },
-                  {
-                    key: 'avatar',
-                    label: avatarUploading ? '头像上传中…' : '更换头像',
-                    icon: <SparkCameraLine />,
-                    disabled: avatarUploading,
-                  },
-                  { key: 'logout', label: '退出登录', icon: <SparkEscapeLine /> },
-                ],
-                onClick: ({ key }: { key: string }) => {
-                  if (key === 'logout') {
-                    logout();
-                    navigate('/login');
-                  } else if (key === 'avatar') {
-                    avatarInputRef.current?.click();
-                  }
-                },
-              }}
-            >
-              <Space style={{ cursor: 'pointer' }}>
-                <Avatar size="small" src={user?.avatar || undefined} icon={<SparkUserLine />} />
-                {!isMobile && <span>{user?.realName || user?.username || '未登录'}</span>}
-              </Space>
-            </Dropdown>
+          {/* 用户菜单：对话页已下沉到左栏底部 UserFooter（连同系统配置入口），顶栏不再展示 */}
+          {!isChatPage && !(isMobile && mobileView === 'chat') && (
+            <UserMenu showName={!isMobile} />
           )}
-          {/* 头像选择器（SPEC §23）：Dropdown 菜单项触发；
-              原生 input[file] 为浏览器文件选择唯一通道，豁免于禁用原生表单标签规则（SPEC-mobile M8） */}
-          <input
-            ref={avatarInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            style={{ display: 'none' }}
-            onChange={(e) => onAvatarFile(e.target.files?.[0])}
-          />
         </header>
 
         {/* 内容区 */}

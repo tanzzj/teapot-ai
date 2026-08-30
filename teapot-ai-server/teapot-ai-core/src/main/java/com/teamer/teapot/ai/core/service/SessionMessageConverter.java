@@ -142,7 +142,9 @@ public final class SessionMessageConverter {
         }
     }
 
-    /** 工具结果文本：拼接 output 中的文本块 */
+    /** 工具结果文本：与实时流（AguiStreamContext.serialize）同形态——
+     *  文本块原样拼接，非文本块（image/video/audio 等媒体）逐块序列化 JSON 换行拼接，
+     *  供前端 customToolRenderConfig 媒体卡片在历史回放时解析渲染 */
     private static String toolResultText(ToolResultBlock toolResult) {
         List<ContentBlock> output = toolResult.getOutput();
         if (output == null || output.isEmpty()) {
@@ -152,6 +154,15 @@ public final class SessionMessageConverter {
         for (ContentBlock block : output) {
             if (block instanceof TextBlock textBlock && textBlock.getText() != null) {
                 sb.append(textBlock.getText());
+            } else {
+                try {
+                    if (sb.length() > 0) {
+                        sb.append("\n");
+                    }
+                    sb.append(JsonUtils.getJsonCodec().toJson(block));
+                } catch (Exception e) {
+                    // 不可序列化块跳过
+                }
             }
         }
         return sb.toString();

@@ -91,6 +91,10 @@ export interface AgentRuntimeConfig {
   enableOssFile?: boolean;
   /** MCP 配置查询工具开关（list_mcp_servers / get_mcp_server） */
   enableMcpConfig?: boolean;
+  /** 生图/生视频工具开关（DashScope，SPEC-media-gen §4.3） */
+  enableMediaGen?: boolean;
+  /** 权限模式（AgentScope permission system）：EXPLORE 只读探索 / BLOCK_DANGEROUS 阻止危险命令 / BYPASS 全部放行；未配置 = 不设权限上下文 */
+  permissionMode?: 'EXPLORE' | 'BLOCK_DANGEROUS' | 'BYPASS';
   /** 工具白名单（空 = 不限制） */
   allowedTools?: string[];
   /** ReAct 最大迭代轮数 1–100；留空 = 默认 */

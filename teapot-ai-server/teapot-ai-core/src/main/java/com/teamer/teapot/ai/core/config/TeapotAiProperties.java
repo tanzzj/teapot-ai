@@ -39,6 +39,9 @@ public class TeapotAiProperties {
         /** 每 agent 独立 workspace 的根目录 */
         private String workspaceRoot = "./workspace";
         private boolean createIfNotExist = true;
+        /** 消息级落盘开关（SPEC-checkpoint-persist §3.2，键 teapot.ai.agentscope.checkpoint-per-message）：
+         * 阶段入口 checkpoint；平台级可靠性策略，关闭仅用于压测对比 */
+        private boolean checkpointPerMessage = true;
         /** Redis 存储拆分（SPEC §26 修订/§27）：会话状态与记忆文件系统各自独立开关 */
         private Redis redis = new Redis();
 

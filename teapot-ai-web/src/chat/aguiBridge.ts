@@ -322,6 +322,11 @@ export interface AguiFetchOptions {
    * 覆盖 Agent 配置；返回 undefined = 不传，跟随 Agent 配置。
    */
   getPlanMode?: () => boolean | undefined;
+  /**
+   * 请求级权限模式开关：经 RunAgentInput.forwardedProps.permissionMode 传给后端，
+   * 优先级高于 Agent 配置；返回 undefined = 不传，跟随 Agent 配置。
+   */
+  getPermissionMode?: () => string | undefined;
 }
 
 /**
@@ -469,6 +474,7 @@ export function createAguiFetch(opts: AguiFetchOptions) {
     const threadId = opts.getSessionId() || `thread-${Date.now()}`;
     const memoryMode = opts.getMemoryMode?.();
     const planMode = opts.getPlanMode?.();
+    const permissionMode = opts.getPermissionMode?.();
     const url = `/agui/run/${encodeURIComponent(opts.agentKey)}`;
     // 未决中断恢复（ask_user_question）：点选答案携带 resolved；用户直接打字则全部 cancelled 兜底。
     // 在重试循环外消费一次，合约冲突重试复用同一份，避免重复消费
@@ -491,11 +497,12 @@ export function createAguiFetch(opts: AguiFetchOptions) {
           // 未决中断恢复：携带则后端按 resume 契约恢复被挂起的工具（如 ask_user_question）
           ...(resume ? { resume } : {}),
           // 请求级开关（SPEC §25）：仅显式选择时才携带，后端缺失 = 跟随 Agent 配置
-          ...((memoryMode === undefined && planMode === undefined)
+          ...((memoryMode === undefined && planMode === undefined && !permissionMode)
             ? {}
             : { forwardedProps: {
                 ...(memoryMode !== undefined ? { memoryMode } : {}),
                 ...(planMode !== undefined ? { planMode } : {}),
+                ...(permissionMode ? { permissionMode } : {}),
               } }),
         }),
         signal,

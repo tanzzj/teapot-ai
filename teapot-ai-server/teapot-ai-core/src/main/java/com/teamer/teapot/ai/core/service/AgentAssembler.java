@@ -1,10 +1,14 @@
 package com.teamer.teapot.ai.core.service;
 
 import com.teamer.teapot.ai.common.exception.BizException;
+import com.teamer.teapot.ai.core.agentscope.DangerousCommandGuardMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigToolMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigTools;
+import com.teamer.teapot.ai.core.agentscope.MediaGenToolMiddleware;
 import com.teamer.teapot.ai.core.agentscope.OssFileTools;
 import com.teamer.teapot.ai.core.agentscope.OssToolMiddleware;
+import com.teamer.teapot.ai.core.agentscope.PerMessageCheckpointMiddleware;
+import com.teamer.teapot.ai.core.agentscope.PermissionModeMiddleware;
 import com.teamer.teapot.ai.core.agentscope.ToolProvidedMiddleware;
 import com.teamer.teapot.ai.core.config.AgentRunConnection;
 import com.teamer.teapot.ai.core.config.OssConnection;
@@ -19,6 +23,8 @@ import com.teamer.teapot.ai.core.service.MCPConfigService;
 import com.teamer.teapot.ai.core.storage.OssClientManager;
 import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.GenerateOptions;
+import io.agentscope.core.permission.PermissionContextState;
+import io.agentscope.core.permission.PermissionMode;
 import io.agentscope.core.skill.SkillFilter;
 import io.agentscope.core.skill.repository.AgentSkillRepository;
 import io.agentscope.core.skill.repository.GitSkillRepository;
@@ -27,6 +33,7 @@ import com.teamer.teapot.ai.core.storage.OssSkillRepository;
 import com.teamer.teapot.ai.core.storage.RedisMemoryFilesystems;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.extensions.model.dashscope.tool.DashScopeMultiModalTool;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunFilesystemSpec;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunNasMountConfig;
 import io.agentscope.extensions.sandbox.e2b.E2bCodec;
@@ -44,6 +51,7 @@ import io.agentscope.harness.agent.tools.ToolsConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
@@ -86,6 +94,9 @@ public class AgentAssembler {
     /** OSS 客户端管理与全局连接（工具提供型中间件：upload_file / download_file） */
     private final OssClientManager ossClientManager;
     private final OssConnection ossConnection;
+    /** 生图/生视频工具密钥（SPEC-media-gen §4.1：复用现有环境变量，不落库） */
+    @Value("${DASHSCOPE_API_KEY:}")
+    private String dashscopeApiKey;
 
     public AgentAssembler(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                           ModelRegistry modelRegistry, AgentStateStore stateStore,
@@ -178,6 +189,11 @@ public class AgentAssembler {
             log.info("Agent 计划模式已覆盖（请求级开关={} 配置={}）", planHint,
                     rt != null && Boolean.TRUE.equals(rt.getEnablePlanMode()));
         }
+        // 权限模式（permission-system）：chat 面板请求级提示优先于 Agent 配置；
+        // 须在 applyMemory 清理 ThreadLocal 之前读取；null = 不设权限上下文（存量行为）
+        String permHint = AgentRuntimeHints.getPermissionMode();
+        String permConfig = rt == null ? null : rt.getPermissionMode();
+        String permMode = permHint != null ? permHint : permConfig;
         // MultiAgent（SPEC §25）：关闭时剥夺 subagent 委派能力；缺省（无命名空间）启用，对齐 SDK 默认
         AgentFeature.MultiAgent ma = feature.getMultiAgent();
         if (ma != null && !ma.isEnabled()) {
@@ -213,6 +229,26 @@ public class AgentAssembler {
         for (ToolProvidedMiddleware middleware : toolMiddlewares) {
             builder.middleware(middleware);
         }
+        // 消息级落盘（SPEC-checkpoint-persist §3.1）：阶段入口 checkpoint，与轮末落盘叠加；
+        // Web（AgentRegistry）与 channel（ChannelHub）链路共用本装配点，同时生效
+        if (properties.getAgentscope().isCheckpointPerMessage()) {
+            builder.middleware(new PerMessageCheckpointMiddleware());
+        }
+        // 权限模式（permission-system）：EXPLORE=只读探索；BYPASS=全部放行；
+        // BLOCK_DANGEROUS=BYPASS + 危险命令守卫（2.0.1 shell 工具不支持内容级规则，守卫由中间件实现）。
+        // PermissionModeMiddleware 在每轮调用入口把生效模式写入会话槽位（含已持久化的旧槽位），
+        // 保证「chat 面板 > Agent 配置」按请求收敛；permissionContext 同时作为新建槽位的初始值
+        if (permMode != null) {
+            PermissionMode pm = "EXPLORE".equals(permMode) ? PermissionMode.EXPLORE : PermissionMode.BYPASS;
+            PermissionContextState permCtx = PermissionContextState.builder().mode(pm).build();
+            builder.permissionContext(permCtx);
+            builder.middleware(new PermissionModeMiddleware(permCtx));
+            if ("BLOCK_DANGEROUS".equals(permMode)) {
+                builder.middleware(new DangerousCommandGuardMiddleware());
+            }
+            log.info("权限模式已生效 agentKey={} mode={} 来源={}",
+                    agentKey, permMode, permHint != null ? "chat 面板" : "Agent 配置");
+        }
         HarnessAgent agent = builder.build();
         for (ToolProvidedMiddleware middleware : toolMiddlewares) {
             Object tools = middleware.providedTools();
@@ -228,7 +264,8 @@ public class AgentAssembler {
     /**
      * 工具提供型中间件构建（ToolProvidedMiddleware）：
      * runtime.enableOssFile → OssToolMiddleware（upload_file / download_file + system prompt 用法注入）；
-     * runtime.enableMcpConfig → McpConfigToolMiddleware（list_mcp_servers / get_mcp_server）。
+     * runtime.enableMcpConfig → McpConfigToolMiddleware（list_mcp_servers / get_mcp_server）；
+     * runtime.enableMediaGen → MediaGenToolMiddleware（DashScope 生图/生视频，密钥缺省不挂载，SPEC-media-gen §4.1）。
      * 开关缺省/关闭均不挂载，存量行为不变。
      */
     private List<ToolProvidedMiddleware> buildToolMiddlewares(String agentKey, Path workspace,
@@ -241,6 +278,14 @@ public class AgentAssembler {
         if (rt != null && Boolean.TRUE.equals(rt.getEnableMcpConfig())) {
             middlewares.add(new McpConfigToolMiddleware(new McpConfigTools(agentKey, mcpConfigService, mcp)));
             log.info("MCP 配置查询工具已启用 agentKey={}", agentKey);
+        }
+        if (rt != null && Boolean.TRUE.equals(rt.getEnableMediaGen())) {
+            if (dashscopeApiKey == null || dashscopeApiKey.isBlank()) {
+                log.warn("生图/生视频已启用但 DASHSCOPE_API_KEY 未配置，跳过挂载 agentKey={}", agentKey);
+            } else {
+                middlewares.add(new MediaGenToolMiddleware(new DashScopeMultiModalTool(dashscopeApiKey)));
+                log.info("生图/生视频工具已启用 agentKey={}", agentKey);
+            }
         }
         return middlewares;
     }

@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { Empty, message, Tooltip, Upload } from 'antd';
 import { IconButton, Select } from '@agentscope-ai/design';
-import { SparkEnlargeLine, SparkLeftArrowLine, SparkMemoryLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
+import { SparkEnlargeLine, SparkGuardrailLine, SparkLeftArrowLine, SparkMemoryLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
   useChatAnywhereInput,
@@ -19,9 +19,11 @@ import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
 import { AskUserCard } from '../chat/AskUserCard';
 import { registerSubmit } from '../chat/askUserStore';
 import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
+import MediaGenCard from '../chat/MediaGenCard';
 import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
 import AgentConfigPanel from '../chat/AgentConfigPanel';
+import UserFooter from '../layout/UserFooter';
 import { newChatCoordinator } from '../chat/newChatCoordinator';
 import { useMobileUIStore } from '../store/mobileUI';
 import { PHONE_BP, NARROW_BP } from '../theme/breakpoints';
@@ -63,6 +65,14 @@ function msgTimeSlot(ts?: number, alignRight?: boolean) {
     </div>
   );
 }
+
+/** 权限模式循环顺序（chat 面板按钮逐次点击切换）：跟随配置 → 只读探索 → 阻止危险命令 → 全部放行 */
+const PERMISSION_CYCLE: readonly { value: string; label: string }[] = [
+  { value: '', label: '权限·跟随配置' },
+  { value: 'EXPLORE', label: '只读探索' },
+  { value: 'BLOCK_DANGEROUS', label: '阻止危险命令' },
+  { value: 'BYPASS', label: '全部放行' },
+];
 
 /**
  * 桥接组件：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽，桌面/移动均常驻挂载）。
@@ -140,7 +150,7 @@ function ChatBridge(props: {
   // 手机首页：全屏会话面板（点会话/新建后由 onNavigate 进聊天态）
   if (props.isPhone && props.mobileHome && props.homeSlot) {
     return createPortal(
-      <SessionPanel title="" onNavigate={props.onEnterChat} flat />,
+      <SessionPanel title="" onNavigate={props.onEnterChat} flat footer={<UserFooter compact />} />,
       props.homeSlot,
     );
   }
@@ -148,7 +158,7 @@ function ChatBridge(props: {
   // 由外层自渲染的左栏槽位补位，这里 Portal 填充（保持会话 Context 可达）
   if (props.isTablet && props.tabletSlot) {
     return createPortal(
-      <SessionPanel title={props.agentName} />,
+      <SessionPanel title={props.agentName} footer={<UserFooter />} />,
       props.tabletSlot,
     );
   }
@@ -194,6 +204,8 @@ export default function Chat() {
   const [memoryOverride, setMemoryOverride] = useState('');
   /** 请求级计划模式覆盖（SPEC §25）：'' = 跟随 Agent 配置；'on'/'off' 强制，按 Agent 持久化 */
   const [planModeOverride, setPlanModeOverride] = useState('');
+  /** 请求级权限模式覆盖：'' = 跟随 Agent 配置；EXPLORE/BLOCK_DANGEROUS/BYPASS 强制，按 Agent 持久化 */
+  const [permissionOverride, setPermissionOverride] = useState('');
 
   /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
@@ -256,6 +268,9 @@ export default function Chat() {
     setPlanModeOverride(
       currentAgent ? localStorage.getItem(`teapot.planMode.${currentAgent}`) || '' : '',
     );
+    setPermissionOverride(
+      currentAgent ? localStorage.getItem(`teapot.permissionMode.${currentAgent}`) || '' : '',
+    );
   }, [currentAgent]);
 
   const onMemoryOverride = useCallback((v: string) => {
@@ -271,6 +286,19 @@ export default function Chat() {
     if (v) localStorage.setItem(`teapot.planMode.${currentAgent}`, v);
     else localStorage.removeItem(`teapot.planMode.${currentAgent}`);
   }, [currentAgent]);
+
+  const onPermissionOverride = useCallback((v: string) => {
+    setPermissionOverride(v);
+    if (!currentAgent) return;
+    if (v) localStorage.setItem(`teapot.permissionMode.${currentAgent}`, v);
+    else localStorage.removeItem(`teapot.permissionMode.${currentAgent}`);
+  }, [currentAgent]);
+
+  /** 权限模式按钮：点一下沿 跟随配置 → 只读探索 → 阻止危险命令 → 全部放行 循环 */
+  const onCyclePermission = useCallback(() => {
+    const idx = PERMISSION_CYCLE.findIndex((p) => p.value === permissionOverride);
+    onPermissionOverride(PERMISSION_CYCLE[(idx + 1) % PERMISSION_CYCLE.length].value);
+  }, [permissionOverride, onPermissionOverride]);
 
   // 移动端监听发送框 textarea 焦点：focus 后浮出放大按钮，失焦收起（放大态常驻）
   useEffect(() => {
@@ -345,6 +373,8 @@ export default function Chat() {
           getMemoryMode: () => (memoryOverride === '' ? undefined : memoryOverride === 'on'),
           // 请求级计划开关（SPEC §25）：经 forwardedProps.planMode 传后端，未选择则跟随 Agent 配置
           getPlanMode: () => (planModeOverride === '' ? undefined : planModeOverride === 'on'),
+          // 请求级权限开关：经 forwardedProps.permissionMode 传后端（优先级高于 Agent 配置）
+          getPermissionMode: () => (permissionOverride === '' ? undefined : permissionOverride),
         }),
         // 模板实际按「每行 SSE data 字符串」调用（类型标注为 Response 是上游笔误）
         responseParser: aguiResponseParser as never,
@@ -357,6 +387,13 @@ export default function Chat() {
         plan_exit: PlanExitCard,
         todo_write: TodoWriteCard,
         ask_user_question: AskUserCard,
+        // 媒体生成卡片（SPEC-media-gen 修订）：dashscope_* 工具结果中的 image/video/audio 块
+        // 经 ImageGenerator / DefaultCards.Videos / Audios 可视化，替代默认折叠面板
+        dashscope_text_to_image: MediaGenCard,
+        dashscope_text_to_video: MediaGenCard,
+        dashscope_image_to_video: MediaGenCard,
+        dashscope_first_and_last_frame_image_to_video: MediaGenCard,
+        dashscope_text_to_audio: MediaGenCard,
       },
       session: {
         multiple: true,
@@ -370,8 +407,8 @@ export default function Chat() {
         locale: 'cn',
         // Carbon 黑色主题（与全局 carbonTheme 一致）
         colorPrimary: '#1a1a1d',
-        // leftHeader 插槽接管为自定义会话面板（可点击切换 + 时间展示）
-        leftHeader: <SessionPanel title={activeAgent?.name || 'Teapot AI'} />,
+        // leftHeader 插槽接管为自定义会话面板（可点击切换 + 时间展示），底部挂用户信息 + 系统配置入口
+        leftHeader: <SessionPanel title={activeAgent?.name || 'Teapot AI'} footer={<UserFooter />} />,
         rightHeader,
       },
       welcome: {
@@ -449,8 +486,9 @@ export default function Chat() {
         // 懒创建会话：提交前无会话则先创建（含等待 loader 冲刷），规避模板内部竞态
         beforeSubmit: () =>
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
-        // 底部操作栏前置：计划模式请求级开关（SPEC §25），位于附件按钮附近（无 Tooltip，样式简洁）
+        // 底部操作栏前置：计划模式请求级开关（SPEC §25）+ 权限模式循环按钮（点按切换），位于附件按钮附近（无 Tooltip，样式简洁）
         prefix: (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span
               onClick={() => onPlanModeOverride(planModeOverride === 'on' ? '' : 'on')}
               style={{
@@ -468,10 +506,28 @@ export default function Chat() {
             >
               <SparkTextBoxLine /> Plan Mode
             </span>
+            <span
+              onClick={onCyclePermission}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 8px',
+                borderRadius: 999,
+                cursor: 'pointer',
+                fontSize: 12,
+                color: permissionOverride !== '' ? '#fff' : 'rgba(26,26,29,0.6)',
+                background: permissionOverride !== '' ? '#1a1a1d' : 'rgba(0,0,0,0.04)',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              <SparkGuardrailLine /> {PERMISSION_CYCLE.find((p) => p.value === permissionOverride)?.label}
+            </span>
+          </span>
         ),
       },
     };
-  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable, memoryOverride, planModeOverride, onPlanModeOverride]);
+  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable, memoryOverride, planModeOverride, onPlanModeOverride, permissionOverride, onCyclePermission]);
 
   if (loadingAgents) {
     return null;
@@ -565,17 +621,25 @@ export default function Chat() {
           />
         </div>
       )}
-      {/* 手机端输入框放大按钮（IconButton，SPEC-mobile M8）：聚焦发送框后浮出，点击切换单行/多行 */}
-      {isPhone && !showHome && (senderFocused || senderExpanded) && (
-        <IconButton
-          className="teapot-sender-expand-btn"
-          aria-label={senderExpanded ? '收起输入框' : '放大输入框'}
-          style={{ width: 30, height: 30 }}
-          icon={senderExpanded ? <SparkShrinkLine size={16} /> : <SparkEnlargeLine size={16} />}
-          onMouseDown={(e: ReactMouseEvent) => e.preventDefault()}
-          onClick={() => setSenderExpanded((v) => !v)}
-        />
-      )}
+      {/* 手机端输入框放大按钮（IconButton，SPEC-mobile M8）：聚焦发送框后浮出，点击切换单行/多行。
+          用 Portal 挂载到 sender 元素内部，使 position:absolute 相对输入框定位 */}
+      {isPhone && !showHome && (senderFocused || senderExpanded)
+        ? (() => {
+            const container = document.querySelector<HTMLElement>('.agentscope-runtime-webui-sender');
+            return container
+              ? createPortal(
+                  <IconButton
+                    className="teapot-sender-expand-btn"
+                    aria-label={senderExpanded ? '收起输入框' : '放大输入框'}
+                    icon={senderExpanded ? <SparkShrinkLine size={14} /> : <SparkEnlargeLine size={14} />}
+                    onMouseDown={(e: ReactMouseEvent) => e.preventDefault()}
+                    onClick={() => setSenderExpanded((v) => !v)}
+                  />,
+                  container,
+                )
+              : null;
+          })()
+        : null}
     </div>
   );
 }

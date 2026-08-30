@@ -61,7 +61,7 @@ function groupLabel(ts: number) {
   return '更早';
 }
 
-export default function SessionPanel(props: { title: string; onNavigate?: () => void; readonly?: boolean; flat?: boolean }) {
+export default function SessionPanel(props: { title: string; onNavigate?: () => void; readonly?: boolean; flat?: boolean; footer?: React.ReactNode }) {
   const { sessions, currentSessionId } = useChatAnywhereSessionsState();
   const { changeCurrentSessionId, removeSession } = useChatAnywhereSessions();
   const list = (sessions || []) as SessionItem[];
@@ -266,6 +266,8 @@ export default function SessionPanel(props: { title: string; onNavigate?: () => 
           });
         })()}
       </div>
+      {/* 底部插槽：对话页挂用户信息 + 系统配置入口（UserFooter），历史/只读场景不传 */}
+      {props.footer}
     </div>
   );
 }

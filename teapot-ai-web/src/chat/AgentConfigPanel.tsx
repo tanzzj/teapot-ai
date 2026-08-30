@@ -115,6 +115,16 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
             <KV k="Shell" v={rt?.enableShell !== undefined ? <EnabledTag on={!!rt.enableShell} /> : '跟随沙箱'} />
             {rt?.enableOssFile && <KV k="OSS 文件" v={<EnabledTag on />} />}
             {rt?.enableMcpConfig && <KV k="MCP 配置查询" v={<EnabledTag on />} />}
+            {rt?.enableMediaGen && <KV k="生图/生视频" v={<EnabledTag on />} />}
+            {rt?.permissionMode && (
+              <KV
+                k="权限模式"
+                v={rt.permissionMode === 'EXPLORE' ? '只读探索'
+                  : rt.permissionMode === 'BLOCK_DANGEROUS' ? '阻止危险命令'
+                  : rt.permissionMode === 'BYPASS' ? '全部放行'
+                  : rt.permissionMode}
+              />
+            )}
             {rt?.temperature !== undefined && <KV k="temperature" v={rt.temperature} />}
             {rt?.topP !== undefined && <KV k="topP" v={rt.topP} />}
             {rt?.maxTokens !== undefined && <KV k="maxTokens" v={rt.maxTokens} />}
