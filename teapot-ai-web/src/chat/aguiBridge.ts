@@ -16,7 +16,6 @@ import { consumeResume, registerInterrupts, resetForRun } from './askUserStore';
  */
 
 const ANSWER_MSG_ID = 'asst-answer';
-const REASONING_MSG_ID = 'asst-reasoning';
 
 interface ToolState {
   name: string;
@@ -24,12 +23,22 @@ interface ToolState {
   result?: string;
 }
 
+/** 单个 thinking block（一次 run 内按顺序产生多个，逐个独立渲染，不再合并） */
+interface ReasoningBlock {
+  id: string;
+  text: string;
+}
+
 /** 单次 run 的累积状态（每个新请求重建） */
 interface RunState {
   answerStarted: boolean;
   answerText: string;
-  reasoningStarted: boolean;
-  reasoningText: string;
+  /** 按顺序累积的全部 thinking block */
+  reasoningBlocks: ReasoningBlock[];
+  /** 当前正在流式输出的 block（null = 下一段 CONTENT 开新块） */
+  reasoningActive: ReasoningBlock | null;
+  /** 块序号：本地生成唯一消息 id（不复用后端 messageId，避免同 msg 多块冲突） */
+  reasoningSeq: number;
   tools: Map<string, ToolState>;
   toolOrder: string[];
   usage?: Record<string, unknown>;
@@ -65,12 +74,29 @@ function createRunParser() {
   const state: RunState = {
     answerStarted: false,
     answerText: '',
-    reasoningStarted: false,
-    reasoningText: '',
+    reasoningBlocks: [],
+    reasoningActive: null,
+    reasoningSeq: 0,
     tools: new Map(),
     toolOrder: [],
     usage: undefined,
   };
+
+  /** 关闭当前活跃 thinking block：返回全量 completed 内容更新（无活跃块返回 null） */
+  function closeActiveReasoning(): RuntimeChunk | null {
+    const prev = state.reasoningActive;
+    state.reasoningActive = null;
+    if (!prev || prev.text === '') return null;
+    return textContent(prev.id, prev.text, true);
+  }
+
+  /** 新开一个 thinking block：本地序号生成唯一消息 id，按序登记 */
+  function openReasoningBlock(): ReasoningBlock {
+    const block: ReasoningBlock = { id: `asst-reasoning-${state.reasoningSeq++}`, text: '' };
+    state.reasoningBlocks.push(block);
+    state.reasoningActive = block;
+    return block;
+  }
 
   return function parse(rawLine: string): RuntimeChunk {
     if (!rawLine || rawLine === '[DONE]') return heartbeat();
@@ -107,21 +133,33 @@ function createRunParser() {
         return textContent(ANSWER_MSG_ID, delta, false);
       }
 
+      case 'REASONING_MESSAGE_START': {
+        // 新 thinking block 开始：先收尾上一块（正常链路上一块已有 END，此处为容错）
+        return closeActiveReasoning() ?? heartbeat();
+      }
+
       case 'REASONING_MESSAGE_CONTENT':
       case 'REASONING_MESSAGE_CHUNK': {
-        state.reasoningText += delta;
-        if (!state.reasoningStarted) {
-          state.reasoningStarted = true;
+        // 无活跃块 = 新的 thinking block（START 缺失或上一块已 END）：按序开新消息
+        const block = state.reasoningActive ?? openReasoningBlock();
+        const isNew = block.text === '';
+        block.text += delta;
+        if (isNew) {
+          // 块首段：先建立消息本体，后续 content 增量按 msg_id 寻址
           return {
             object: 'message',
-            id: REASONING_MSG_ID,
+            id: block.id,
             role: 'assistant',
             type: 'reasoning',
             status: 'in_progress',
-            content: [textContent(REASONING_MSG_ID, state.reasoningText, false)],
+            content: [textContent(block.id, block.text, false)],
           };
         }
-        return textContent(REASONING_MSG_ID, delta, false);
+        return textContent(block.id, delta, false);
+      }
+
+      case 'REASONING_MESSAGE_END': {
+        return closeActiveReasoning() ?? heartbeat();
       }
 
       case 'TOOL_CALL_START': {
@@ -195,14 +233,14 @@ function createRunParser() {
       case 'RUN_FINISHED': {
         // 收尾：回传完整 output（全部置 completed），按 id 合并修正所有中间态
         const output: RuntimeChunk[] = [];
-        if (state.reasoningStarted) {
+        for (const block of state.reasoningBlocks) {
           output.push({
             object: 'message',
-            id: REASONING_MSG_ID,
+            id: block.id,
             role: 'assistant',
             type: 'reasoning',
             status: 'completed',
-            content: [textContent(REASONING_MSG_ID, state.reasoningText, true)],
+            content: [textContent(block.id, block.text, true)],
           });
         }
         for (const callId of state.toolOrder) {

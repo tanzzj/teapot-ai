@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { Empty, message, Tooltip, Upload } from 'antd';
+import { Empty, message, Popover, Switch, Upload } from 'antd';
 import { IconButton, Select } from '@agentscope-ai/design';
-import { SparkEnlargeLine, SparkGuardrailLine, SparkLeftArrowLine, SparkMemoryLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
+import { SparkEnlargeLine, SparkGuardrailLine, SparkLeftArrowLine, SparkMemoryLine, SparkPlusLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
   useChatAnywhereInput,
@@ -66,9 +66,9 @@ function msgTimeSlot(ts?: number, alignRight?: boolean) {
   );
 }
 
-/** 权限模式循环顺序（chat 面板按钮逐次点击切换）：跟随配置 → 只读探索 → 阻止危险命令 → 全部放行 */
-const PERMISSION_CYCLE: readonly { value: string; label: string }[] = [
-  { value: '', label: '权限·跟随配置' },
+/** 权限模式可选项（「+」配置弹层）：跟随配置 = 不覆盖，回落 Agent 管理页配置 */
+const PERMISSION_OPTIONS: readonly { value: string; label: string }[] = [
+  { value: '', label: '跟随配置' },
   { value: 'EXPLORE', label: '只读探索' },
   { value: 'BLOCK_DANGEROUS', label: '阻止危险命令' },
   { value: 'BYPASS', label: '全部放行' },
@@ -206,6 +206,8 @@ export default function Chat() {
   const [planModeOverride, setPlanModeOverride] = useState('');
   /** 请求级权限模式覆盖：'' = 跟随 Agent 配置；EXPLORE/BLOCK_DANGEROUS/BYPASS 强制，按 Agent 持久化 */
   const [permissionOverride, setPermissionOverride] = useState('');
+  /** 「+」配置弹层开关：记忆 / 计划 / 权限三项请求级配置收纳 */
+  const [configOpen, setConfigOpen] = useState(false);
 
   /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
@@ -294,11 +296,10 @@ export default function Chat() {
     else localStorage.removeItem(`teapot.permissionMode.${currentAgent}`);
   }, [currentAgent]);
 
-  /** 权限模式按钮：点一下沿 跟随配置 → 只读探索 → 阻止危险命令 → 全部放行 循环 */
-  const onCyclePermission = useCallback(() => {
-    const idx = PERMISSION_CYCLE.findIndex((p) => p.value === permissionOverride);
-    onPermissionOverride(PERMISSION_CYCLE[(idx + 1) % PERMISSION_CYCLE.length].value);
-  }, [permissionOverride, onPermissionOverride]);
+  /** 「+」配置入口：任一项被覆盖（非跟随配置）时按钮高亮提示 */
+  const configOverridden = memoryOverride !== '' || planModeOverride !== '' || permissionOverride !== '';
+  const openConfig = useCallback(() => setConfigOpen(true), []);
+  const closeConfig = useCallback(() => setConfigOpen(false), []);
 
   // 移动端监听发送框 textarea 焦点：focus 后浮出放大按钮，失焦收起（放大态常驻）
   useEffect(() => {
@@ -486,48 +487,95 @@ export default function Chat() {
         // 懒创建会话：提交前无会话则先创建（含等待 loader 冲刷），规避模板内部竞态
         beforeSubmit: () =>
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
-        // 底部操作栏前置：计划模式请求级开关（SPEC §25）+ 权限模式循环按钮（点按切换），位于附件按钮附近（无 Tooltip，样式简洁）
+        // 底部操作栏前置：「+」配置弹层入口——记忆 / 计划 / 权限三项请求级配置统一收纳（SPEC §25）
         prefix: (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <Popover
+            open={configOpen}
+            onOpenChange={setConfigOpen}
+            trigger="click"
+            placement="topLeft"
+            arrow={false}
+            overlayInnerStyle={{ padding: 6, borderRadius: 14 }}
+            content={(
+              <div style={{ width: 264 }}>
+                {([
+                  { icon: <SparkMemoryLine />, label: '记忆模式', control: (
+                    <Select
+                      size="small"
+                      variant="borderless"
+                      value={memoryOverride}
+                      onChange={onMemoryOverride}
+                      style={{ width: 104 }}
+                      options={[
+                        { value: '', label: '跟随配置' },
+                        { value: 'on', label: '开启记忆' },
+                        { value: 'off', label: '关闭记忆' },
+                      ]}
+                    />
+                  ) },
+                  { icon: <SparkTextBoxLine />, label: 'Plan Mode', control: (
+                    <Switch
+                      size="small"
+                      checked={planModeOverride === 'on'}
+                      onChange={(v) => onPlanModeOverride(v ? 'on' : '')}
+                    />
+                  ) },
+                  { icon: <SparkGuardrailLine />, label: '权限模式', control: (
+                    <Select
+                      size="small"
+                      variant="borderless"
+                      value={permissionOverride}
+                      onChange={onPermissionOverride}
+                      style={{ width: 118 }}
+                      options={PERMISSION_OPTIONS as unknown as { value: string; label: string }[]}
+                    />
+                  ) },
+                ]).map((row, i) => (
+                  <div
+                    key={row.label}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '9px 10px',
+                      borderRadius: 10,
+                      background: i % 2 ? 'transparent' : 'rgba(0,0,0,0.02)',
+                    }}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'rgba(26,26,29,0.85)' }}>
+                      <span style={{ display: 'inline-flex', color: 'rgba(26,26,29,0.55)' }}>{row.icon}</span>
+                      {row.label}
+                    </span>
+                    {row.control}
+                  </div>
+                ))}
+              </div>
+            )}
+          >
             <span
-              onClick={() => onPlanModeOverride(planModeOverride === 'on' ? '' : 'on')}
+              onClick={openConfig}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 4,
-                padding: '2px 8px',
+                justifyContent: 'center',
+                width: 24,
+                height: 24,
                 borderRadius: 999,
                 cursor: 'pointer',
                 fontSize: 12,
-                color: planModeOverride === 'on' ? '#fff' : 'rgba(26,26,29,0.6)',
-                background: planModeOverride === 'on' ? '#1a1a1d' : 'rgba(0,0,0,0.04)',
+                color: configOpen || configOverridden ? '#fff' : 'rgba(26,26,29,0.6)',
+                background: configOpen || configOverridden ? '#1a1a1d' : 'rgba(0,0,0,0.04)',
                 transition: 'all 0.2s ease',
               }}
             >
-              <SparkTextBoxLine /> Plan Mode
+              <SparkPlusLine size={14} />
             </span>
-            <span
-              onClick={onCyclePermission}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                padding: '2px 8px',
-                borderRadius: 999,
-                cursor: 'pointer',
-                fontSize: 12,
-                color: permissionOverride !== '' ? '#fff' : 'rgba(26,26,29,0.6)',
-                background: permissionOverride !== '' ? '#1a1a1d' : 'rgba(0,0,0,0.04)',
-                transition: 'all 0.2s ease',
-              }}
-            >
-              <SparkGuardrailLine /> {PERMISSION_CYCLE.find((p) => p.value === permissionOverride)?.label}
-            </span>
-          </span>
+          </Popover>
         ),
       },
     };
-  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable, memoryOverride, planModeOverride, onPlanModeOverride, permissionOverride, onCyclePermission]);
+  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable, memoryOverride, onMemoryOverride, planModeOverride, onPlanModeOverride, permissionOverride, onPermissionOverride, configOpen, configOverridden, openConfig]);
 
   if (loadingAgents) {
     return null;
@@ -586,41 +634,6 @@ export default function Chat() {
       </div>
       {/* 桌面端右侧边栏：当前 Agent 配置总览（Basic Info / Skill / Tool & Advanced / MultiAgent / Channel / Sandbox / MCP） */}
       {!isPhone && !isTablet && <AgentConfigPanel agentKey={currentAgent} />}
-      {/* 记忆模式请求级开关（SPEC §25）：右上角悬浮，覆盖 Agent 配置，仅本次会话页生效并持久 */}
-      {!showHome && (
-        <div
-          className="glass-card"
-          style={{
-            position: 'absolute',
-            top: 10,
-            right: 14,
-            zIndex: 5,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '4px 8px',
-            borderRadius: 999,
-          }}
-        >
-          <Tooltip title="记忆模式：请求级开关，优先于 Agent 配置；「跟随配置」由 Agent 管理页决定">
-            <span style={{ display: 'inline-flex', alignItems: 'center', color: 'rgba(26,26,29,0.6)' }}>
-              <SparkMemoryLine />
-            </span>
-          </Tooltip>
-          <Select
-            size="small"
-            variant="borderless"
-            value={memoryOverride}
-            onChange={onMemoryOverride}
-            style={{ width: 96 }}
-            options={[
-              { value: '', label: '跟随配置' },
-              { value: 'on', label: '开启记忆' },
-              { value: 'off', label: '关闭记忆' },
-            ]}
-          />
-        </div>
-      )}
       {/* 手机端输入框放大按钮（IconButton，SPEC-mobile M8）：聚焦发送框后浮出，点击切换单行/多行。
           用 Portal 挂载到 sender 元素内部，使 position:absolute 相对输入框定位 */}
       {isPhone && !showHome && (senderFocused || senderExpanded)
