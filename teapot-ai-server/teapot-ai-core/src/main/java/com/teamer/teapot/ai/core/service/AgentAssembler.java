@@ -1,13 +1,22 @@
 package com.teamer.teapot.ai.core.service;
 
 import com.teamer.teapot.ai.common.exception.BizException;
+import com.teamer.teapot.ai.core.agentscope.McpConfigToolMiddleware;
+import com.teamer.teapot.ai.core.agentscope.McpConfigTools;
+import com.teamer.teapot.ai.core.agentscope.OssFileTools;
+import com.teamer.teapot.ai.core.agentscope.OssToolMiddleware;
+import com.teamer.teapot.ai.core.agentscope.ToolProvidedMiddleware;
 import com.teamer.teapot.ai.core.config.AgentRunConnection;
+import com.teamer.teapot.ai.core.config.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
+import com.teamer.teapot.ai.core.model.MCPConfigDO;
+import com.teamer.teapot.ai.core.service.MCPConfigService;
+import com.teamer.teapot.ai.core.storage.OssClientManager;
 import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.skill.SkillFilter;
@@ -17,6 +26,7 @@ import io.agentscope.core.skill.repository.mysql.MysqlSkillRepository;
 import com.teamer.teapot.ai.core.storage.OssSkillRepository;
 import com.teamer.teapot.ai.core.storage.RedisMemoryFilesystems;
 import io.agentscope.core.state.AgentStateStore;
+import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunFilesystemSpec;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunNasMountConfig;
 import io.agentscope.extensions.sandbox.e2b.E2bCodec;
@@ -28,6 +38,8 @@ import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
 import io.agentscope.harness.agent.sandbox.snapshot.LocalSnapshotSpec;
 import io.agentscope.harness.agent.sandbox.snapshot.NoopSnapshotSpec;
+import io.agentscope.harness.agent.tools.McpServerConfig;
+import io.agentscope.harness.agent.tools.McpServerRegistrar;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,7 +49,10 @@ import org.springframework.stereotype.Component;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * HarnessAgent 装配器（SPEC §24.2/§24.4）：
@@ -66,6 +81,11 @@ public class AgentAssembler {
     private final ObjectProvider<RedisMemoryFilesystems> memoryRoutesProvider;
     private final AgentRunConnection agentRunConnection;
     private final SandboxConfigService sandboxConfigService;
+    /** MCP 系统配置服务（Agent 内联配置时不需，引用模式时需查 t_mcp_config） */
+    private final MCPConfigService mcpConfigService;
+    /** OSS 客户端管理与全局连接（工具提供型中间件：upload_file / download_file） */
+    private final OssClientManager ossClientManager;
+    private final OssConnection ossConnection;
 
     public AgentAssembler(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                           ModelRegistry modelRegistry, AgentStateStore stateStore,
@@ -75,7 +95,10 @@ public class AgentAssembler {
                           ObjectProvider<OssSkillRepository> ossRepoProvider,
                           ObjectProvider<RedisMemoryFilesystems> memoryRoutesProvider,
                           AgentRunConnection agentRunConnection,
-                          SandboxConfigService sandboxConfigService) {
+                          SandboxConfigService sandboxConfigService,
+                          MCPConfigService mcpConfigService,
+                          OssClientManager ossClientManager,
+                          OssConnection ossConnection) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.modelRegistry = modelRegistry;
@@ -87,6 +110,9 @@ public class AgentAssembler {
         this.memoryRoutesProvider = memoryRoutesProvider;
         this.agentRunConnection = agentRunConnection;
         this.sandboxConfigService = sandboxConfigService;
+        this.mcpConfigService = mcpConfigService;
+        this.ossClientManager = ossClientManager;
+        this.ossConnection = ossConnection;
     }
 
     /** 按 t_agent 记录装配 HarnessAgent；extraMiddlewares 允许为空 */
@@ -176,12 +202,47 @@ public class AgentAssembler {
                 log.info("记忆文件系统已路由到 Redis agentKey={}", agentKey);
             }
         }
+        // 工具提供型中间件（OSS 文件 / MCP 配置，按 runtime 开关）：
+        // 中间件须在 build 前挂载（onSystemPrompt 注入），工具在 build 后注册到 Toolkit（MCP 同款链路）
+        List<ToolProvidedMiddleware> toolMiddlewares = buildToolMiddlewares(agentKey, workspace, rt, feature.getMcp());
         if (extraMiddlewares != null) {
             for (MiddlewareBase middleware : extraMiddlewares) {
                 builder.middleware(middleware);
             }
         }
-        return builder.build();
+        for (ToolProvidedMiddleware middleware : toolMiddlewares) {
+            builder.middleware(middleware);
+        }
+        HarnessAgent agent = builder.build();
+        for (ToolProvidedMiddleware middleware : toolMiddlewares) {
+            Object tools = middleware.providedTools();
+            if (tools != null && agent.getToolkit() != null) {
+                agent.getToolkit().registerTool(tools);
+            }
+        }
+        // MCP Server 注册（SPEC §MCP）：Agent 级配置，引用系统记录或内联完整配置
+        applyMcp(agent, feature.getMcp());
+        return agent;
+    }
+
+    /**
+     * 工具提供型中间件构建（ToolProvidedMiddleware）：
+     * runtime.enableOssFile → OssToolMiddleware（upload_file / download_file + system prompt 用法注入）；
+     * runtime.enableMcpConfig → McpConfigToolMiddleware（list_mcp_servers / get_mcp_server）。
+     * 开关缺省/关闭均不挂载，存量行为不变。
+     */
+    private List<ToolProvidedMiddleware> buildToolMiddlewares(String agentKey, Path workspace,
+                                                              AgentFeature.Runtime rt, AgentFeature.MCP mcp) {
+        List<ToolProvidedMiddleware> middlewares = new ArrayList<>();
+        if (rt != null && Boolean.TRUE.equals(rt.getEnableOssFile())) {
+            middlewares.add(new OssToolMiddleware(new OssFileTools(workspace, ossClientManager, ossConnection)));
+            log.info("OSS 文件工具已启用 agentKey={}", agentKey);
+        }
+        if (rt != null && Boolean.TRUE.equals(rt.getEnableMcpConfig())) {
+            middlewares.add(new McpConfigToolMiddleware(new McpConfigTools(agentKey, mcpConfigService, mcp)));
+            log.info("MCP 配置查询工具已启用 agentKey={}", agentKey);
+        }
+        return middlewares;
     }
 
     /**
@@ -246,6 +307,68 @@ public class AgentAssembler {
             };
             builder.memory(MemoryConfig.builder().flushTrigger(trigger).build());
         }
+    }
+
+    /**
+     * MCP Server 注册（Agent 级配置，不依赖系统配置）：
+     * 每条 server 可引用系统记录（record）或内联完整配置（transport + command/url）；
+     * 引用记录时从 t_mcp_config 查完整配置，内联时直接使用。
+     * 通过 McpServerRegistrar.register() 将 MCP 工具注册到 HarnessAgent 的 Toolkit。
+     */
+    private void applyMcp(HarnessAgent agent, AgentFeature.MCP mcp) {
+        if (mcp == null || !mcp.isEnabled() || mcp.getServers() == null || mcp.getServers().isEmpty()) {
+            return;
+        }
+        Map<String, McpServerConfig> configs = new LinkedHashMap<>();
+        for (AgentFeature.MCP.Server srv : mcp.getServers()) {
+            McpServerConfig cfg = resolveMcpServer(srv);
+            if (cfg != null) {
+                String name = srv.getRecord() != null ? srv.getRecord() : (srv.getCommand() != null ? srv.getCommand() : srv.getUrl());
+                configs.put(name, cfg);
+            }
+        }
+        if (configs.isEmpty()) {
+            return;
+        }
+        Toolkit toolkit = agent.getToolkit();
+        if (toolkit == null) {
+            log.warn("MCP 配置已启用但 HarnessAgent Toolkit 为空，跳过 MCP 注册 agentKey 将在运行时生效");
+            return;
+        }
+        McpServerRegistrar.register(toolkit, configs);
+        log.info("Agent MCP Server 已注册 agentKey={} count={}", agent.getName(), configs.size());
+    }
+
+    /** 将单条 AgentFeature.MCP.Server 解析为 SDK McpServerConfig（引用记录时查库，内联时直接构造） */
+    private McpServerConfig resolveMcpServer(AgentFeature.MCP.Server srv) {
+        McpServerConfig cfg = new McpServerConfig();
+        if (srv.getRecord() != null && !srv.getRecord().isBlank()) {
+            // 引用系统记录：从 t_mcp_config 查完整配置
+            MCPConfigDO row = mcpConfigService.getByName(srv.getRecord());
+            if (row == null) {
+                log.warn("MCP Server 引用记录不存在，跳过 record={}", srv.getRecord());
+                return null;
+            }
+            if (!row.getEnabled()) {
+                log.warn("MCP Server 引用记录已禁用，跳过 record={}", srv.getRecord());
+                return null;
+            }
+            cfg.setTransport(row.getTransport());
+            cfg.setCommand(row.getCommand());
+            cfg.setArgs(MCPConfigService.parseArgs(row.getArgs()));
+            cfg.setEnv(MCPConfigService.parseMap(row.getEnv()));
+            cfg.setUrl(row.getUrl());
+            cfg.setHeaders(MCPConfigService.parseMap(row.getHeaders()));
+        } else {
+            // 内联配置：直接使用
+            cfg.setTransport(srv.getTransport());
+            cfg.setCommand(srv.getCommand());
+            cfg.setArgs(srv.getArgs());
+            cfg.setEnv(srv.getEnv());
+            cfg.setUrl(srv.getUrl());
+            cfg.setHeaders(srv.getHeaders());
+        }
+        return cfg;
     }
 
     /**

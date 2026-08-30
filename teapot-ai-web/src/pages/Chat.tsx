@@ -21,6 +21,7 @@ import { registerSubmit } from '../chat/askUserStore';
 import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
 import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
+import AgentConfigPanel from '../chat/AgentConfigPanel';
 import { newChatCoordinator } from '../chat/newChatCoordinator';
 import { useMobileUIStore } from '../store/mobileUI';
 import { PHONE_BP, NARROW_BP } from '../theme/breakpoints';
@@ -448,9 +449,8 @@ export default function Chat() {
         // 懒创建会话：提交前无会话则先创建（含等待 loader 冲刷），规避模板内部竞态
         beforeSubmit: () =>
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
-        // 底部操作栏前置：计划模式请求级开关（SPEC §25），位于附件按钮附近
+        // 底部操作栏前置：计划模式请求级开关（SPEC §25），位于附件按钮附近（无 Tooltip，样式简洁）
         prefix: (
-          <Tooltip title="计划模式：请求级开关，优先于 Agent 配置">
             <span
               onClick={() => onPlanModeOverride(planModeOverride === 'on' ? '' : 'on')}
               style={{
@@ -466,9 +466,8 @@ export default function Chat() {
                 transition: 'all 0.2s ease',
               }}
             >
-              <SparkTextBoxLine /> 计划
+              <SparkTextBoxLine /> Plan Mode
             </span>
-          </Tooltip>
         ),
       },
     };
@@ -529,6 +528,8 @@ export default function Chat() {
         {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
         <AgentScopeRuntimeWebUI key={currentAgent} options={options} ref={webUIRef} />
       </div>
+      {/* 桌面端右侧边栏：当前 Agent 配置总览（Basic Info / Skill / Tool & Advanced / MultiAgent / Channel / Sandbox / MCP） */}
+      {!isPhone && !isTablet && <AgentConfigPanel agentKey={currentAgent} />}
       {/* 记忆模式请求级开关（SPEC §25）：右上角悬浮，覆盖 Agent 配置，仅本次会话页生效并持久 */}
       {!showHome && (
         <div

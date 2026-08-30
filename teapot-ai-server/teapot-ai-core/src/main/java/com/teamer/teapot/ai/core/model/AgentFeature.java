@@ -28,7 +28,7 @@ public class AgentFeature {
     public static final String NS_MULTIAGENT = "multiagent";
     /** 长期记忆（SPEC §25）：两层记忆管线开关与 flush 触发策略（缺省开启，对齐 SDK 默认） */
     public static final String NS_MEMORY = "memory";
-    /** MCP Server 引用：Agent 启用的 MCP 工具来源（引用 t_mcp_config 记录名） */
+    /** MCP Server 配置：Agent 可引用系统记录（record）或内联完整配置（transport + ...），不依赖系统配置 */
     public static final String NS_MCP = "mcp";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -342,14 +342,30 @@ public class AgentFeature {
         }
     }
 
-    /** mcp 命名空间校验：启用时 mcpRecords 不能为空 */
+    /** mcp 命名空间校验：启用时 servers 不能为空；每条 server 必须 record 或 transport 二选一 */
     private void validateMcp() {
         MCP mcp = getMcp();
         if (mcp == null || !mcp.isEnabled()) {
             return;
         }
-        if (mcp.getMcpRecords() == null || mcp.getMcpRecords().isEmpty()) {
-            throw new BizException("启用 MCP 必须选择至少一条 MCP Server 记录（系统配置 - MCP 中维护）");
+        if (mcp.getServers() == null || mcp.getServers().isEmpty()) {
+            throw new BizException("启用 MCP 必须配置至少一条 MCP Server（引用系统记录或内联配置）");
+        }
+        for (MCP.Server srv : mcp.getServers()) {
+            boolean hasRecord = !isBlank(srv.getRecord());
+            boolean hasTransport = !isBlank(srv.getTransport());
+            if (!hasRecord && !hasTransport) {
+                throw new BizException("MCP Server 必须指定 record（引用系统记录）或 transport（内联配置）");
+            }
+            if (hasTransport) {
+                if ("stdio".equals(srv.getTransport()) && isBlank(srv.getCommand())) {
+                    throw new BizException("MCP Server transport=stdio 时必须指定 command");
+                }
+                if (("streamable_http".equals(srv.getTransport()) || "sse".equals(srv.getTransport()))
+                        && isBlank(srv.getUrl())) {
+                    throw new BizException("MCP Server transport=" + srv.getTransport() + " 时必须指定 url");
+                }
+            }
         }
     }
 
@@ -390,13 +406,34 @@ public class AgentFeature {
         private Integer flushThrottleMinutes;
     }
 
-    /** mcp 命名空间结构：Agent 引用的 MCP Server 记录列表（引用 t_mcp_config.name） */
+    /** mcp 命名空间结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置） */
     @Data
     public static class MCP {
         /** 是否启用 MCP 工具 */
         private boolean enabled;
-        /** 引用的 t_mcp_config 记录名列表（启用时非空） */
-        private List<String> mcpRecords;
+        /** MCP Server 列表：每条可引用系统记录（record）或内联完整配置（transport + ...） */
+        private List<Server> servers;
+
+        /** 单条 MCP Server 配置（record 与 inline 二选一） */
+        @Data
+        public static class Server {
+            /** 引用 t_mcp_config 记录名（与 inline 配置二选一） */
+            private String record;
+            /** 传输协议：stdio / streamable_http / sse（inline 必填） */
+            private String transport;
+            /** stdio 启动命令（transport=stdio 时必填） */
+            private String command;
+            /** stdio 命令参数 */
+            private List<String> args;
+            /** 环境变量 */
+            private Map<String, String> env;
+            /** HTTP/SSE 远程 URL（transport=streamable_http/sse 时必填） */
+            private String url;
+            /** HTTP 请求头 */
+            private Map<String, String> headers;
+            /** 描述（仅展示用） */
+            private String description;
+        }
     }
 
     /** runtime 命名空间结构：字段全部可空（null = 未配置，回落 SDK 默认 / 存量行为） */
@@ -414,6 +451,10 @@ public class AgentFeature {
         private Boolean enablePlanMode;
         /** shell 工具开关；null = 跟随沙箱启用（存量兼容） */
         private Boolean enableShell;
+        /** OSS 文件上传/下载工具开关（upload_file / download_file，ToolProvidedMiddleware 挂载） */
+        private Boolean enableOssFile;
+        /** MCP 配置查询工具开关（list_mcp_servers / get_mcp_server，ToolProvidedMiddleware 挂载） */
+        private Boolean enableMcpConfig;
         /** 工具白名单（空 = 不限制） */
         private List<String> allowedTools;
         /** ReAct 最大迭代轮数 [1,100]；null = SDK 默认 */

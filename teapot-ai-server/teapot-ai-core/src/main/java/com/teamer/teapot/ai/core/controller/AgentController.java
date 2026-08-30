@@ -10,7 +10,9 @@ import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
 import com.teamer.teapot.ai.core.model.dto.SessionHistoryItem;
 import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.vo.AgentDetailVO;
+import com.teamer.teapot.ai.core.model.vo.MemoryStoreVO;
 import com.teamer.teapot.ai.core.service.AgentService;
+import com.teamer.teapot.ai.core.service.MemoryStoreService;
 import com.teamer.teapot.ai.core.service.SessionHistoryService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -34,10 +36,13 @@ public class AgentController {
 
     private final AgentService agentService;
     private final SessionHistoryService sessionHistoryService;
+    private final MemoryStoreService memoryStoreService;
 
-    public AgentController(AgentService agentService, SessionHistoryService sessionHistoryService) {
+    public AgentController(AgentService agentService, SessionHistoryService sessionHistoryService,
+                           MemoryStoreService memoryStoreService) {
         this.agentService = agentService;
         this.sessionHistoryService = sessionHistoryService;
+        this.memoryStoreService = memoryStoreService;
     }
 
     @GetMapping("/list")
@@ -120,6 +125,23 @@ public class AgentController {
                                              @PathVariable String sessionId,
                                              @RequestParam(defaultValue = "web") String source) {
         sessionHistoryService.delete(userId, sessionId, source);
+        return Result.ok();
+    }
+
+    /**
+     * Redis 记忆内容查询（SPEC §27 记忆管理）：按命名空间 uid 分组返回记忆文件清单（含正文）。
+     */
+    @GetMapping("/{agentKey}/memory-items")
+    public Result<List<MemoryStoreVO.UserGroup>> memoryItems(@PathVariable String agentKey) {
+        return Result.ok(memoryStoreService.listItems(agentKey));
+    }
+
+    /** Redis 记忆逐条删除（SPEC §27 记忆管理）：删除指定 uid 命名空间下的单个记忆文件 */
+    @DeleteMapping("/{agentKey}/memory-item")
+    public Result<Void> deleteMemoryItem(@PathVariable String agentKey,
+                                         @RequestParam String uid,
+                                         @RequestParam String path) {
+        memoryStoreService.deleteItem(agentKey, uid, path);
         return Result.ok();
     }
 }

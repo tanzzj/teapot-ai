@@ -87,6 +87,10 @@ export interface AgentRuntimeConfig {
   enablePlanMode?: boolean;
   /** shell 工具开关；未配置时跟随沙箱启用 */
   enableShell?: boolean;
+  /** OSS 文件上传/下载工具开关（upload_file / download_file） */
+  enableOssFile?: boolean;
+  /** MCP 配置查询工具开关（list_mcp_servers / get_mcp_server） */
+  enableMcpConfig?: boolean;
   /** 工具白名单（空 = 不限制） */
   allowedTools?: string[];
   /** ReAct 最大迭代轮数 1–100；留空 = 默认 */
@@ -117,12 +121,32 @@ export interface AgentMemoryConfig {
   flushThrottleMinutes?: number;
 }
 
-/** feature.mcp 结构：Agent 级 MCP Server 引用（引用系统配置中的 MCP 记录名） */
+/** feature.mcp 结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置，不依赖系统配置） */
 export interface AgentMCPConfig {
   /** 是否启用 MCP 工具 */
   enabled: boolean;
-  /** 引用的 t_mcp_config 记录名列表（启用时非空） */
-  mcpRecords?: string[];
+  /** MCP Server 列表：每条可引用系统记录（record）或内联完整配置（transport + ...） */
+  mcpServers?: AgentMCPServer[];
+}
+
+/** 单条 MCP Server 配置（record 与 inline 二选一） */
+export interface AgentMCPServer {
+  /** 引用 t_mcp_config 记录名（与 inline 配置二选一） */
+  record?: string;
+  /** 传输协议：stdio / streamable_http / sse（inline 必填） */
+  transport?: MCPTransport;
+  /** stdio 启动命令（transport=stdio 时必填） */
+  command?: string;
+  /** stdio 命令参数 */
+  args?: string[];
+  /** 环境变量 */
+  env?: Record<string, string>;
+  /** HTTP/SSE 远程 URL（transport=streamable_http/sse 时必填） */
+  url?: string;
+  /** HTTP 请求头 */
+  headers?: Record<string, string>;
+  /** 描述（仅展示用） */
+  description?: string;
 }
 
 /** feature.channel 结构（SPEC §24.5：Agent 渠道连接器配置，可与 sandbox 共存） */
@@ -349,6 +373,20 @@ export interface ChatSession {
   title?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Redis 记忆单条文件（SPEC §27 记忆管理，GET /api/agent/{agentKey}/memory-items） */
+export interface MemoryFileItem {
+  path: string;
+  size: number;
+  modifiedAt?: string;
+  content?: string;
+}
+
+/** Redis 记忆按命名空间 uid 分组 */
+export interface MemoryUserGroup {
+  uid: string;
+  files: MemoryFileItem[];
 }
 
 /* ---------------- MCP Server 配置（参考 QwenPaw MCP 配置模型） ---------------- */

@@ -41,9 +41,42 @@ public class RedisMemoryFilesystems {
     private static final Logger log = LoggerFactory.getLogger(RedisMemoryFilesystems.class);
 
     private final RedisStore store;
+    private final JedisPooled jedis;
+    private final String keyPrefix;
 
     public RedisMemoryFilesystems(TeapotAiProperties properties, JedisPooled jedis) {
-        this.store = new RedisStore(jedis, properties.getAgentscope().getRedis().getMemoryKeyPrefix());
+        this.jedis = jedis;
+        this.keyPrefix = properties.getAgentscope().getRedis().getMemoryKeyPrefix();
+        this.store = new RedisStore(jedis, keyPrefix);
+    }
+
+    /**
+     * 管理视图（SPEC §27 记忆管理）：扫描 {@code <prefix>agents:<agentKey>:users:*:idx:}
+     * 得到该 Agent 下所有持有记忆的命名空间 uid（含 userId / sessionId 回落值 / _default）。
+     */
+    public List<String> listMemoryUids(String agentKey) {
+        String pattern = keyPrefix + "agents:" + agentKey + ":users:*:idx:";
+        List<String> uids = new java.util.ArrayList<>();
+        String cursor = "0";
+        redis.clients.jedis.params.ScanParams params = new redis.clients.jedis.params.ScanParams().match(pattern).count(200);
+        do {
+            var result = jedis.scan(cursor, params);
+            for (String key : result.getResult()) {
+                String rest = key.substring((keyPrefix + "agents:" + agentKey + ":users:").length());
+                int sep = rest.indexOf(":idx:");
+                if (sep > 0) {
+                    uids.add(rest.substring(0, sep));
+                }
+            }
+            cursor = result.getCursor();
+        } while (!"0".equals(cursor));
+        java.util.Collections.sort(uids);
+        return uids;
+    }
+
+    /** 管理视图：构造指定命名空间（agentKey + uid）的记忆文件系统，供查询/删除复用运行时同款链路 */
+    public RemoteFilesystem filesystemFor(String agentKey, String uid) {
+        return new RemoteFilesystem(store, ns -> List.of("agents", agentKey, "users", uid));
     }
 
     /**

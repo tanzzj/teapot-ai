@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Col, Row, Spin, theme, Tooltip } from 'antd';
+import { Alert, Col, Collapse, Empty, Row, Spin, theme, Tooltip } from 'antd';
 import {
   Button,
   Form,
@@ -7,9 +7,11 @@ import {
   Input,
   InputNumber,
   message,
+  Popconfirm,
   Radio,
   Select,
   Switch,
+  Tag,
 } from '@agentscope-ai/design';
 import {
   SparkCameraLine,
@@ -25,6 +27,7 @@ import {
   SparkMagicWandLine,
   SparkMemoryLine,
   SparkMultiAgentLine,
+  SparkPlusLine,
 } from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -32,11 +35,21 @@ import {
   agentDetail,
   agentUnbindSkill,
   agentUpdate,
+  deleteMemoryItem,
+  memoryItems,
   modelPresets,
 } from '../api/agent';
 import { sandboxOptions, sandboxRecordNames, storageRecordNames } from '../api/config';
 import { channelRegistry } from '../api/channelConfig';
 import { mcpRegistry } from '../api/mcpConfig';
+import { ResponsiveModal } from '../components/ResponsiveModal';
+import {
+  MCPConfigFormFields,
+  argsToLines,
+  linesToArgs,
+  linesToMap,
+  mapToLines,
+} from '../components/MCPConfigForm';
 import HistoryChatPanel from '../chat/HistoryChatPanel';
 import { uploadAgentAvatar } from '../api/avatar';
 import { skillList } from '../api/skill';
@@ -47,12 +60,14 @@ import { PHONE_BP } from '../theme/breakpoints';
 import type {
   AgentChannelConfig,
   AgentMCPConfig,
+  AgentMCPServer,
   AgentMemoryConfig,
   AgentMultiAgentConfig,
   AgentRuntimeConfig,
   AgentSandboxConfig,
   ChannelRecordName,
   MCPRecordName,
+  MemoryUserGroup,
   SandboxOptions,
   SandboxRecordName,
   SkillListItem,
@@ -107,16 +122,46 @@ function Heatmap({ agentKey }: { agentKey: string }) {
           : n <= 4 ? 'rgba(91, 185, 139, 0.7)'
             : 'rgba(91, 185, 139, 0.9)';
 
+  // 月份刻度：含当月首日的列标注月份（顶部日期轴）
+  const monthMarks = useMemo(() => {
+    const out: { col: number; label: string }[] = [];
+    let lastMonth = -1;
+    cells.forEach((c, i) => {
+      const m = Number(c.date.slice(5, 7));
+      if (m !== lastMonth) {
+        out.push({ col: Math.floor(i / 7), label: `${m}月` });
+        lastMonth = m;
+      }
+    });
+    return out;
+  }, [cells]);
+
+  const CELL = 15;
+  const GAP = 4;
+
   return (
     <div style={{ overflowX: 'auto', paddingTop: 8 }}>
-      <div style={{ display: 'grid', gridAutoFlow: 'column', gridTemplateRows: 'repeat(7, 10px)', gap: 3, width: 'max-content' }}>
-        {cells.map((c) => (
-          <span
-            key={c.date}
-            title={`${c.date} · ${c.count} 个会话`}
-            style={{ width: 10, height: 10, borderRadius: 2, background: color(c.count) }}
-          />
-        ))}
+      <div style={{ position: 'relative', width: 'max-content' }}>
+        {/* 顶部日期轴：按月标注 */}
+        <div style={{ position: 'relative', height: 18 }}>
+          {monthMarks.map((m) => (
+            <span
+              key={`${m.label}-${m.col}`}
+              style={{ position: 'absolute', left: m.col * (CELL + GAP), fontSize: 11, color: 'rgba(26, 26, 29, 0.45)', whiteSpace: 'nowrap' }}
+            >
+              {m.label}
+            </span>
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridAutoFlow: 'column', gridTemplateRows: `repeat(7, ${CELL}px)`, gap: GAP, width: 'max-content' }}>
+          {cells.map((c) => (
+            <span
+              key={c.date}
+              title={`${c.date} · ${c.count} 个会话`}
+              style={{ width: CELL, height: CELL, borderRadius: 3, background: color(c.count) }}
+            />
+          ))}
+        </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'center', marginTop: 8, fontSize: 11, color: 'rgba(26, 26, 29, 0.45)' }}>
         少
@@ -164,12 +209,41 @@ export default function AgentDetailPage() {
   const sbPersistence = Form.useWatch(['sandbox', 'persistence'], form);
   const chEnabled = Form.useWatch(['channel', 'enabled'], form);
   const mcpEnabled = Form.useWatch(['mcp', 'enabled'], form);
+  /** MCP Server 列表（弹窗编辑后需重渲染，走 useWatch） */
+  const mcpServers = Form.useWatch(['mcp', 'mcpServers'], form) as AgentMCPServer[] | undefined;
+  /** MCP Server 新增/编辑弹窗（复用系统配置 MCP 弹窗表单，§MCP） */
+  const [mcpModal, setMcpModal] = useState<{ mode: 'create' | 'edit'; index: number } | null>(null);
+  const [mcpModalForm] = Form.useForm();
+  const mcpModalMode = Form.useWatch('mode', mcpModalForm);
   /** 上下文压缩显式开关（映射 compactionTrigger：关 = -1，SPEC §25） */
   const compactionEnabled = Form.useWatch('compactionEnabled', form);
   /** 记忆落盘策略（throttled 时展示节流间隔，SPEC §25） */
   const memFlushTrigger = Form.useWatch(['memory', 'flushTrigger'], form);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  /** Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组的记忆文件清单，支持逐条删除 */
+  const [memGroups, setMemGroups] = useState<MemoryUserGroup[]>([]);
+  const [memLoading, setMemLoading] = useState(false);
+  const loadMemory = useCallback(() => {
+    setMemLoading(true);
+    memoryItems(agentKey)
+      .then(setMemGroups)
+      .catch(() => setMemGroups([]))
+      .finally(() => setMemLoading(false));
+  }, [agentKey]);
+  useEffect(() => {
+    if (section === 'memory') loadMemory();
+  }, [section, loadMemory]);
+  /** 逐条删除记忆文件后刷新列表 */
+  const onDeleteMemoryItem = useCallback(async (uid: string, path: string) => {
+    try {
+      await deleteMemoryItem(agentKey, uid, path);
+      message.success('记忆已删除');
+      loadMemory();
+    } catch {
+      message.error('删除失败');
+    }
+  }, [agentKey, loadMemory]);
 
   /** 用户手动切换过菜单宽窄：桌面端之后不再被分区切换自动覆盖（移动端仍随分区收起） */
   const menuTouched = useRef(false);
@@ -310,7 +384,7 @@ export default function AgentDetailPage() {
         },
         mcp: {
           enabled: !!mcp.enabled,
-          mcpRecords: mcp.mcpRecords ?? [],
+          mcpServers: mcp.mcpServers ?? [],
         },
         runtime: {
           thinkingMode: !!rt.thinkingMode,
@@ -320,6 +394,8 @@ export default function AgentDetailPage() {
           enablePlanMode: !!rt.enablePlanMode,
           // 存量未配置时跟随沙箱启用回显，与后端回落语义一致
           enableShell: rt.enableShell ?? !!sb.enabled,
+          enableOssFile: !!rt.enableOssFile,
+          enableMcpConfig: !!rt.enableMcpConfig,
           allowedTools: rt.allowedTools,
           maxIterations: rt.maxIterations,
         },
@@ -346,6 +422,69 @@ export default function AgentDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  /** 打开 MCP Server 新增/编辑弹窗（index 缺省 = 新增） */
+  const openMcpModal = (index?: number) => {
+    mcpModalForm.resetFields();
+    if (index === undefined) {
+      mcpModalForm.setFieldsValue({
+        mode: mcpNames.length > 0 ? 'record' : 'inline',
+        transport: 'streamable_http',
+      });
+      setMcpModal({ mode: 'create', index: -1 });
+      return;
+    }
+    const srv = (mcpServers ?? [])[index];
+    if (srv?.record) {
+      mcpModalForm.setFieldsValue({ mode: 'record', record: srv.record });
+    } else {
+      mcpModalForm.setFieldsValue({
+        mode: 'inline',
+        transport: srv?.transport ?? 'streamable_http',
+        command: srv?.command,
+        args: argsToLines(srv?.args),
+        env: mapToLines(srv?.env),
+        url: srv?.url,
+        headers: mapToLines(srv?.headers),
+        description: srv?.description,
+      });
+    }
+    setMcpModal({ mode: 'edit', index });
+  };
+
+  /** MCP 弹窗提交：校验后生成 AgentMCPServer 写回主表单 */
+  const onMcpModalOk = async () => {
+    const values = await mcpModalForm.validateFields();
+    let srv: AgentMCPServer;
+    if (values.mode === 'record') {
+      srv = { record: values.record };
+    } else {
+      const args = linesToArgs(values.args || '');
+      const env = linesToMap(values.env || '');
+      const headers = linesToMap(values.headers || '');
+      srv = values.transport === 'stdio'
+        ? {
+            transport: 'stdio',
+            command: values.command,
+            args: args.length ? args : undefined,
+            env: Object.keys(env).length ? env : undefined,
+          }
+        : {
+            transport: values.transport,
+            url: values.url,
+            headers: Object.keys(headers).length ? headers : undefined,
+          };
+      if (values.description) srv.description = values.description;
+    }
+    const cur: AgentMCPServer[] = [...((form.getFieldValue(['mcp', 'mcpServers']) as AgentMCPServer[]) ?? [])];
+    if (mcpModal?.mode === 'edit') {
+      cur[mcpModal.index] = srv;
+    } else {
+      cur.push(srv);
+    }
+    form.setFieldsValue({ mcp: { ...form.getFieldValue('mcp'), mcpServers: cur } });
+    setMcpModal(null);
+  };
 
   const onSave = async () => {
     const values = await form.validateFields();
@@ -397,8 +536,22 @@ export default function AgentDetailPage() {
     }
     if (mcp !== undefined) {
       const mcpOut = { ...mcp };
-      if (Array.isArray(mcpOut.mcpRecords)) {
-        mcpOut.mcpRecords = mcpOut.mcpRecords.map((s: string) => s.trim()).filter(Boolean);
+      if (Array.isArray(mcpOut.mcpServers)) {
+        // 清理每条 server：record trim；inline 字段按 transport 保留
+        mcpOut.mcpServers = mcpOut.mcpServers.map((s: AgentMCPServer) => {
+          if (s.record) return { record: s.record.trim() };
+          const cleaned: AgentMCPServer = { transport: s.transport };
+          if (s.transport === 'stdio') {
+            cleaned.command = s.command;
+            if (s.args?.length) cleaned.args = s.args;
+            if (s.env && Object.keys(s.env).length) cleaned.env = s.env;
+          } else {
+            cleaned.url = s.url;
+            if (s.headers && Object.keys(s.headers).length) cleaned.headers = s.headers;
+          }
+          if (s.description) cleaned.description = s.description;
+          return cleaned;
+        }).filter((s: AgentMCPServer) => s.record || s.transport);
       }
       feature.mcp = mcpOut.enabled ? mcpOut : { enabled: false };
     }
@@ -712,15 +865,12 @@ export default function AgentDetailPage() {
                       style={{ display: 'none' }}
                       onChange={(e) => onAvatarFile(e.target.files?.[0])}
                     />
-                    <div style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 11, color: 'rgba(26, 26, 29, 0.55)', marginTop: 10 }}>
-                      ID: {agentKey}
-                    </div>
                   </div>
 
                   {/* 基本信息 */}
                   <div style={{ flex: 1, minWidth: 240 }}>
                     <div style={{ fontSize: 24, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>
-                      {agentKey}
+                      {detail?.name || agentKey}
                     </div>
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', margin: '10px 0', fontSize: 13, color: 'rgba(26, 26, 29, 0.55)' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -900,10 +1050,32 @@ export default function AgentDetailPage() {
                   <Form.Item
                     name={['runtime', 'allowedTools']}
                     label="Allowed Tools"
-                    tooltip="工具白名单（回车/逗号分隔录入），留空 = 不限制"
+                    tooltip="工具白名单（回车/逗号分隔录入），留空 = 不限制；注意：若配置白名单需包含 upload_file / download_file / list_mcp_servers / get_mcp_server 才能生效"
                   >
                     <Select mode="tags" placeholder="留空不限制" tokenSeparators={[',', ' ']} />
                   </Form.Item>
+                  <Row gutter={16}>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'enableOssFile']}
+                        label="OSS 文件上传下载"
+                        valuePropName="checked"
+                        tooltip="开启后 Agent 获得 upload_file / download_file 工具，可将工作区文件上传到 OSS 换取直链、或下载外部文件到工作区（凭证用系统配置 - 存储的全局激活记录）"
+                      >
+                        <Switch />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'enableMcpConfig']}
+                        label="MCP 配置查询"
+                        valuePropName="checked"
+                        tooltip="开启后 Agent 获得 list_mcp_servers / get_mcp_server 只读工具，可向用户说明自身 MCP 配置（凭据字段不回显值）"
+                      >
+                        <Switch />
+                      </Form.Item>
+                    </Col>
+                  </Row>
                 </Form>
               </div>
             )}
@@ -927,6 +1099,7 @@ export default function AgentDetailPage() {
             )}
 
             {section === 'memory' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="glass-card" style={{ padding: 24 }}>
                 <Form form={form} layout="vertical">
                   <Form.Item
@@ -969,6 +1142,55 @@ export default function AgentDetailPage() {
                     chat 界面支持用户按请求临时覆盖记忆开关（参数传递），请求级开关优先于本配置。
                   </div>
                 </Form>
+              </div>
+
+              {/* Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组查询，支持逐条删除 */}
+              <div className="glass-card" style={{ padding: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>记忆内容（Redis）</div>
+                  <Button onClick={loadMemory} loading={memLoading}>刷新</Button>
+                </div>
+                {memLoading && memGroups.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+                ) : memGroups.length === 0 ? (
+                  <Empty description="暂无记忆内容（该 Agent 尚未沉淀记忆，或未启用 Redis 记忆存储）" />
+                ) : (
+                  <Collapse
+                    items={memGroups.map((g) => ({
+                      key: g.uid,
+                      label: (
+                        <span>
+                          <span style={{ fontFamily: 'Menlo, Consolas, monospace' }}>{g.uid}</span>
+                          <span style={{ marginLeft: 8, fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>{g.files.length} 条</span>
+                        </span>
+                      ),
+                      children: (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {g.files.map((f) => (
+                            <div key={f.path} style={{ border: '1px solid rgba(0, 0, 0, 0.06)', borderRadius: 8, padding: '8px 12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span style={{ fontWeight: 600, fontSize: 13, fontFamily: 'Menlo, Consolas, monospace' }}>{f.path}</span>
+                                {f.modifiedAt && (
+                                  <span style={{ fontSize: 11, color: 'rgba(26, 26, 29, 0.45)' }}>更新于 {f.modifiedAt}</span>
+                                )}
+                                <span style={{ flex: 1 }} />
+                                <Popconfirm title={`确认删除记忆 ${f.path}？删除后不可恢复`} onConfirm={() => onDeleteMemoryItem(g.uid, f.path)}>
+                                  <Button size="small" danger>删除</Button>
+                                </Popconfirm>
+                              </div>
+                              {f.content != null && (
+                                <pre style={{ margin: '8px 0 0', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 240, overflow: 'auto', background: 'rgba(0, 0, 0, 0.03)', borderRadius: 6, padding: 8 }}>
+                                  {f.content || '（空文件）'}
+                                </pre>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ),
+                    }))}
+                  />
+                )}
+              </div>
               </div>
             )}
 
@@ -1185,33 +1407,99 @@ export default function AgentDetailPage() {
 
             {section === 'mcp' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {mcpNames.length === 0 && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="MCP 未配置"
-                    description="请联系管理员在「系统配置 - MCP」中新建 MCP Server 配置后再启用。"
-                  />
-                )}
                 <div className="glass-card" style={{ padding: 24 }}>
                   <Form form={form} layout="vertical">
                     <Form.Item
                       name={['mcp', 'enabled']}
                       label="启用 MCP 工具"
                       valuePropName="checked"
-                      tooltip="启用后 Agent 可调用系统配置中注册的 MCP Server 提供的工具能力"
+                      tooltip="启用后 Agent 可调用 MCP Server 提供的工具能力，支持引用系统记录或自定义配置"
                     >
-                      <Switch disabled={mcpNames.length === 0} />
+                      <Switch />
                     </Form.Item>
-                    {mcpEnabled && (
+                  </Form>
+                  {mcpEnabled && (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>MCP Server 列表</span>
+                        <div style={{ flex: 1 }} />
+                        <Button size="small" icon={<SparkPlusLine />} onClick={() => openMcpModal()}>
+                          添加 Server
+                        </Button>
+                      </div>
+                      {(mcpServers ?? []).length === 0 && (
+                        <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)', padding: '8px 0' }}>
+                          暂无 MCP Server，点击「添加 Server」新增配置
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {(mcpServers ?? []).map((srv, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              padding: '10px 14px',
+                              borderRadius: 10,
+                              border: '1px solid rgba(26,26,29,0.08)',
+                              background: 'rgba(255,255,255,0.5)',
+                            }}
+                          >
+                            <Tag color={srv.record ? 'blue' : 'green'} style={{ margin: 0 }}>
+                              {srv.record ? '系统记录' : '自定义'}
+                            </Tag>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {srv.record || (srv.transport === 'stdio' ? srv.command : srv.url) || '-'}
+                              </div>
+                              {srv.description && (
+                                <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {srv.description}
+                                </div>
+                              )}
+                            </div>
+                            <a onClick={() => openMcpModal(idx)}>编辑</a>
+                            <Popconfirm
+                              title="删除这条 MCP Server 配置？"
+                              onConfirm={() => {
+                                const cur = [...((form.getFieldValue(['mcp', 'mcpServers']) as AgentMCPServer[]) ?? [])];
+                                cur.splice(idx, 1);
+                                form.setFieldsValue({ mcp: { ...form.getFieldValue('mcp'), mcpServers: cur } });
+                              }}
+                            >
+                              <a style={{ color: '#cf1322' }}>删除</a>
+                            </Popconfirm>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* 新增/编辑 MCP Server 弹窗：复用系统配置 MCP 弹窗表单（§MCP） */}
+                <ResponsiveModal
+                  title={mcpModal?.mode === 'edit' ? '编辑 MCP Server' : '添加 MCP Server'}
+                  open={mcpModal !== null}
+                  onOk={onMcpModalOk}
+                  onCancel={() => setMcpModal(null)}
+                  destroyOnClose
+                  width={620}
+                >
+                  <Form form={mcpModalForm} layout="vertical" style={{ marginTop: 12 }}>
+                    <Form.Item name="mode" label="配置来源">
+                      <Radio.Group>
+                        <Radio.Button value="record">引用系统记录</Radio.Button>
+                        <Radio.Button value="inline">自定义配置</Radio.Button>
+                      </Radio.Group>
+                    </Form.Item>
+                    {mcpModalMode === 'record' ? (
                       <Form.Item
-                        name={['mcp', 'mcpRecords']}
-                        label="MCP Server 记录"
-                        tooltip="选择该 Agent 要使用的 MCP Server（可多选）；记录在系统配置 - MCP 中维护"
-                        rules={[{ required: true, message: '启用 MCP 必须选择至少一条记录' }]}
+                        name="record"
+                        label="系统记录"
+                        rules={[{ required: true, message: '请选择 MCP Server 记录' }]}
                       >
                         <Select
-                          mode="multiple"
                           placeholder="选择 MCP Server 记录"
                           options={mcpNames.map((r) => ({
                             value: r.name,
@@ -1219,22 +1507,20 @@ export default function AgentDetailPage() {
                           }))}
                         />
                       </Form.Item>
+                    ) : (
+                      <MCPConfigFormFields />
                     )}
                   </Form>
-                </div>
+                </ResponsiveModal>
 
-                {isAdmin && (
-                  <div className="glass-card" style={{ padding: 24 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: 15, fontWeight: 700 }}>MCP Server 配置</div>
-                      <div style={{ flex: 1 }} />
-                      <Button icon={<SparkSettingLine />} onClick={() => navigate('/system/mcp')}>
+                {isAdmin && mcpNames.length > 0 && (
+                  <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
+                    系统已有 {mcpNames.length} 条 MCP Server 记录可供引用。
+                    {isAdmin && (
+                      <Button type="text" size="small" icon={<SparkSettingLine />} onClick={() => navigate('/system/mcp')} style={{ fontSize: 12, padding: '0 4px' }}>
                         前往系统配置
                       </Button>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginTop: 12 }}>
-                      当前共 {mcpNames.length} 条 MCP Server 配置；启用时至少选择一条。
-                    </div>
+                    )}
                   </div>
                 )}
               </div>

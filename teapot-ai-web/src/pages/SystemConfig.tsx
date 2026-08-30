@@ -51,6 +51,13 @@ import type {
 } from '../types';
 import { useIsPhone } from '../hooks/useIsPhone';
 import { ResponsiveModal } from '../components/ResponsiveModal';
+import {
+  MCPConfigFormFields,
+  argsToLines,
+  linesToArgs,
+  linesToMap,
+  mapToLines,
+} from '../components/MCPConfigForm';
 
 /**
  * 系统配置页（SPEC §21/§22/§24，admin 一站式管理台）：
@@ -891,35 +898,6 @@ function ChannelSection() {
 
 /* ---------------- MCP Server 配置分区（参考 QwenPaw MCP 配置模型） ---------------- */
 
-/** 将 env/headers 的 Record<string,string> 转为 "KEY=VALUE" 逐行文本 */
-function mapToLines(m?: Record<string, string>): string {
-  if (!m || Object.keys(m).length === 0) return '';
-  return Object.entries(m).map(([k, v]) => `${k}=${v}`).join('\n');
-}
-
-/** 将 "KEY=VALUE" 逐行文本转为 Record<string,string> */
-function linesToMap(text: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (!text) return result;
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx <= 0) continue;
-    result[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
-  }
-  return result;
-}
-
-/** 将 args 数组转为逐行文本 */
-function argsToLines(args?: string[]): string {
-  return (args ?? []).join('\n');
-}
-
-/** 将逐行文本转为 args 数组 */
-function linesToArgs(text: string): string[] {
-  return text.split('\n').map(l => l.trim()).filter(Boolean);
-}
 
 function MCPSection() {
   const [recordForm] = Form.useForm();
@@ -927,7 +905,6 @@ function MCPSection() {
   const [savingRecord, setSavingRecord] = useState(false);
   const [listData, setListData] = useState<MCPListData | null>(null);
   const [modal, setModal] = useState<{ mode: 'create' | 'edit' } | null>(null);
-  const transport = Form.useWatch('transport', recordForm);
   const isPhone = useIsPhone();
 
   const load = useCallback(async () => {
@@ -1083,77 +1060,7 @@ function MCPSection() {
           width={620}
         >
           <Form form={recordForm} layout="vertical" style={{ marginTop: 12 }}>
-            <Row gutter={16}>
-              <Col xs={24} sm={12}>
-                <Form.Item name="name" label="名称" rules={[{ required: true, message: '必填' }]}>
-                  <Input placeholder="如 filesystem、github-mcp" disabled={modal?.mode === 'edit'} />
-                </Form.Item>
-              </Col>
-              <Col xs={24} sm={12}>
-                <Form.Item name="transport" label="传输协议" rules={[{ required: true, message: '必选' }]}>
-                  <Select
-                    style={{ width: '100%' }}
-                    options={[
-                      { value: 'streamable_http', label: 'Streamable HTTP（远程）' },
-                      { value: 'sse', label: 'SSE（远程）' },
-                      { value: 'stdio', label: 'Stdio（本地进程）' },
-                    ]}
-                  />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            {transport === 'stdio' ? (
-              <>
-                <Form.Item
-                  name="command"
-                  label="启动命令"
-                  rules={[{ required: true, message: '必填' }]}
-                  tooltip="本地进程的启动命令，如 npx、uvx、node 等"
-                >
-                  <Input placeholder="如 npx、uvx、node" />
-                </Form.Item>
-                <Form.Item
-                  name="args"
-                  label="命令参数"
-                  tooltip="每行一个参数，如 @modelcontextprotocol/server-filesystem"
-                >
-                  <Input.TextArea rows={3} placeholder={"@modelcontextprotocol/server-filesystem\n/path/to/dir"} style={{ fontFamily: 'monospace' }} />
-                </Form.Item>
-                <Form.Item
-                  name="env"
-                  label="环境变量"
-                  tooltip="每行 KEY=VALUE 格式"
-                >
-                  <Input.TextArea rows={3} placeholder={"API_KEY=your-key\nDEBUG=true"} style={{ fontFamily: 'monospace' }} />
-                </Form.Item>
-              </>
-            ) : (
-              <>
-                <Form.Item
-                  name="url"
-                  label="服务 URL"
-                  rules={[{ required: true, message: '必填' }]}
-                  tooltip="MCP Server 的 HTTP/SSE 端点地址"
-                >
-                  <Input placeholder={transport === 'sse' ? 'http://localhost:3001/sse' : 'http://localhost:3001/mcp'} />
-                </Form.Item>
-                <Form.Item
-                  name="headers"
-                  label="请求头"
-                  tooltip="每行 KEY=VALUE 格式，如 Authorization=Bearer xxx"
-                >
-                  <Input.TextArea rows={3} placeholder={"Authorization=Bearer your-token"} style={{ fontFamily: 'monospace' }} />
-                </Form.Item>
-              </>
-            )}
-
-            <Form.Item name="description" label="描述">
-              <Input placeholder="可选，简述该 MCP Server 提供的能力" />
-            </Form.Item>
-            <Form.Item name="remark" label="备注">
-              <Input placeholder="可选" />
-            </Form.Item>
+            <MCPConfigFormFields showName nameDisabled={modal?.mode === 'edit'} showRemark />
           </Form>
         </ResponsiveModal>
       </div>

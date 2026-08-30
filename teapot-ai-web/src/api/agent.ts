@@ -1,5 +1,5 @@
 import { http, unwrap } from './http';
-import type { Agent, AgentDetail, PageData, Result, SessionHistoryItem, SessionMessageItem } from '../types';
+import type { Agent, AgentDetail, MemoryUserGroup, PageData, Result, SessionHistoryItem, SessionMessageItem } from '../types';
 
 export function agentList(params: { page?: number; size?: number; keyword?: string; includeDisabled?: boolean }) {
   return unwrap<PageData<Agent>>(http.get<Result<PageData<Agent>>>('/api/agent/list', { params }));
@@ -76,5 +76,19 @@ export function deleteSessionHistory(agentKey: string, userId: string, sessionId
       `/api/agent/${agentKey}/session-history/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}`,
       { params: { source } },
     ),
+  );
+}
+
+/** Redis 记忆内容查询（SPEC §27 记忆管理）：按命名空间 uid 分组返回记忆文件（含正文） */
+export function memoryItems(agentKey: string) {
+  return unwrap<MemoryUserGroup[]>(
+    http.get<Result<MemoryUserGroup[]>>(`/api/agent/${agentKey}/memory-items`),
+  );
+}
+
+/** Redis 记忆逐条删除（SPEC §27 记忆管理） */
+export function deleteMemoryItem(agentKey: string, uid: string, path: string) {
+  return unwrap<void>(
+    http.delete<Result<void>>(`/api/agent/${agentKey}/memory-item`, { params: { uid, path } }),
   );
 }
