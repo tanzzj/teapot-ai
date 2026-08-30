@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { Empty, message, Popover, Switch, Upload } from 'antd';
 import { IconButton, Select } from '@agentscope-ai/design';
-import { SparkEnlargeLine, SparkGuardrailLine, SparkLeftArrowLine, SparkMemoryLine, SparkPlusLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
+import { SparkAddFileLine, SparkEnlargeLine, SparkGuardrailLine, SparkLeftArrowLine, SparkMemoryLine, SparkPlusLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
   useChatAnywhereInput,
@@ -300,6 +300,11 @@ export default function Chat() {
   const configOverridden = memoryOverride !== '' || planModeOverride !== '' || permissionOverride !== '';
   const openConfig = useCallback(() => setConfigOpen(true), []);
   const closeConfig = useCallback(() => setConfigOpen(false), []);
+  /** 触发模板附件上传（点击模板隐藏的 file input） */
+  const triggerAttachment = useCallback(() => {
+    const input = document.querySelector<HTMLInputElement>('.agentscope-runtime-webui-sender input[type="file"]');
+    if (input) input.click();
+  }, []);
 
   // 移动端监听发送框 textarea 焦点：focus 后浮出放大按钮，失焦收起（放大态常驻）
   useEffect(() => {
@@ -499,6 +504,7 @@ export default function Chat() {
             content={(
               <div style={{ width: 264 }}>
                 {([
+                  { icon: <SparkAddFileLine />, label: '附件', control: null, onClick: triggerAttachment },
                   { icon: <SparkMemoryLine />, label: '记忆模式', control: (
                     <Select
                       size="small"
@@ -533,6 +539,7 @@ export default function Chat() {
                 ]).map((row, i) => (
                   <div
                     key={row.label}
+                    onClick={row.onClick}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -541,6 +548,7 @@ export default function Chat() {
                       padding: '9px 10px',
                       borderRadius: 10,
                       background: i % 2 ? 'transparent' : 'rgba(0,0,0,0.02)',
+                      cursor: row.onClick ? 'pointer' : undefined,
                     }}
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'rgba(26,26,29,0.85)' }}>
@@ -559,17 +567,11 @@ export default function Chat() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: 24,
-                height: 24,
-                borderRadius: 999,
                 cursor: 'pointer',
-                fontSize: 12,
-                color: configOpen || configOverridden ? '#fff' : 'rgba(26,26,29,0.6)',
-                background: configOpen || configOverridden ? '#1a1a1d' : 'rgba(0,0,0,0.04)',
-                transition: 'all 0.2s ease',
+                color: 'rgba(26,26,29,0.55)',
               }}
             >
-              <SparkPlusLine size={14} />
+              <SparkPlusLine size={16} />
             </span>
           </Popover>
         ),
@@ -604,10 +606,13 @@ export default function Chat() {
   const showHome = isPhone && mobileView === 'home';
 
   return (
-    <div
-      className={isPhone && senderExpanded ? 'teapot-chat-expanded' : undefined}
-      style={{ height: '100%', position: 'relative', display: 'flex', minWidth: 0 }}
-    >
+    <>
+      {/* 隐藏模板默认附件按钮（已收纳进「+」弹层） */}
+      <style>{`.agentscope-runtime-webui-sender .ant-upload { display: none !important; }`}</style>
+      <div
+        className={isPhone && senderExpanded ? 'teapot-chat-expanded' : undefined}
+        style={{ height: '100%', position: 'relative', display: 'flex', minWidth: 0 }}
+      >
       {showHome && (
         <div
           ref={(el) => setHomeSlot(el)}
@@ -654,5 +659,6 @@ export default function Chat() {
           })()
         : null}
     </div>
+    </>
   );
 }
