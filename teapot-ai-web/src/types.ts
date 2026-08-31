@@ -123,6 +123,22 @@ export interface AgentMemoryConfig {
   flushTrigger?: 'always' | 'never' | 'throttled';
   /** 仅 flushTrigger=throttled 生效：落盘节流间隔（分钟，1–1440） */
   flushThrottleMinutes?: number;
+  /** 记忆操作（flush + consolidation）专用模型，留空跟随 Agent 主模型 */
+  modelId?: string;
+}
+
+/** feature.sessionTitle 结构：异步会话标题生成（开关 + 专用模型） */
+export interface AgentSessionTitleConfig {
+  /** false = 关闭异步标题生成；缺省启用 */
+  enabled?: boolean;
+  /** 标题生成专用模型，留空跟随 Agent 主模型 */
+  modelId?: string;
+}
+
+/** feature.compaction 结构：压缩摘要模型覆盖（trigger/keep 仍在 AgentDO 列） */
+export interface AgentCompactionConfig {
+  /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
+  modelId?: string;
 }
 
 /** feature.mcp 结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置，不依赖系统配置） */

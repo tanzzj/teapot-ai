@@ -65,6 +65,8 @@ import type {
   AgentMultiAgentConfig,
   AgentRuntimeConfig,
   AgentSandboxConfig,
+  AgentSessionTitleConfig,
+  AgentCompactionConfig,
   ChannelRecordName,
   MCPRecordName,
   MemoryUserGroup,
@@ -224,6 +226,8 @@ export default function AgentDetailPage() {
   /** Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组的记忆文件清单，支持逐条删除 */
   const [memGroups, setMemGroups] = useState<MemoryUserGroup[]>([]);
   const [memLoading, setMemLoading] = useState(false);
+  /** 记忆用户筛选：空 = 全部，否则仅显示匹配 uid */
+  const [memUidFilter, setMemUidFilter] = useState<string>('');
   const loadMemory = useCallback(() => {
     setMemLoading(true);
     memoryItems(agentKey)
@@ -323,6 +327,8 @@ export default function AgentDetailPage() {
       let rt: Partial<AgentRuntimeConfig> = {};
       let ma: Partial<AgentMultiAgentConfig> = {};
       let mem: Partial<AgentMemoryConfig> = {};
+      let st: Partial<AgentSessionTitleConfig> = {};
+      let comp: Partial<AgentCompactionConfig> = {};
       let storageTarget = 'base64';
       let parsedFeature: Record<string, unknown> = {};
       if (d.agent.feature) {
@@ -347,6 +353,12 @@ export default function AgentDetailPage() {
             }
             if (f.memory) {
               mem = f.memory;
+            }
+            if (f.sessionTitle) {
+              st = f.sessionTitle;
+            }
+            if (f.compaction) {
+              comp = f.compaction;
             }
             if (f.storage && f.storage.mode === 'oss' && f.storage.storageRecord) {
               storageTarget = f.storage.storageRecord;
@@ -409,6 +421,14 @@ export default function AgentDetailPage() {
           enabled: mem.enabled !== false,
           flushTrigger: mem.flushTrigger ?? 'always',
           flushThrottleMinutes: mem.flushThrottleMinutes ?? 10,
+          modelId: mem.modelId,
+        },
+        sessionTitle: {
+          enabled: st.enabled !== false,
+          modelId: st.modelId,
+        },
+        compaction: {
+          modelId: comp.modelId,
         },
       });
       setBoundSkills(d.skillNames || []);
@@ -490,7 +510,7 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, compactionEnabled, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
       channel?: Partial<AgentChannelConfig>;
@@ -498,6 +518,8 @@ export default function AgentDetailPage() {
       runtime?: Partial<AgentRuntimeConfig>;
       multiagent?: Partial<AgentMultiAgentConfig>;
       memory?: Partial<AgentMemoryConfig>;
+      sessionTitle?: Partial<AgentSessionTitleConfig>;
+      compaction?: Partial<AgentCompactionConfig>;
       compactionEnabled?: boolean;
     };
     const payload: Record<string, unknown> = { ...rest };
@@ -575,6 +597,17 @@ export default function AgentDetailPage() {
     if (memory !== undefined) {
       // enabled=false 时仅提交 {enabled:false}，落盘策略无意义（SPEC §25）
       feature.memory = memory.enabled ? memory : { enabled: false };
+    }
+    if (sessionTitle !== undefined) {
+      feature.sessionTitle = sessionTitle.enabled !== false ? sessionTitle : { enabled: false };
+    }
+    if (compactionFeature !== undefined) {
+      // compaction 命名空间仅 modelId；有值时提交，空值时清除
+      if (compactionFeature.modelId) {
+        feature.compaction = compactionFeature;
+      } else {
+        delete feature.compaction;
+      }
     }
     if (Object.keys(feature).length > 0) {
       payload.feature = feature;
@@ -1017,6 +1050,7 @@ export default function AgentDetailPage() {
                     <Switch />
                   </Form.Item>
                   {compactionEnabled && (
+                    <>
                     <Row gutter={16}>
                       <Col xs={24} sm={12}>
                         <Form.Item
@@ -1037,6 +1071,18 @@ export default function AgentDetailPage() {
                         </Form.Item>
                       </Col>
                     </Row>
+                    <Form.Item
+                      name={['compaction', 'modelId']}
+                      label="压缩摘要模型"
+                      tooltip="上下文压缩摘要使用的模型，留空跟随 Agent 主模型"
+                    >
+                      <Select
+                        allowClear
+                        placeholder="跟随 Agent 主模型"
+                        options={models.map((m) => ({ label: m, value: m }))}
+                      />
+                    </Form.Item>
+                    </>
                   )}
                   <Row gutter={16}>
                     <Col xs={24} sm={12}>
@@ -1167,6 +1213,36 @@ export default function AgentDetailPage() {
                       </Col>
                     )}
                   </Row>
+                  <Form.Item
+                    name={['memory', 'modelId']}
+                    label="记忆摘要模型"
+                    tooltip="记忆 flush / consolidation 使用的模型，留空跟随 Agent 主模型"
+                  >
+                    <Select
+                      allowClear
+                      placeholder="跟随 Agent 主模型"
+                      options={models.map((m) => ({ label: m, value: m }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    name={['sessionTitle', 'enabled']}
+                    label="异步会话标题生成"
+                    valuePropName="checked"
+                    tooltip="开启后首次对话时异步调 LLM 总结标题，关闭则标题保持 Agent 名称"
+                  >
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item
+                    name={['sessionTitle', 'modelId']}
+                    label="标题生成模型"
+                    tooltip="标题生成专用模型，留空跟随 Agent 主模型"
+                  >
+                    <Select
+                      allowClear
+                      placeholder="跟随 Agent 主模型"
+                      options={models.map((m) => ({ label: m, value: m }))}
+                    />
+                  </Form.Item>
                   <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
                     chat 界面支持用户按请求临时覆盖记忆开关（参数传递），请求级开关优先于本配置。
                   </div>
@@ -1175,9 +1251,20 @@ export default function AgentDetailPage() {
 
               {/* Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组查询，支持逐条删除 */}
               <div className="glass-card" style={{ padding: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
                   <div style={{ fontSize: 17, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>记忆内容（Redis）</div>
-                  <Button onClick={loadMemory} loading={memLoading}>刷新</Button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Select
+                      allowClear
+                      showSearch
+                      style={{ minWidth: 160 }}
+                      placeholder="全部用户"
+                      value={memUidFilter || undefined}
+                      onChange={(v) => setMemUidFilter(v ?? '')}
+                      options={memGroups.map((g) => ({ label: g.uid, value: g.uid }))}
+                    />
+                    <Button onClick={loadMemory} loading={memLoading}>刷新</Button>
+                  </div>
                 </div>
                 {memLoading && memGroups.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
@@ -1185,7 +1272,9 @@ export default function AgentDetailPage() {
                   <Empty description="暂无记忆内容（该 Agent 尚未沉淀记忆，或未启用 Redis 记忆存储）" />
                 ) : (
                   <Collapse
-                    items={memGroups.map((g) => ({
+                    items={memGroups
+                      .filter((g) => !memUidFilter || g.uid === memUidFilter)
+                      .map((g) => ({
                       key: g.uid,
                       label: (
                         <span>

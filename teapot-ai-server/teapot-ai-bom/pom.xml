@@ -20,7 +20,7 @@
     <properties>
         <!-- 版本基线（SPEC §3 / §3.1） -->
         <spring-boot.version>3.5.16</spring-boot.version>
-        <agentscope.version>2.0.1</agentscope.version>
+        <agentscope.version>2.0.3-SNAPSHOT</agentscope.version>
         <mybatis-starter.version>3.0.5</mybatis-starter.version>
         <java-jwt.version>4.5.0</java-jwt.version>
         <!-- JDA：Discord Gateway WebSocket 客户端（SPEC §24 修订：Discord 渠道，SDK 无官方 Java 扩展） -->

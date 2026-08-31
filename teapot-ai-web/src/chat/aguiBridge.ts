@@ -17,6 +17,12 @@ import { consumeResume, registerInterrupts, resetForRun } from './askUserStore';
 
 const ANSWER_MSG_ID = 'asst-answer';
 
+/** 会话标题回调：由 ChatBridge 注册，收到 session_title CUSTOM 事件时触发 UI 更新 */
+let sessionTitleHandler: ((sessionId: string, title: string) => void) | null = null;
+export function setSessionTitleHandler(handler: ((sessionId: string, title: string) => void) | null) {
+  sessionTitleHandler = handler;
+}
+
 interface ToolState {
   name: string;
   args: string;
@@ -226,6 +232,12 @@ function createRunParser() {
       case 'CUSTOM': {
         if (ev.name === 'token_usage' && ev.value) {
           state.usage = ev.value as Record<string, unknown>;
+        } else if (ev.name === 'session_title' && ev.value) {
+          const val = ev.value as Record<string, unknown>;
+          const title = val.title as string;
+          if (title && sessionTitleHandler && currentThreadId) {
+            sessionTitleHandler(currentThreadId, title);
+          }
         }
         return heartbeat();
       }
@@ -337,6 +349,8 @@ function createRunParser() {
 
 /** 当前活跃请求的解析器（模板同一时刻只有一个活跃 SSE，cancel/新提交会先 abort 旧的） */
 let activeParser: ((raw: string) => RuntimeChunk) | null = null;
+/** 当前活跃请求的 threadId（即 sessionId，供 CUSTOM 事件回调使用） */
+let currentThreadId: string | null = null;
 
 /** 提供给 AgentScopeRuntimeWebUI options.api.responseParser（实际入参是每行 SSE data 字符串） */
 export function aguiResponseParser(raw: string): RuntimeChunk {
@@ -510,6 +524,7 @@ export function createAguiFetch(opts: AguiFetchOptions) {
     }
 
     const threadId = opts.getSessionId() || `thread-${Date.now()}`;
+    currentThreadId = threadId;
     const memoryMode = opts.getMemoryMode?.();
     const planMode = opts.getPlanMode?.();
     const permissionMode = opts.getPermissionMode?.();

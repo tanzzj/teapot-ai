@@ -142,6 +142,18 @@ body {
   color: rgba(26, 26, 29, 0.35) !important;
 }
 
+/* ── 底部操作栏前置（prefix）居中布局 ──
+   模板默认 prefix 左对齐（flex: 1），参考图二设计改为居中：
+   prefix 占据整行，内部 Flex 水平居中；actions 保持右侧 */
+.agentscope-runtime-webui-sender-content-bottom {
+  justify-content: center;
+}
+.agentscope-runtime-webui-sender-prefix {
+  width: auto !important;
+  flex: none !important;
+  overflow: visible !important;
+}
+
 /* ── 会话面板接管（leftHeader 插槽换成 SessionPanel） ──
    隐藏模板自带的 New Chat + 会话列表，左列撑满并透明融入毛玻璃容器 */
 [class*='chat-anywhere-sessions'] {

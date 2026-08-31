@@ -2,6 +2,7 @@ package com.teamer.teapot.ai.core.service;
 
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.core.agentscope.DangerousCommandGuardMiddleware;
+import com.teamer.teapot.ai.core.agentscope.SessionTitleGenMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigToolMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigTools;
 import com.teamer.teapot.ai.core.agentscope.MediaGenToolMiddleware;
@@ -15,6 +16,7 @@ import com.teamer.teapot.ai.core.config.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
+import com.teamer.teapot.ai.core.dao.ChatSessionMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
@@ -23,6 +25,7 @@ import com.teamer.teapot.ai.core.service.MCPConfigService;
 import com.teamer.teapot.ai.core.storage.OssClientManager;
 import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.GenerateOptions;
+import io.agentscope.core.model.Model;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionMode;
 import io.agentscope.core.skill.SkillFilter;
@@ -77,6 +80,7 @@ public class AgentAssembler {
 
     private final AgentMapper agentMapper;
     private final AgentSkillMapper agentSkillMapper;
+    private final ChatSessionMapper chatSessionMapper;
     private final ModelRegistry modelRegistry;
     private final AgentStateStore stateStore;
     private final MysqlSkillRepository skillRepositoryAgent;
@@ -99,6 +103,7 @@ public class AgentAssembler {
     private String dashscopeApiKey;
 
     public AgentAssembler(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
+                          ChatSessionMapper chatSessionMapper,
                           ModelRegistry modelRegistry, AgentStateStore stateStore,
                           @Qualifier("skillRepositoryAgent") MysqlSkillRepository skillRepositoryAgent,
                           TeapotAiProperties properties,
@@ -112,6 +117,7 @@ public class AgentAssembler {
                           OssConnection ossConnection) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
+        this.chatSessionMapper = chatSessionMapper;
         this.modelRegistry = modelRegistry;
         this.stateStore = stateStore;
         this.skillRepositoryAgent = skillRepositoryAgent;
@@ -175,10 +181,15 @@ public class AgentAssembler {
         if (trigger < 0 || keep < 0) {
             builder.disableCompaction();
         } else {
-            builder.compaction(CompactionConfig.builder()
+            AgentFeature.Compaction compactionCfg = feature.getCompaction();
+            CompactionConfig.Builder ccBuilder = CompactionConfig.builder()
                     .triggerMessages(trigger)
-                    .keepMessages(keep)
-                    .build());
+                    .keepMessages(keep);
+            if (compactionCfg != null && compactionCfg.getModelId() != null && !compactionCfg.getModelId().isBlank()) {
+                ccBuilder.model(modelRegistry.resolve(compactionCfg.getModelId()));
+                log.info("压缩摘要使用独立模型 modelId={}", compactionCfg.getModelId());
+            }
+            builder.compaction(ccBuilder.build());
         }
         applyRuntime(builder, rt);
         // 请求级计划模式覆盖（chat 界面 forwardedProps.planMode，SPEC §25）：
@@ -228,6 +239,18 @@ public class AgentAssembler {
         }
         for (ToolProvidedMiddleware middleware : toolMiddlewares) {
             builder.middleware(middleware);
+        }
+        // 会话标题异步生成（首条用户消息 → LLM 总结 → DB + CUSTOM 事件推前端）
+        AgentFeature.SessionTitle stCfg = feature.getSessionTitle();
+        boolean titleEnabled = stCfg == null || stCfg.getEnabled() == null || stCfg.getEnabled();
+        if (titleEnabled) {
+            Model titleModel = (stCfg != null && stCfg.getModelId() != null && !stCfg.getModelId().isBlank())
+                    ? modelRegistry.resolve(stCfg.getModelId())
+                    : modelRegistry.resolve(agentDO.getModelId(), thinking);
+            builder.middleware(new SessionTitleGenMiddleware(
+                    agentKey, agentDO.getName(), chatSessionMapper, titleModel));
+        } else {
+            log.info("会话标题生成已关闭 agentKey={}", agentKey);
         }
         // 消息级落盘（SPEC-checkpoint-persist §3.1）：阶段入口 checkpoint，与轮末落盘叠加；
         // Web（AgentRegistry）与 channel（ChannelHub）链路共用本装配点，同时生效
@@ -350,7 +373,18 @@ public class AgentAssembler {
                         mem.getFlushThrottleMinutes() == null ? 10 : mem.getFlushThrottleMinutes()));
                 default -> MemoryConfig.FlushTrigger.always();
             };
-            builder.memory(MemoryConfig.builder().flushTrigger(trigger).build());
+            MemoryConfig.Builder mcBuilder = MemoryConfig.builder().flushTrigger(trigger);
+            if (mem.getModelId() != null && !mem.getModelId().isBlank()) {
+                mcBuilder.model(modelRegistry.resolve(mem.getModelId()));
+                log.info("记忆摘要使用独立模型 modelId={}", mem.getModelId());
+            }
+            builder.memory(mcBuilder.build());
+        } else if (mem != null && mem.getModelId() != null && !mem.getModelId().isBlank()) {
+            // flushTrigger 未配置但 modelId 配置了，仍需构建 MemoryConfig 传入模型
+            builder.memory(MemoryConfig.builder()
+                    .model(modelRegistry.resolve(mem.getModelId()))
+                    .build());
+            log.info("记忆摘要使用独立模型 modelId={}", mem.getModelId());
         }
     }
 

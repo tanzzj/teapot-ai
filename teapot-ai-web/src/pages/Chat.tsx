@@ -15,12 +15,12 @@ import type { IAgentScopeRuntimeWebUIOptions, IAgentScopeRuntimeWebUIRef } from 
 import type { SessionItem } from '../chat/sessionBridge';
 import { agentList } from '../api/agent';
 import { modelCapabilities } from '../api/model';
-import { aguiResponseParser, createAguiFetch } from '../chat/aguiBridge';
+import { aguiResponseParser, createAguiFetch, setSessionTitleHandler } from '../chat/aguiBridge';
 import { AskUserCard } from '../chat/AskUserCard';
 import { registerSubmit } from '../chat/askUserStore';
 import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
 import MediaGenCard from '../chat/MediaGenCard';
-import { createSessionBridge, revealHiddenSessions } from '../chat/sessionBridge';
+import { createSessionBridge, revealHiddenSessions, updateSessionTitleInMirror } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
 import AgentConfigPanel from '../chat/AgentConfigPanel';
 import UserFooter from '../layout/UserFooter';
@@ -94,12 +94,26 @@ function ChatBridge(props: {
   slot: HTMLElement | null;
   onEnterChat: () => void;
   onBackHome: () => void;
+  agentKey: string;
   agentName: string;
 }) {
   const { getCurrentSessionId, createSession } = useChatAnywhereSessions();
   const { sessions, currentSessionId, setSessions } = useChatAnywhereSessionsState();
   const loading = useChatAnywhereInput((v) => ({ loading: v.loading })).loading;
   const setSessionTitle = useMobileUIStore((v) => v.setSessionTitle);
+
+  // 注册会话标题回调：后端异步生成标题后通过 CUSTOM 事件推送，更新 mirror + UI
+  useEffect(() => {
+    setSessionTitleHandler((sessionId: string, title: string) => {
+      const newList = updateSessionTitleInMirror(props.agentKey, sessionId, title);
+      if (newList) setSessions(newList);
+      // 同步手机顶栏标题
+      if (props.isPhone && !props.mobileHome) {
+        setSessionTitle(title);
+      }
+    });
+    return () => setSessionTitleHandler(null);
+  }, [props.agentKey, props.isPhone, props.mobileHome, setSessions, setSessionTitle]);
 
   // 同步会话标题到全局 store（手机聊天态顶栏显示）。
   // 必须在 Provider 内部做：Chat 组件在 Provider 外调 useChatAnywhereSessionsState
@@ -409,6 +423,7 @@ export default function Chat() {
         slot={historySlot}
         onEnterChat={() => setMobileView('chat')}
         onBackHome={() => setMobileView('home')}
+        agentKey={currentAgent}
         agentName={activeAgent?.name || 'Teapot AI'}
       />
     );

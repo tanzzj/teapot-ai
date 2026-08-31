@@ -5,8 +5,8 @@ import com.teamer.teapot.ai.core.service.AgentRuntimeHints;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import com.teamer.teapot.ai.rbac.service.JwtService;
 import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.spring.boot.agui.common.AguiRuntimeContextRequest;
-import io.agentscope.spring.boot.agui.common.AguiRuntimeContextResolver;
+import io.agentscope.core.agui.runtime.AguiRuntimeContextRequest;
+import io.agentscope.core.agui.runtime.AguiRuntimeContextResolver;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -32,7 +32,7 @@ public class TeapotRuntimeContextResolver implements AguiRuntimeContextResolver 
     }
 
     @Override
-    public RuntimeContext resolve(AguiRuntimeContextRequest request) {
+    public RuntimeContext resolve(AguiRuntimeContextRequest<?> request) {
         String userId = ContextUtil.currentUserId();
         if (userId == null) {
             // 异步线程无 ThreadLocal 上下文：从 Authorization 头补解析（/agui/** 已经过滤器验签，此处为取值）
@@ -61,7 +61,7 @@ public class TeapotRuntimeContextResolver implements AguiRuntimeContextResolver 
     }
 
     /** forwardedProps.permissionMode 解析：EXPLORE / BLOCK_DANGEROUS / BYPASS（大小写不敏感），缺失/非法返回 null */
-    private String parsePermissionProp(AguiRuntimeContextRequest request) {
+    private String parsePermissionProp(AguiRuntimeContextRequest<?> request) {
         if (request.getInput() == null) {
             return null;
         }
@@ -77,7 +77,7 @@ public class TeapotRuntimeContextResolver implements AguiRuntimeContextResolver 
     }
 
     /** forwardedProps 布尔开关通用解析：缺失/非法返回 null（跟随 Agent 配置） */
-    private Boolean parseBooleanProp(AguiRuntimeContextRequest request, String key) {
+    private Boolean parseBooleanProp(AguiRuntimeContextRequest<?> request, String key) {
         if (request.getInput() == null) {
             return null;
         }
@@ -97,7 +97,7 @@ public class TeapotRuntimeContextResolver implements AguiRuntimeContextResolver 
     }
 
     /** 从 Authorization: Bearer 头解析 uid；无效/缺失返回 null */
-    private String resolveFromAuthHeader(AguiRuntimeContextRequest request) {
+    private String resolveFromAuthHeader(AguiRuntimeContextRequest<?> request) {
         String authorization = request.firstHeader("Authorization");
         if (authorization == null) {
             authorization = request.firstHeader("authorization");

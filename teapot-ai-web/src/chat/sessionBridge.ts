@@ -416,3 +416,21 @@ export function createHistorySessionBridge(agentKey: string): IAgentScopeRuntime
     },
   };
 }
+
+/**
+ * 更新会话标题到 mirror 缓存并调后端持久化。
+ * 由 aguiBridge 的 session_title CUSTOM 事件回调调用，返回新列表引用供 setSessions 触发 UI 刷新。
+ */
+export function updateSessionTitleInMirror(agentKey: string, sessionId: string, title: string): SessionItem[] | null {
+  const key = currentUid() + '|' + agentKey;
+  const list = sessionIndexCache.get(key);
+  if (!list) return null;
+  const idx = list.findIndex((s) => s.id === sessionId);
+  if (idx < 0) return null;
+  // 更新 mirror
+  list[idx] = { ...list[idx], name: title, updatedAt: new Date().toISOString() };
+  sessionIndexCache.set(key, [...list]);
+  // 后端持久化（失败不阻塞）
+  sessionRename(sessionId, title.slice(0, MAX_TITLE_LEN)).catch(() => undefined);
+  return [...list];
+}

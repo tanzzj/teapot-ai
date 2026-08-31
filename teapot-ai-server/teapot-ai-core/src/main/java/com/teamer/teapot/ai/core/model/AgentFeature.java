@@ -30,6 +30,10 @@ public class AgentFeature {
     public static final String NS_MEMORY = "memory";
     /** MCP Server 配置：Agent 可引用系统记录（record）或内联完整配置（transport + ...），不依赖系统配置 */
     public static final String NS_MCP = "mcp";
+    /** 异步会话标题生成：开关 + 专用模型（缺省启用，跟随 Agent 主模型） */
+    public static final String NS_SESSION_TITLE = "sessionTitle";
+    /** 压缩摘要模型覆盖（trigger/keep 仍在 AgentDO 列，本命名空间仅 modelId） */
+    public static final String NS_COMPACTION = "compaction";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
@@ -196,6 +200,46 @@ public class AgentFeature {
             namespaces.remove(NS_MEMORY);
         } else {
             namespaces.put(NS_MEMORY, MAPPER.convertValue(memory, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
+    /** sessionTitle 命名空间；未配置返回 null（按启用处理） */
+    @SuppressWarnings("unchecked")
+    public SessionTitle getSessionTitle() {
+        Object raw = namespaces.get(NS_SESSION_TITLE);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, SessionTitle.class);
+    }
+
+    /** 写入/替换 sessionTitle 命名空间 */
+    public void setSessionTitle(SessionTitle sessionTitle) {
+        if (sessionTitle == null) {
+            namespaces.remove(NS_SESSION_TITLE);
+        } else {
+            namespaces.put(NS_SESSION_TITLE, MAPPER.convertValue(sessionTitle, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
+    /** compaction 命名空间；未配置返回 null */
+    @SuppressWarnings("unchecked")
+    public Compaction getCompaction() {
+        Object raw = namespaces.get(NS_COMPACTION);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, Compaction.class);
+    }
+
+    /** 写入/替换 compaction 命名空间 */
+    public void setCompaction(Compaction compaction) {
+        if (compaction == null) {
+            namespaces.remove(NS_COMPACTION);
+        } else {
+            namespaces.put(NS_COMPACTION, MAPPER.convertValue(compaction, new TypeReference<Map<String, Object>>() {
             }));
         }
     }
@@ -409,6 +453,24 @@ public class AgentFeature {
         private String flushTrigger;
         /** flushTrigger=throttled 时的最小间隔分钟数（1–1440） */
         private Integer flushThrottleMinutes;
+        /** 记忆操作（flush + consolidation）专用模型，留空跟随 Agent 主模型 */
+        private String modelId;
+    }
+
+    /** sessionTitle 命名空间结构：异步会话标题生成（开关 + 专用模型） */
+    @Data
+    public static class SessionTitle {
+        /** false 时不挂载 SessionTitleGenMiddleware；缺省（无命名空间）启用 */
+        private Boolean enabled;
+        /** 标题生成专用模型，留空跟随 Agent 主模型 */
+        private String modelId;
+    }
+
+    /** compaction 命名空间结构：压缩摘要模型覆盖（trigger/keep 仍在 AgentDO 列） */
+    @Data
+    public static class Compaction {
+        /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
+        private String modelId;
     }
 
     /** mcp 命名空间结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置） */
