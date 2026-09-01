@@ -314,10 +314,10 @@ export default function Chat() {
   const configOverridden = memoryOverride !== '' || planModeOverride !== '' || permissionOverride !== '';
   const openConfig = useCallback(() => setConfigOpen(true), []);
   const closeConfig = useCallback(() => setConfigOpen(false), []);
-  /** 附件上传：隐藏 file input 的 ref */
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  /** 触发模板附件上传（点击模板隐藏的 file input） */
   const triggerAttachment = useCallback(() => {
-    fileInputRef.current?.click();
+    const input = document.querySelector<HTMLInputElement>('.agentscope-runtime-webui-sender input[type="file"]');
+    if (input) input.click();
   }, []);
 
   // 移动端监听发送框 textarea 焦点：focus 后浮出放大按钮，失焦收起（放大态常驻）
@@ -365,49 +365,6 @@ export default function Chat() {
   );
   const imageCapable = mediaCaps.includes('image');
   const videoCapable = mediaCaps.includes('video');
-
-  /** 处理文件选择：验证 + 上传 */
-  const onFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-    // 验证
-    for (const file of files) {
-      if (file.type.startsWith('image/')) {
-        if (!imageCapable || !ACCEPTED_IMAGE_MIME.includes(file.type)) {
-          message.error('仅支持 JPEG/PNG/WebP/GIF 图片');
-          return;
-        }
-        if (file.size > MAX_IMAGE_BYTES) {
-          message.error('单张图片不超过 5MB');
-          return;
-        }
-      } else if (file.type.startsWith('video/')) {
-        if (!videoCapable || !ACCEPTED_VIDEO_MIME.includes(file.type)) {
-          message.error('仅支持 MP4/WebM/MOV/MKV 视频');
-          return;
-        }
-        if (file.size > MAX_VIDEO_BYTES) {
-          message.error('单个视频不超过 30MB');
-          return;
-        }
-      } else {
-        message.error('仅支持图片或视频');
-        return;
-      }
-    }
-    // 上传（调用与模板相同的 customRequest）
-    const customRequest = imageCustomRequestFor(currentAgent);
-    for (const file of files) {
-      await customRequest({
-        file,
-        onProgress: () => {},
-        onSuccess: () => {},
-        onError: (err: Error | string) => message.error(`上传失败：${typeof err === 'string' ? err : err.message || err}`),
-      } as never);
-    }
-    // 清空 input 以便重复选择同一文件
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [currentAgent, imageCapable, videoCapable]);
 
   const options = useMemo<IAgentScopeRuntimeWebUIOptions | null>(() => {
     if (!currentAgent) return null;
@@ -505,7 +462,50 @@ export default function Chat() {
         maxLength: 10000,
         // 手机端单行输入框（SPEC：chat 模式收件到一行）
         autoSize: isPhone ? { minRows: 1, maxRows: 1 } : undefined,
-        // 附件入口已收纳进「+」弹层，模板不渲染默认按钮
+        // 多模态 gating：模型能力位含 image/video 时开启附件入口（SPEC §19），accept 按能力位裁剪。
+        // 该配置同时驱动模板的粘贴/拖拽附件链路（useAttachments → onPasteFile/onDropFile），
+        // 默认按钮由下方 CSS 隐藏，入口收纳进「+」弹层（triggerAttachment 点击其隐藏 input）
+        attachments: imageCapable || videoCapable
+          ? {
+              accept: [
+                ...(imageCapable ? ACCEPTED_IMAGE_MIME : []),
+                ...(videoCapable ? ACCEPTED_VIDEO_MIME : []),
+              ].join(','),
+              maxCount: MAX_IMAGES_PER_MESSAGE,
+              beforeUpload: (file: File, fileList: File[]) => {
+                if (file.type.startsWith('image/')) {
+                  if (!imageCapable || !ACCEPTED_IMAGE_MIME.includes(file.type)) {
+                    message.error('仅支持 JPEG/PNG/WebP/GIF 图片');
+                    return Upload.LIST_IGNORE;
+                  }
+                  if (file.size > MAX_IMAGE_BYTES) {
+                    message.error('单张图片不超过 5MB');
+                    return Upload.LIST_IGNORE;
+                  }
+                  return true;
+                }
+                if (file.type.startsWith('video/')) {
+                  if (!videoCapable || !ACCEPTED_VIDEO_MIME.includes(file.type)) {
+                    message.error('仅支持 MP4/WebM/MOV/MKV 视频');
+                    return Upload.LIST_IGNORE;
+                  }
+                  if (file.size > MAX_VIDEO_BYTES) {
+                    message.error('单个视频不超过 30MB');
+                    return Upload.LIST_IGNORE;
+                  }
+                  if (fileList.filter((f) => f.type.startsWith('video/')).length > 1) {
+                    message.error('单条消息最多发送 1 个视频');
+                    return Upload.LIST_IGNORE;
+                  }
+                  return true;
+                }
+                message.error('仅支持图片或视频');
+                return Upload.LIST_IGNORE;
+              },
+              // 按当前 Agent 探测/上传载体（SPEC §22.1：feature.storage 决定 base64/oss）
+              customRequest: imageCustomRequestFor(currentAgent) as never,
+            }
+          : undefined,
         // 懒创建会话：提交前无会话则先创建（含等待 loader 冲刷），规避模板内部竞态
         beforeSubmit: () =>
           newChatCoordinator.ensureSessionBeforeSubmit().then(() => true),
@@ -624,18 +624,8 @@ export default function Chat() {
 
   return (
     <>
-      {/* 隐藏文件输入：由「+」弹层的附件行触发 */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        style={{ display: 'none' }}
-        accept={[
-          ...(imageCapable ? ACCEPTED_IMAGE_MIME : []),
-          ...(videoCapable ? ACCEPTED_VIDEO_MIME : []),
-        ].join(',')}
-        multiple={imageCapable && !videoCapable}
-        onChange={onFileSelected}
-      />
+      {/* 隐藏模板默认附件按钮（已收纳进「+」弹层） */}
+      <style>{`.agentscope-runtime-webui-sender .ant-upload { display: none !important; }`}</style>
       {/* 附件按钮已收纳进「+」弹层，模板不渲染默认附件按钮 */}
       <div
         className={isPhone && senderExpanded ? 'teapot-chat-expanded' : undefined}
