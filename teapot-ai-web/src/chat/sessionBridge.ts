@@ -72,11 +72,14 @@ try {
 /**
  * 揭示隐藏的懒创建会话（回复完成时调用），
  * 返回其所属 agent 的全量列表供 setSessions 刷新；无隐藏会话时返回 null。
+ * keepId 用于保留仍在当前的懒会话（尚未切走、可能还没发消息），其余全部揭示——
+ * 切走后首轮 run 在后台继续（断开不中断），入口不能一直藏起来。
  */
-export function revealHiddenSessions(): SessionItem[] | null {
+export function revealHiddenSessions(keepId?: string): SessionItem[] | null {
   if (hiddenSessionIds.size === 0) return null;
-  const revealedIds = new Set(hiddenSessionIds);
-  hiddenSessionIds.clear();
+  const revealedIds = new Set([...hiddenSessionIds].filter((id) => id !== keepId));
+  if (revealedIds.size === 0) return null;
+  revealedIds.forEach((id) => hiddenSessionIds.delete(id));
   for (const list of sessionIndexCache.values()) {
     if (list.some((s) => revealedIds.has(s.id as string))) {
       return [...list];
