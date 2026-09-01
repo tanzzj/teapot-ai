@@ -74,6 +74,46 @@ body {
 
 /* ── chat 模板主题微调（AgentScopeRuntimeWebUI） ── */
 
+/* ── 音频播放器边界修复（@agentscope-ai/design 两处硬编码缺陷） ──
+   1) MediaPlayerController 硬编码 height:40px + overflow:hidden，内容被裁剪；
+   2) DefaultCards.Audios 外层 antd Space 默认 display:inline-flex，不撑满父容器宽度，
+      播放器在 flex 布局中被压缩。
+   统一覆盖：控制器修正限定在音频容器内，不影响共用该控制器的视频播放器。 */
+.teapot-audio-card {
+  background-color: var(--teapot-color-bg-base, #fff);
+  border: 1px solid var(--teapot-color-border-secondary, #f0f0f0);
+  border-radius: 8px;
+  padding: 4px 8px 4px 4px;
+  width: 100%;
+  box-sizing: border-box;
+}
+/* 音频容器/控制器包装撑满宽度（覆盖 MediaGenCard 直渲与 DefaultCards.Audios 两条链路） */
+[class*='-audio-container'],
+[class*='-audio-controller-wrapper'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+/* 解除控制器固定高度与裁剪 */
+[class*='-audio-container'] [class*='-media-player-controller'] {
+  height: auto !important;
+  min-height: 40px;
+  overflow: visible !important;
+  width: 100%;
+  box-sizing: border-box;
+}
+/* DefaultCards.Audios 链路：气泡外框撑满；antd Space（inline-flex）强制纵向撑满父宽 */
+[class*='-bubble-audio'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+[class*='-space-vertical']:has([class*='-bubble-audio']) {
+  display: flex;
+  width: 100%;
+}
+[class*='-space-vertical']:has([class*='-bubble-audio']) [class*='-space-item'] {
+  width: 100%;
+}
+
 /* Welcome 提示词的 sparkle 图标是模板硬编码的紫色图片，压成黑色系与 Carbon 主题一致 */
 .agentscope-runtime-webui-welcome-prompts-prompt-icon {
   filter: grayscale(1) brightness(0.25);

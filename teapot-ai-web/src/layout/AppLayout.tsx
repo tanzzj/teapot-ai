@@ -178,7 +178,7 @@ export default function AppLayout() {
                 <span style={{ fontWeight: 700, fontSize: 16, color: token.colorText }}>
                   Teapot AI
                 </span>
-                <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0820a</span>
+                <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0901d</span>
               </div>
 
               {/* 分段标签导航（Barley Chat/Agent 切换样式） */}

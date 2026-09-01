@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { DefaultCards, ImageGenerator } from '@agentscope-ai/chat';
+import { Audio } from '@agentscope-ai/design';
 
 /**
  * 媒体生成自定义工具渲染（SPEC-media-gen 修订）：
@@ -71,6 +72,10 @@ function parseText(output?: string): string {
     .join('\n');
 }
 
+// 音频播放器边界修复样式统一收敛在 index.css（.teapot-audio-card / -audio-container /
+// -media-player-controller 段）：库组件 MediaPlayerController 硬编码 height:40px + overflow:hidden，
+// 此处不再运行时注入，避免与静态样式重复。
+
 const MediaGenCard = React.memo(function ({ data }: { data: RuntimeMessageLike }) {
   const output = data.content?.[1]?.data?.output;
   const loading = data.status === 'in_progress' && !output;
@@ -92,8 +97,12 @@ const MediaGenCard = React.memo(function ({ data }: { data: RuntimeMessageLike }
   const videos = medias.filter((m) => m.type === 'video');
   const audios = medias.filter((m) => m.type === 'audio');
 
+  // 根容器自身也是气泡 flex 容器（align-items:flex-start）的 item，不撑宽就会收缩到内容宽度，
+  // 音频播放器因此变成窄条、进度条被挤成 0 宽；此处显式撑满（子项仍由 alignItems 保持左对齐不拉伸）
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', width: '100%' }}
+    >
       {images.map((m, i) => (
         <ImageGenerator
           key={`img-${i}`}
@@ -105,7 +114,15 @@ const MediaGenCard = React.memo(function ({ data }: { data: RuntimeMessageLike }
         />
       ))}
       {videos.length > 0 && <DefaultCards.Videos data={videos.map((m) => ({ src: m.url }))} />}
-      {audios.length > 0 && <DefaultCards.Audios data={audios.map((m) => ({ src: m.url }))} />}
+      {audios.length > 0 && (
+        <div style={{ alignSelf: 'stretch', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {audios.map((m, i) => (
+            <div key={`aud-${i}`} className="teapot-audio-card">
+              <Audio src={m.url} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 });
