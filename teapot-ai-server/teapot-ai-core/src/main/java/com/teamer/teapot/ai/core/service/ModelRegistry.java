@@ -11,8 +11,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 模型注册表（SPEC §6.4 修订）：按 provider:model 解析 Model 实例并缓存。
@@ -63,6 +67,30 @@ public class ModelRegistry {
     public void evict(String modelId) {
         cache.remove(modelId);
         cache.remove(modelId + THINK_SUFFIX);
+    }
+
+    /**
+     * 模型可输入的媒体模态（t_model_entry.capabilities，SPEC §19）：小写去重集合，
+     * 入口未登记或无能力位返回空集（纯文本）。供媒体模态守卫判定哪些媒体块能原样发给模型
+     * （SPEC-media-gen §4.4）。
+     */
+    public Set<String> capabilities(String modelId) {
+        if (modelId == null || modelId.isBlank()) {
+            return Set.of();
+        }
+        int idx = modelId.indexOf(':');
+        if (idx <= 0 || idx == modelId.length() - 1) {
+            return Set.of();
+        }
+        ModelEntryDO entry = modelEntryMapper.selectByModelId(
+                modelId.substring(0, idx), modelId.substring(idx + 1));
+        if (entry == null || entry.getCapabilities() == null || entry.getCapabilities().isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(entry.getCapabilities().split(","))
+                .map(s -> s.trim().toLowerCase(Locale.ROOT))
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private Model create(String modelId, boolean thinking) {

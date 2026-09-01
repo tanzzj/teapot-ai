@@ -6,6 +6,7 @@ import com.teamer.teapot.ai.core.agentscope.SessionTitleGenMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigToolMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigTools;
 import com.teamer.teapot.ai.core.agentscope.MediaGenToolMiddleware;
+import com.teamer.teapot.ai.core.agentscope.MediaModalGuardMiddleware;
 import com.teamer.teapot.ai.core.agentscope.OssFileTools;
 import com.teamer.teapot.ai.core.agentscope.OssToolMiddleware;
 import com.teamer.teapot.ai.core.agentscope.PerMessageCheckpointMiddleware;
@@ -64,6 +65,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * HarnessAgent 装配器（SPEC §24.2/§24.4）：
@@ -240,6 +242,12 @@ public class AgentAssembler {
         for (ToolProvidedMiddleware middleware : toolMiddlewares) {
             builder.middleware(middleware);
         }
+        // 媒体模态守卫（SPEC-media-gen §4.4）：模型能力位未声明的媒体块（如 qwen3.8-max 的 audio）
+        // 在请求视图里降级为文本引用，避免产物块一旦进入历史就被每轮重放、被平台 400 钉死整个会话；
+        // 不依赖生成开关，任何来源的媒体块（工具产物/用户上传）都走同一守卫
+        Set<String> modalities = modelRegistry.capabilities(agentDO.getModelId());
+        builder.middleware(new MediaModalGuardMiddleware(modalities));
+        log.info("媒体模态守卫已挂载 agentKey={} 模型可输入模态={}", agentKey, modalities);
         // 会话标题异步生成（首条用户消息 → LLM 总结 → DB + CUSTOM 事件推前端）
         AgentFeature.SessionTitle stCfg = feature.getSessionTitle();
         boolean titleEnabled = stCfg == null || stCfg.getEnabled() == null || stCfg.getEnabled();

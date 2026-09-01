@@ -76,6 +76,14 @@ QwenPaw creator 插件（`D:\teamer\QwenPaw\plugins\apps\qwenpaw-creator\backend
 - [AgentConfigPanel.tsx](file:///d:/teamer/teapot-ai/teapot-ai-web/src/chat/AgentConfigPanel.tsx)：只读展示加一个「生图/生视频」标签；`types.ts` 的 `Runtime` 类型加 `enableMediaGen?: boolean`。
 - 产物呈现（修订）：`DashScopeMultiModalTool` 工具结果仅含 ImageBlock/VideoBlock（无文本 URL），模型拿不到链接、默认 ToolCall 面板也只当代码展示——原「Markdown 直链」方案不成立。改为 spark design 官方扩展点：[MediaGenCard](file:///d:/teamer/teapot-ai/teapot-ai-web/src/chat/MediaGenCard.tsx) 经 `customToolRenderConfig` 挂载到 5 个 `dashscope_*` 工具，解析 `tool_call_output.data.output` 中的媒体块 JSON，用 `ImageGenerator`（生成中骨架屏 + 出图预览）/ `DefaultCards.Videos` / `DefaultCards.Audios` 渲染；后端 [SessionMessageConverter.toolResultText](file:///d:/teamer/teapot-ai/teapot-ai-server/teapot-ai-core/src/main/java/com/teamer/teapot/ai/core/service/SessionMessageConverter.java) 同步改为与实时流（`AguiStreamContext.serialize`）同形态序列化，历史回放可渲染。
 
+### 4.4 媒体模态守卫（修订：音频块把会话钉死故障）
+
+- 现象（session `256f2a4b-53b7-4006-a49c-f401035622b3`，agent `digit-tim` / `dashscope:qwen3.8-max`）：语音合成那一轮的音频卡片正常呈现，但此后每轮对话都在推理入口报 `<400> InternalError.Algo.InvalidParameter: An incorrect modal \`audio\` was entered…`，会话永久不可用。
+- 成因：`dashscope_text_to_audio` 以 `AudioBlock` 作为工具结果并随会话历史持久化；[DashScopeChatFormatter.doFormat](file:///d:/teamer/agentscope-java/agentscope-extensions/agentscope-extensions-model/agentscope-extensions-model-dashscope/src/main/java/io/agentscope/extensions/model/dashscope/formatter/DashScopeChatFormatter.java) 只看「消息含不含媒体块」就输出多模态 content part（`{"audio": url}`），不看模型能力位——而 `qwen3.8-max` 的 `capabilities=image,video`，不接受音频输入（`ModelRegistry` 的 `audio` 能力位仅用于前端 gating）。首轮看似成功，是因为音频块当轮才产生、尚未进入历史；音频能被听到则来自前端 `MediaGenCard` 直接渲染工具结果，该轮的收尾 LLM 调用同样已失败。
+- 落地：新增 [MediaModalGuardMiddleware](file:///d:/teamer/teapot-ai/teapot-ai-server/teapot-ai-core/src/main/java/com/teamer/teapot/ai/core/agentscope/MediaModalGuardMiddleware.java)，在 `onModelCall` 阶段按模型能力位（`ModelRegistry.capabilities(modelId)`）改写**请求视图**：能力位未声明的 Image/Audio/Video 块（含 `ToolResultBlock.output` 内嵌块，保留 tool_call id/name/state）降级为与框架 `AbstractBaseFormatter#convertToolResultToString` 同措辞的文本引用。持久化历史不动，前端产物卡片与历史回放照常渲染，被污染的旧会话可自愈。
+- 装配：[AgentAssembler](file:///d:/teamer/teapot-ai/teapot-ai-server/teapot-ai-core/src/main/java/com/teamer/teapot/ai/core/service/AgentAssembler.java) 无条件挂载（不依赖 `enableMediaGen`），用户上传的媒体块同样受护；纯文本模型（能力位为空）会降级全部媒体块，等价于框架对纯文本模型的既有行为。
+- 边界：`DataBlock` 模态语义不明，不降级；需要真正「听懂」音频的 Agent 仍须换具备音频输入能力的 omni 模型（能力位补 `audio`）。
+
 ## 5. 测试计划与边界假设
 
 ### 测试计划
@@ -84,10 +92,11 @@ QwenPaw creator 插件（`D:\teamer\QwenPaw\plugins\apps\qwenpaw-creator\backend
 2. 缺省行为：`DASHSCOPE_API_KEY` 为空时开关打开也不挂载，日志可见提示，不影响其他中间件。
 3. 串联验证：生图（文生图 → `upload_file` 转存 → 会话内可见图片）；图生视频（以生成图为参考 → 出片 → 转存或直接临时链接可见）。
 4. 前端回归：开关保存回显、`AgentConfigPanel` 标签展示、未开能力 Agent 无工具泄漏。
+5. 模态守卫：能力位不含 `audio` 的 Agent，历史含音频块时后续轮次能正常回复，日志可见「媒体模态已降级」；音频产物卡片仍可在历史回放中渲染。
 
 ### 边界假设
 
 - 视频生成为分钟级同步阻塞（`VideoSynthesis.call` 阻塞至完成），期间该轮工具调用挂起；一期接受，不做异步任务表与进度推送。
 - 一期不做多 provider：不复制 QwenPaw 的能力矩阵与协议分层；默认模型以 `DashScopeMultiModalTool` 内置为准，模型参数可由对话指定。
 - 不做强制转存：转存依赖 prompt 引导，失败时回退临时直链，不引入重试管线。
-- 产物时效与内容安全以百炼平台侧策略为准；`text_to_audio` / `audio_to_text` 顺带可用，但不在本规格验收范围。
+- 产物时效与内容安全以百炼平台侧策略为准；`text_to_audio` / `audio_to_text` 顺带可用，但不在本规格验收范围（实际已暴露给模型，其模态风险由 §4.4 守卫兜底）。
