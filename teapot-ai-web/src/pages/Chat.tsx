@@ -133,7 +133,10 @@ function ChatBridge(props: {
   // 上报当前会话 id，供 beforeSubmit 判断是否需要懒创建
   useEffect(() => {
     newChatCoordinator.reportSession(currentSessionId);
-  }, [currentSessionId]);
+    // 切走后揭示其余懒创建会话：首轮 run 断开不中断、后台继续，入口不能再藏着
+    const revealed = revealHiddenSessions(currentSessionId);
+    if (revealed) setSessions(revealed);
+  }, [currentSessionId, setSessions]);
 
   // 注册懒创建能力：提交前无会话时先建会话，再等模板 loader 冲刷完成
   useEffect(() => {
