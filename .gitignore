@@ -39,6 +39,7 @@ Thumbs.db
 # ===== 本地工具链与临时文件 =====
 tools/
 target_spec_api.txt
+.qoder/
 
 # ===== 参考仓库（只读参考，不入库） =====
 reference/
