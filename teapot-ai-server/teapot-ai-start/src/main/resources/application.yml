@@ -128,6 +128,11 @@ agentscope:                                      # AG-UI starter（SPEC §6.3）
     emit-token-usage: true
     enable-reasoning: true
     server-side-memory: false                    # 会话历史由 MysqlAgentStateStore 持久化
+    # 断开不中断（默认 true 会把「客户端断开」当作取消）：前端切换会话会关闭 SSE 连接，
+    # 若随之中断 run，当前轮（含 thinking）来不及落盘，切回会话即整轮丢失。
+    # 置 false 后 run 在后台跑完并落盘，切回/刷新即可恢复全部内容；
+    # 用户主动取消同理转为「后台继续」，随后新消息遇活跃 run 走 aguiBridge 合约退避重试。
+    interrupt-on-disconnect: false
 
 logging:
   level:
