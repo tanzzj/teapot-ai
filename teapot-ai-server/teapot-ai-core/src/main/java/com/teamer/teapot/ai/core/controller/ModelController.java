@@ -1,6 +1,7 @@
 package com.teamer.teapot.ai.core.controller;
 
 import com.teamer.teapot.ai.common.model.Result;
+import com.teamer.teapot.ai.core.agentscope.MediaModelCatalog;
 import com.teamer.teapot.ai.core.model.ModelEntryDO;
 import com.teamer.teapot.ai.core.service.ModelService;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -12,7 +13,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 模型入口（SPEC §6.4 修订：界面配置化）。
@@ -47,6 +50,27 @@ public class ModelController {
             return Result.ok(List.of());
         }
         return Result.ok(modelService.listDashScopeVendorModels());
+    }
+
+    /**
+     * 生成模型目录（SPEC-media-gen §4.8，任意登录用户可读）：
+     * 按能力位给出可选生成模型与默认值，供 Agent 配置页的生图/生视频模型下拉。
+     * 不从 vendor-models 派生：媒体模型不在那个清单里，且分散在四个 endpoint（见 MediaModelCatalog 注释）。
+     */
+    @GetMapping("/media-models")
+    public Result<List<Map<String, Object>>> mediaModels() {
+        List<Map<String, Object>> catalog = MediaModelCatalog.entries().stream()
+                .map(entry -> {
+                    Map<String, Object> item = new LinkedHashMap<String, Object>();
+                    item.put("field", entry.field());
+                    item.put("label", entry.label());
+                    item.put("tool", entry.tool());
+                    item.put("defaultModel", entry.defaultModel());
+                    item.put("models", entry.models());
+                    return item;
+                })
+                .toList();
+        return Result.ok(catalog);
     }
 
     /** 全部模型入口（admin，含停用） */

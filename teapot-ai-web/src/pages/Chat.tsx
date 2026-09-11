@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { Empty, message, Popover, Switch, Upload } from 'antd';
+import { Empty, message, Popover, Switch, Tooltip, Upload } from 'antd';
 import { IconButton, Select } from '@agentscope-ai/design';
-import { SparkAddFileLine, SparkEnlargeLine, SparkGuardrailLine, SparkLeftArrowLine, SparkMemoryLine, SparkPlusLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
+import { SparkAddFileLine, SparkEnlargeLine, SparkGuardrailLine, SparkLeftArrowLine, SparkMemoryLine, SparkOperateRightLine, SparkPlusLine, SparkShrinkLine, SparkTextBoxLine } from '@agentscope-ai/icons';
 import {
   AgentScopeRuntimeWebUI,
   useChatAnywhereInput,
@@ -74,6 +74,9 @@ const PERMISSION_OPTIONS: readonly { value: string; label: string }[] = [
   { value: 'BYPASS', label: '全部放行' },
 ];
 
+/** 左栏收起态跨会话记忆（宽屏/平板双栏态适用，手机端无左栏不参与） */
+const LS_LEFT_COLLAPSED = 'teapot-chat-left-collapsed';
+
 /**
  * 桥接组件：渲染在 ChatAnywhere Provider 内部（rightHeader 插槽，桌面/移动均常驻挂载）。
  * 1) 把模板当前的 sessionId getter 暴露给外层 fetch 闭包（作 AG-UI threadId）；
@@ -96,6 +99,7 @@ function ChatBridge(props: {
   onBackHome: () => void;
   agentKey: string;
   agentName: string;
+  onCollapse?: () => void;
 }) {
   const { getCurrentSessionId, createSession } = useChatAnywhereSessions();
   const { sessions, currentSessionId, setSessions } = useChatAnywhereSessionsState();
@@ -175,7 +179,7 @@ function ChatBridge(props: {
   // 由外层自渲染的左栏槽位补位，这里 Portal 填充（保持会话 Context 可达）
   if (props.isTablet && props.tabletSlot) {
     return createPortal(
-      <SessionPanel title={props.agentName} footer={<UserFooter />} />,
+      <SessionPanel title={props.agentName} footer={<UserFooter />} onCollapse={props.onCollapse} />,
       props.tabletSlot,
     );
   }
@@ -225,6 +229,15 @@ export default function Chat() {
   const [permissionOverride, setPermissionOverride] = useState('');
   /** 「+」配置弹层开关：记忆 / 计划 / 权限三项请求级配置收纳 */
   const [configOpen, setConfigOpen] = useState(false);
+  /** 左栏会话列表收起态：宽屏收起模板内置左栏，平板收起自渲染左栏槽位，收起后由左缘竖条还原 */
+  const [leftCollapsed, setLeftCollapsed] = useState(
+    () => localStorage.getItem(LS_LEFT_COLLAPSED) === '1',
+  );
+  const toggleLeft = useCallback(() => setLeftCollapsed((v) => !v), []);
+
+  useEffect(() => {
+    localStorage.setItem(LS_LEFT_COLLAPSED, leftCollapsed ? '1' : '0');
+  }, [leftCollapsed]);
 
   /** 模板内部 sessionId 的 getter（由 ChatBridge 注入） */
   const sessionGetterRef = useRef<(() => string | undefined) | null>(null);
@@ -385,6 +398,7 @@ export default function Chat() {
         onBackHome={() => setMobileView('home')}
         agentKey={currentAgent}
         agentName={activeAgent?.name || 'Teapot AI'}
+        onCollapse={toggleLeft}
       />
     );
 
@@ -412,8 +426,12 @@ export default function Chat() {
         todo_write: TodoWriteCard,
         ask_user_question: AskUserCard,
         // 媒体生成卡片（SPEC-media-gen 修订）：dashscope_* 工具结果中的 image/video/audio 块
-        // 经 ImageGenerator / DefaultCards.Videos / Audios 可视化，替代默认折叠面板
+        // 经 ImageGenerator / DefaultCards.Videos / Audios 可视化，替代默认折叠面板。
+        // 清单须覆盖全部「产出媒体块」的 DashScope 工具（fork DashScopeMultiModalTool）：
+        // 漏名会静默落回默认 ToolCall 面板，产物只剩一串 JSON 文本（图生图曾如此）。
+        // 反向的 *_to_text 三个工具（image/video/audio_to_text）产出纯文本，故意不挂载。
         dashscope_text_to_image: MediaGenCard,
+        dashscope_image_to_image: MediaGenCard,
         dashscope_text_to_video: MediaGenCard,
         dashscope_image_to_video: MediaGenCard,
         dashscope_first_and_last_frame_image_to_video: MediaGenCard,
@@ -432,7 +450,13 @@ export default function Chat() {
         // Carbon 黑色主题（与全局 carbonTheme 一致）
         colorPrimary: '#1a1a1d',
         // leftHeader 插槽接管为自定义会话面板（可点击切换 + 时间展示），底部挂用户信息 + 系统配置入口
-        leftHeader: <SessionPanel title={activeAgent?.name || 'Teapot AI'} footer={<UserFooter />} />,
+        leftHeader: (
+          <SessionPanel
+            title={activeAgent?.name || 'Teapot AI'}
+            footer={<UserFooter />}
+            onCollapse={isPhone ? undefined : toggleLeft}
+          />
+        ),
         rightHeader,
       },
       welcome: {
@@ -597,7 +621,7 @@ export default function Chat() {
         ),
       },
     };
-  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable, memoryOverride, onMemoryOverride, planModeOverride, onPlanModeOverride, permissionOverride, onPermissionOverride, configOpen, configOverridden, openConfig, triggerAttachment]);
+  }, [currentAgent, activeAgent, agents, isPhone, isTablet, historySlot, homeSlot, tabletSlot, mobileView, registerSessionGetter, setSearchParams, imageCapable, videoCapable, memoryOverride, onMemoryOverride, planModeOverride, onPlanModeOverride, permissionOverride, onPermissionOverride, configOpen, configOverridden, openConfig, triggerAttachment, leftCollapsed, toggleLeft]);
 
   if (loadingAgents) {
     return null;
@@ -627,13 +651,51 @@ export default function Chat() {
 
   return (
     <>
-      {/* 隐藏模板默认附件按钮（已收纳进「+」弹层） */}
-      <style>{`.agentscope-runtime-webui-sender .ant-upload { display: none !important; }`}</style>
+      {/* 隐藏模板默认附件按钮（已收纳进「+」弹层）；收起态把模板内置左栏宽度归零，
+          双类选择器比模板单类（layout-left: width 240px）高一级，不受 antd-style 注入顺序影响；
+          min-width:0 是必需的——左栏是 flex 项，默认 min-width:auto 会被内容撑住不缩到 0（模板自带 transition 所以会平滑） */}
+      <style>{`
+        .agentscope-runtime-webui-sender .ant-upload { display: none !important; }
+        .teapot-chat-noleft .agentscope-runtime-webui-chat-anywhere-layout-left {
+          width: 0;
+          min-width: 0;
+          overflow: hidden;
+        }
+      `}</style>
       {/* 附件按钮已收纳进「+」弹层，模板不渲染默认附件按钮 */}
       <div
-        className={isPhone && senderExpanded ? 'teapot-chat-expanded' : undefined}
+        className={[
+          isPhone && senderExpanded ? 'teapot-chat-expanded' : '',
+          leftCollapsed && !isPhone && !isTablet ? 'teapot-chat-noleft' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')
+          || undefined}
         style={{ height: '100%', position: 'relative', display: 'flex', minWidth: 0 }}
       >
+      {/* 收起后的左缘竖条：唯一还原入口（宽屏/平板双栏态共用） */}
+      {leftCollapsed && !isPhone && (
+        <div
+          style={{
+            width: 34,
+            flexShrink: 0,
+            height: '100%',
+            borderRight: '1px solid rgba(0, 0, 0, 0.05)',
+            display: 'flex',
+            justifyContent: 'center',
+            paddingTop: 12,
+          }}
+        >
+          <Tooltip title="展开会话列表">
+            <IconButton
+              bordered={false}
+              aria-label="展开会话列表"
+              icon={<SparkOperateRightLine size={16} />}
+              onClick={toggleLeft}
+            />
+          </Tooltip>
+        </div>
+      )}
       {showHome && (
         <div
           ref={(el) => setHomeSlot(el)}
@@ -642,7 +704,7 @@ export default function Chat() {
       )}
       {/* 平板 / 手机桌面模式（768–991）：模板窄屏无左栏，自渲染左栏槽位补位双栏，
           内容由 ChatBridge Portal 填充（SessionPanel 需会话 Context） */}
-      {isTablet && (
+      {isTablet && !leftCollapsed && (
         <div
           ref={(el) => setTabletSlot(el)}
           style={{

@@ -1,5 +1,5 @@
-import { AlertDialog, Button, MobileAlertDialog, message } from '@agentscope-ai/design';
-import { SparkCopyLine, SparkDeleteLine, SparkMoreLine, SparkPlusLine } from '@agentscope-ai/icons';
+import { AlertDialog, Button, IconButton, MobileAlertDialog, Tooltip, message } from '@agentscope-ai/design';
+import { SparkCopyLine, SparkDeleteLine, SparkMoreLine, SparkOperateLeftLine, SparkPlusLine } from '@agentscope-ai/icons';
 import { Dropdown } from 'antd';
 import { useMemo } from 'react';
 import {
@@ -61,7 +61,7 @@ function groupLabel(ts: number) {
   return '更早';
 }
 
-export default function SessionPanel(props: { title: string; onNavigate?: () => void; readonly?: boolean; flat?: boolean; footer?: React.ReactNode }) {
+export default function SessionPanel(props: { title: string; onNavigate?: () => void; readonly?: boolean; flat?: boolean; footer?: React.ReactNode; onCollapse?: () => void }) {
   const { sessions, currentSessionId } = useChatAnywhereSessionsState();
   const { changeCurrentSessionId, removeSession } = useChatAnywhereSessions();
   const list = (sessions || []) as SessionItem[];
@@ -95,9 +95,22 @@ export default function SessionPanel(props: { title: string; onNavigate?: () => 
         gap: 10,
       }}
     >
-      {props.title && (
-        <div style={{ fontWeight: 700, fontSize: 15, padding: '0 4px' }}>
-          {props.title}
+      {(props.title || props.onCollapse) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 15, padding: '0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {props.title}
+          </div>
+          {/* 收起入口：仅对话页宽屏/平板双栏态传入，收起后由页面左缘竖条还原 */}
+          {props.onCollapse && (
+            <Tooltip title="收起会话列表">
+              <IconButton
+                bordered={false}
+                aria-label="收起会话列表"
+                icon={<SparkOperateLeftLine size={16} />}
+                onClick={props.onCollapse}
+              />
+            </Tooltip>
+          )}
         </div>
       )}
 

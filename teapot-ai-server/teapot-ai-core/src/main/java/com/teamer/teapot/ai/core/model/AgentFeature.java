@@ -524,12 +524,35 @@ public class AgentFeature {
         private Boolean enableMcpConfig;
         /** 生图/生视频工具开关（DashScopeMultiModalTool，ToolProvidedMiddleware 挂载，SPEC-media-gen §4.1） */
         private Boolean enableMediaGen;
+        /** 各生成能力指定模型（SPEC-media-gen §4.8）：字段留空 = 跟随工具默认模型 */
+        private MediaModels mediaModels;
         /** 权限模式（Agent 级默认，chat 面板可按请求覆盖）：EXPLORE / BLOCK_DANGEROUS / BYPASS；null = 不设权限上下文（存量行为） */
         private String permissionMode;
         /** 工具白名单（空 = 不限制） */
         private List<String> allowedTools;
         /** ReAct 最大迭代轮数 [1,100]；null = SDK 默认 */
         private Integer maxIterations;
+    }
+
+    /**
+     * 生成模型指定（SPEC-media-gen §4.8）：按能力位给 DashScopeMultiModalTool 的六个生成工具锁定 model 入参。
+     * 字段名与 runtime.mediaModels 的 JSON key 一一对应，同时也是 /api/model/media-models 目录的 field 标识；
+     * 全部可空，空 = 不覆写、跟随工具默认模型（存量行为）。
+     */
+    @Data
+    public static class MediaModels {
+        /** 文生图（dashscope_text_to_image） */
+        private String textToImage;
+        /** 图生图/改图（dashscope_image_to_image） */
+        private String imageToImage;
+        /** 文生视频（dashscope_text_to_video） */
+        private String textToVideo;
+        /** 图生视频（dashscope_image_to_video） */
+        private String imageToVideo;
+        /** 首尾帧生视频（dashscope_first_and_last_frame_image_to_video） */
+        private String frameToVideo;
+        /** 文本转语音（dashscope_text_to_audio） */
+        private String textToAudio;
     }
 
     /** sandbox 命名空间结构（字段缺省由 AgentRegistry 构建时回填，SPEC §16.6/§22.2） */

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Collapse, Spin, Tag } from 'antd';
+import { IconButton, Tooltip } from '@agentscope-ai/design';
+import { SparkOperateLeftLine, SparkOperateRightLine } from '@agentscope-ai/icons';
 import { agentDetail } from '../api/agent';
 import type {
   AgentChannelConfig,
@@ -38,6 +40,22 @@ function EnabledTag({ on }: { on: boolean }) {
 
 const mono: React.CSSProperties = { fontFamily: 'Menlo, Consolas, monospace' };
 
+/** 收起态跨会话记忆（与左栏 teapot-chat-left-collapsed 对称，仅宽屏渲染本面板） */
+const LS_RIGHT_COLLAPSED = 'teapot-chat-agent-panel-collapsed';
+
+/** 收起后留下的竖条宽度 */
+const RAIL_W = 34;
+
+/** 生成能力位中文名（SPEC-media-gen §4.8：与 runtime.mediaModels 字段对应，仅展示用） */
+const MEDIA_MODEL_LABELS: Record<string, string> = {
+  textToImage: '文生图',
+  imageToImage: '图生图',
+  textToVideo: '文生视频',
+  imageToVideo: '图生视频',
+  frameToVideo: '首尾帧视频',
+  textToAudio: '语音合成',
+};
+
 /**
  * 对话页右侧边栏：当前 Agent 配置总览（Basic Info / Skill / Tool & Advanced /
  * MultiAgent / Channel / Sandbox / MCP），内容来自 /api/agent/detail 的 feature。
@@ -45,6 +63,12 @@ const mono: React.CSSProperties = { fontFamily: 'Menlo, Consolas, monospace' };
 export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<AgentDetail | null>(null);
+  /** 收起态：整栏收成右缘竖条，把空间让给中间对话区 */
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(LS_RIGHT_COLLAPSED) === '1');
+
+  useEffect(() => {
+    localStorage.setItem(LS_RIGHT_COLLAPSED, collapsed ? '1' : '0');
+  }, [collapsed]);
 
   useEffect(() => {
     if (!agentKey) return;
@@ -116,6 +140,13 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
             {rt?.enableOssFile && <KV k="OSS 文件" v={<EnabledTag on />} />}
             {rt?.enableMcpConfig && <KV k="MCP 配置查询" v={<EnabledTag on />} />}
             {rt?.enableMediaGen && <KV k="生图/生视频" v={<EnabledTag on />} />}
+            {/* 指定的生成模型（SPEC-media-gen §4.8）：未配置的保持默认，不占行 */}
+            {rt?.enableMediaGen
+              && Object.entries(rt.mediaModels ?? {})
+                .filter(([, v]) => typeof v === 'string' && v)
+                .map(([k, v]) => (
+                  <KV key={k} k={`${MEDIA_MODEL_LABELS[k] ?? k}模型`} v={<span style={mono}>{v}</span>} />
+                ))}
             {rt?.permissionMode && (
               <KV
                 k="权限模式"
@@ -200,29 +231,69 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
   return (
     <aside
       style={{
-        width: 320,
+        width: collapsed ? RAIL_W : 320,
         flexShrink: 0,
         height: '100%',
-        overflowY: 'auto',
+        overflowX: 'hidden',
+        overflowY: collapsed ? 'hidden' : 'auto',
         borderLeft: '1px solid rgba(0, 0, 0, 0.05)',
-        padding: '48px 16px 16px',
+        padding: collapsed ? '48px 0 16px' : '48px 16px 16px',
         boxSizing: 'border-box',
+        // 与模板左栏一致的单边过渡，收起/展开时对话区宽度同步收窄/放宽
+        transition: 'width .2s ease, padding .2s ease',
       }}
     >
-      <div style={{ fontSize: 14, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)', marginBottom: 12 }}>
-        Agent 配置
-      </div>
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
-      ) : !detail ? (
-        <span style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>暂无配置信息</span>
+      {collapsed ? (
+        /* 收起后的唯一还原入口（右缘竖条） */
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Tooltip title="展开 Agent 配置">
+            <IconButton
+              bordered={false}
+              aria-label="展开 Agent 配置"
+              icon={<SparkOperateLeftLine size={16} />}
+              onClick={() => setCollapsed(false)}
+            />
+          </Tooltip>
+        </div>
       ) : (
-        <Collapse
-          size="small"
-          bordered={false}
-          defaultActiveKey={['basic', 'skills', 'tools', 'mcp']}
-          items={items}
-        />
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 12 }}>
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: 14,
+                fontWeight: 700,
+                color: 'rgba(26, 26, 29, 0.92)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Agent 配置
+            </div>
+            <Tooltip title="收起 Agent 配置">
+              <IconButton
+                bordered={false}
+                aria-label="收起 Agent 配置"
+                icon={<SparkOperateRightLine size={16} />}
+                onClick={() => setCollapsed(true)}
+              />
+            </Tooltip>
+          </div>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+          ) : !detail ? (
+            <span style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>暂无配置信息</span>
+          ) : (
+            <Collapse
+              size="small"
+              bordered={false}
+              defaultActiveKey={['basic', 'skills', 'tools', 'mcp']}
+              items={items}
+            />
+          )}
+        </>
       )}
     </aside>
   );

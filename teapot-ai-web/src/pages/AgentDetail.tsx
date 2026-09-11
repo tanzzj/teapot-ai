@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Col, Collapse, Empty, Row, Spin, theme, Tooltip } from 'antd';
+import { Alert, AutoComplete, Col, Collapse, Empty, Row, Spin, theme, Tooltip } from 'antd';
 import {
   Button,
   Form,
@@ -36,6 +36,7 @@ import {
   agentUnbindSkill,
   agentUpdate,
   deleteMemoryItem,
+  mediaModelCatalog,
   memoryItems,
   modelPresets,
 } from '../api/agent';
@@ -69,6 +70,7 @@ import type {
   AgentCompactionConfig,
   ChannelRecordName,
   MCPRecordName,
+  MediaModelCatalogEntry,
   MemoryUserGroup,
   SandboxOptions,
   SandboxRecordName,
@@ -204,6 +206,8 @@ export default function AgentDetailPage() {
   const [sandboxNames, setSandboxNames] = useState<SandboxRecordName[]>([]);
   const [channelNames, setChannelNames] = useState<ChannelRecordName[]>([]);
   const [mcpNames, setMcpNames] = useState<MCPRecordName[]>([]);
+  /** 生成模型目录（SPEC-media-gen §4.8）：按能力位给出可选模型，接口异常时为空数组（仍可自由输入） */
+  const [mediaCatalog, setMediaCatalog] = useState<MediaModelCatalogEntry[]>([]);
   /** 已加载的原始 feature 命名空间：分区保存时合并，避免单分区覆盖另一分区（§22） */
   const [loadedFeature, setLoadedFeature] = useState<Record<string, unknown>>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
@@ -221,6 +225,8 @@ export default function AgentDetailPage() {
   const compactionEnabled = Form.useWatch('compactionEnabled', form);
   /** 记忆落盘策略（throttled 时展示节流间隔，SPEC §25） */
   const memFlushTrigger = Form.useWatch(['memory', 'flushTrigger'], form);
+  /** 生图/生视频开关：开启后才展示六个能力位的模型选择器（SPEC-media-gen §4.8） */
+  const mediaGenEnabled = Form.useWatch(['runtime', 'enableMediaGen'], form);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   /** Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组的记忆文件清单，支持逐条删除 */
@@ -298,7 +304,7 @@ export default function AgentDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [d, presets, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList] = await Promise.all([
+      const [d, presets, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog] = await Promise.all([
         agentDetail(agentKey),
         modelPresets(),
         skillList(),
@@ -307,12 +313,14 @@ export default function AgentDetailPage() {
         sandboxRecordNames().catch(() => [] as SandboxRecordName[]),
         channelRegistry().catch(() => [] as ChannelRecordName[]),
         mcpRegistry().catch(() => [] as MCPRecordName[]),
+        mediaModelCatalog().catch(() => [] as MediaModelCatalogEntry[]),
       ]);
       setSbOptions(sbOpts);
       setStorageNames(ossNames);
       setSandboxNames(sbRecordNames);
       setChannelNames(chNames);
       setMcpNames(mcpList);
+      setMediaCatalog(mmCatalog);
       setDetail({
         name: d.agent.name,
         description: d.agent.description,
@@ -409,6 +417,8 @@ export default function AgentDetailPage() {
           enableOssFile: !!rt.enableOssFile,
           enableMcpConfig: !!rt.enableMcpConfig,
           enableMediaGen: !!rt.enableMediaGen,
+          // 生成模型回显：旧数据可能带空串，统一成 undefined 以免占位
+          mediaModels: rt.mediaModels,
           permissionMode: rt.permissionMode,
           allowedTools: rt.allowedTools,
           maxIterations: rt.maxIterations,
@@ -588,6 +598,24 @@ export default function AgentDetailPage() {
         } else {
           merged[k] = v;
         }
+      }
+      // 生成模型清理（SPEC-media-gen §4.8）：空串/空对象 = 不锁定，不写入冗余键；
+      // 关掉生图开关时一并清除旧配置（选择器未挂载时 values 里不会有 mediaModels）
+      const mm = merged.mediaModels as Record<string, unknown> | undefined;
+      if (mm && typeof mm === 'object') {
+        const cleaned: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(mm)) {
+          if (typeof v === 'string' && v.trim()) {
+            cleaned[k] = v.trim();
+          }
+        }
+        if (Object.keys(cleaned).length > 0 && runtime.enableMediaGen !== false) {
+          merged.mediaModels = cleaned;
+        } else {
+          delete merged.mediaModels;
+        }
+      } else if (runtime.enableMediaGen === false) {
+        delete merged.mediaModels;
       }
       feature.runtime = merged;
     }
@@ -1145,12 +1173,50 @@ export default function AgentDetailPage() {
                         name={['runtime', 'enableMediaGen']}
                         label="生图/生视频"
                         valuePropName="checked"
-                        tooltip="开启后 Agent 获得 DashScope 文生图/文生视频/图生视频等工具（密钥取服务端 DASHSCOPE_API_KEY，未配置时不生效）；视频生成耗时可达分钟级"
+                        tooltip="开启后 Agent 获得 DashScope 文生图/文生视频/图生视频等工具（密钥取服务端 DASHSCOPE_API_KEY，未配置时不生效）；视频生成耗时可达分钟级；开启后可指定各能力的生成模型"
                       >
                         <Switch />
                       </Form.Item>
                     </Col>
                   </Row>
+                  {/* 生成模型指定（SPEC-media-gen §4.8）：开关打开才展开，六个能力位各自可选 */}
+                  {!!mediaGenEnabled && mediaCatalog.length > 0 && (
+                    <>
+                      <Alert
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 12 }}
+                        message="留空即跟随工具默认模型；一旦指定，服务端会按此覆写生成请求（不依赖模型自觉）"
+                      />
+                      <Row gutter={16}>
+                        {mediaCatalog.map((entry) => (
+                          <Col key={entry.field} xs={24} sm={12}>
+                            <Form.Item
+                              name={['runtime', 'mediaModels', entry.field]}
+                              label={`${entry.label}模型`}
+                              tooltip={`对应工具 ${entry.tool}；默认 ${entry.defaultModel}。候选为实测可用型号，也可填入清单外的在售型号`}
+                            >
+                              <AutoComplete
+                                allowClear
+                                placeholder={`默认：${entry.defaultModel}`}
+                                options={entry.models.map((m) => ({ value: m }))}
+                                filterOption={(input, option) =>
+                                  (option?.value ?? '').toLowerCase().includes(input.trim().toLowerCase())
+                                }
+                              />
+                            </Form.Item>
+                          </Col>
+                        ))}
+                      </Row>
+                    </>
+                  )}
+                  {!!mediaGenEnabled && mediaCatalog.length === 0 && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="生成模型目录加载失败，本次仅能使用各工具默认模型；可刷新重试"
+                    />
+                  )}
                 </Form>
               </div>
             )}

@@ -6,12 +6,15 @@ import com.teamer.teapot.ai.core.agentscope.SessionTitleGenMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigToolMiddleware;
 import com.teamer.teapot.ai.core.agentscope.McpConfigTools;
 import com.teamer.teapot.ai.core.agentscope.MediaGenToolMiddleware;
+import com.teamer.teapot.ai.core.agentscope.MediaArtifactPersistTool;
+import com.teamer.teapot.ai.core.agentscope.MediaModelCatalog;
 import com.teamer.teapot.ai.core.agentscope.MediaModalGuardMiddleware;
 import com.teamer.teapot.ai.core.agentscope.OssFileTools;
 import com.teamer.teapot.ai.core.agentscope.OssToolMiddleware;
 import com.teamer.teapot.ai.core.agentscope.PerMessageCheckpointMiddleware;
 import com.teamer.teapot.ai.core.agentscope.PermissionModeMiddleware;
 import com.teamer.teapot.ai.core.agentscope.ToolProvidedMiddleware;
+import com.teamer.teapot.ai.core.agentscope.UserAttachmentRefMiddleware;
 import com.teamer.teapot.ai.core.config.AgentRunConnection;
 import com.teamer.teapot.ai.core.config.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
@@ -23,6 +26,7 @@ import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
 import com.teamer.teapot.ai.core.model.MCPConfigDO;
 import com.teamer.teapot.ai.core.service.MCPConfigService;
+import com.teamer.teapot.ai.core.storage.ImageStorageRouter;
 import com.teamer.teapot.ai.core.storage.OssClientManager;
 import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.GenerateOptions;
@@ -36,6 +40,7 @@ import io.agentscope.core.skill.repository.mysql.MysqlSkillRepository;
 import com.teamer.teapot.ai.core.storage.OssSkillRepository;
 import com.teamer.teapot.ai.core.storage.RedisMemoryFilesystems;
 import io.agentscope.core.state.AgentStateStore;
+import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.model.dashscope.tool.DashScopeMultiModalTool;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunFilesystemSpec;
@@ -44,6 +49,7 @@ import io.agentscope.extensions.sandbox.e2b.E2bCodec;
 import io.agentscope.extensions.sandbox.e2b.E2bFilesystemSpec;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
+import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
@@ -100,6 +106,8 @@ public class AgentAssembler {
     /** OSS 客户端管理与全局连接（工具提供型中间件：upload_file / download_file） */
     private final OssClientManager ossClientManager;
     private final OssConnection ossConnection;
+    /** 按 Agent 生效的媒体存储载体（生成产物转存 OSS，SPEC-media-gen §4.9） */
+    private final ImageStorageRouter imageStorageRouter;
     /** 生图/生视频工具密钥（SPEC-media-gen §4.1：复用现有环境变量，不落库） */
     @Value("${DASHSCOPE_API_KEY:}")
     private String dashscopeApiKey;
@@ -116,7 +124,8 @@ public class AgentAssembler {
                           SandboxConfigService sandboxConfigService,
                           MCPConfigService mcpConfigService,
                           OssClientManager ossClientManager,
-                          OssConnection ossConnection) {
+                          OssConnection ossConnection,
+                          ImageStorageRouter imageStorageRouter) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.chatSessionMapper = chatSessionMapper;
@@ -132,6 +141,7 @@ public class AgentAssembler {
         this.mcpConfigService = mcpConfigService;
         this.ossClientManager = ossClientManager;
         this.ossConnection = ossConnection;
+        this.imageStorageRouter = imageStorageRouter;
     }
 
     /** 按 t_agent 记录装配 HarnessAgent；extraMiddlewares 允许为空 */
@@ -222,11 +232,20 @@ public class AgentAssembler {
             builder.disableShellTool();
         }
         boolean sandboxApplied = applySandbox(builder, agentKey, sb);
-        // 记忆路由（SPEC §27）：memory-store 启用时，非沙箱（含降级）路径的 MEMORY.md/memory/ 改走 Redis；
-        // 沙箱文件系统为 2.0.1 固定实现，无路由挂载点，记忆留在沙箱。降级路径已禁 shell，路由仍保留本地叠加能力
-        if (!sandboxApplied) {
-            RedisMemoryFilesystems memoryRoutes = memoryRoutesProvider.getIfAvailable();
-            if (memoryRoutes != null) {
+        // 记忆路由（SPEC §27，本次修订）：MEMORY.md / memory/ 无论沙箱与否一律直达 Redis，两条链路同源，
+        // 记忆管理接口因此能读到沙箱 Agent 的记忆。旧限制（2.0.1 沙箱文件系统无挂载点）已由
+        // 2.0.3 的 filesystemRoute + RoutedSandboxFilesystem 解除：路由只接管记忆前缀，
+        // 其余路径与 shell_execute 仍归沙箱（故沙箱内的存量副本不会被自动遮住，需一次性归档，见 SPEC §27）。
+        RedisMemoryFilesystems memoryRoutes = memoryRoutesProvider.getIfAvailable();
+        if (memoryRoutes != null) {
+            if (sandboxApplied) {
+                IsolationScope scope = isolationScope(sb);
+                AbstractFilesystem memoryFs = memoryRoutes.memoryFilesystem(agentKey, scope);
+                builder.filesystemRoute(RedisMemoryFilesystems.MEMORY_ROUTE_FILE, memoryFs);
+                builder.filesystemRoute(RedisMemoryFilesystems.MEMORY_ROUTE_DIR, memoryFs);
+                log.info("沙箱 Agent 记忆已统一路由到 Redis agentKey={} isolationScope={}", agentKey, scope);
+            } else {
+                // 非沙箱（含降级）路径：本地叠加（含 shell）+ 记忆路径改指 Redis；降级路径已禁 shell，路由仍保留本地叠加能力
                 builder.abstractFilesystem(memoryRoutes.localShellOverlay(agentKey, workspace));
                 log.info("记忆文件系统已路由到 Redis agentKey={}", agentKey);
             }
@@ -248,6 +267,10 @@ public class AgentAssembler {
         Set<String> modalities = modelRegistry.capabilities(agentDO.getModelId());
         builder.middleware(new MediaModalGuardMiddleware(modalities));
         log.info("媒体模态守卫已挂载 agentKey={} 模型可输入模态={}", agentKey, modalities);
+        // 用户附件地址注入（SPEC-media-gen §4.5）：透传给视觉模型的附件只有像素、没有地址文本，
+        // 图生图/图生视频类工具拿不到 image_url，只能退化成文生图重绘；在守卫之后挂载，
+        // 已被降级为文本引用的块不会被重复注入
+        builder.middleware(new UserAttachmentRefMiddleware());
         // 会话标题异步生成（首条用户消息 → LLM 总结 → DB + CUSTOM 事件推前端）
         AgentFeature.SessionTitle stCfg = feature.getSessionTitle();
         boolean titleEnabled = stCfg == null || stCfg.getEnabled() == null || stCfg.getEnabled();
@@ -287,9 +310,37 @@ public class AgentAssembler {
                 agent.getToolkit().registerTool(tools);
             }
         }
+        // 生成产物转存（SPEC-media-gen §4.9）：必须在工具注册之后，按名取回已注册工具再同名覆盖为装饰器
+        applyMediaArtifactPersist(agent, agentKey, rt);
         // MCP Server 注册（SPEC §MCP）：Agent 级配置，引用系统记录或内联完整配置
         applyMcp(agent, feature.getMcp());
         return agent;
+    }
+
+    /**
+     * 给六个 DashScope 生成工具套上产物转存装饰器（SPEC-media-gen §4.9）：
+     * 未套装饰器时产物只有百炼临时链接（约 24h 失效），会话隔天回看即裂图。
+     * Toolkit.registerAgentTool 同名覆盖（ToolRegistry 内部 map.put），故装饰器可直接替下反射工具；
+     * 生效载体非 oss 时装饰器内部自行放行，不改变存量行为。
+     */
+    private void applyMediaArtifactPersist(HarnessAgent agent, String agentKey, AgentFeature.Runtime rt) {
+        if (rt == null || !Boolean.TRUE.equals(rt.getEnableMediaGen())) {
+            return;
+        }
+        Toolkit toolkit = agent.getToolkit();
+        if (toolkit == null) {
+            return;
+        }
+        int wrapped = 0;
+        for (MediaModelCatalog.Entry entry : MediaModelCatalog.entries()) {
+            AgentTool tool = toolkit.getTool(entry.tool());
+            if (tool == null || tool instanceof MediaArtifactPersistTool) {
+                continue;
+            }
+            toolkit.registerAgentTool(new MediaArtifactPersistTool(tool, agentKey, imageStorageRouter));
+            wrapped++;
+        }
+        log.info("生成产物转存装饰器已挂载 agentKey={} 覆盖工具数={}", agentKey, wrapped);
     }
 
     /**
@@ -314,8 +365,9 @@ public class AgentAssembler {
             if (dashscopeApiKey == null || dashscopeApiKey.isBlank()) {
                 log.warn("生图/生视频已启用但 DASHSCOPE_API_KEY 未配置，跳过挂载 agentKey={}", agentKey);
             } else {
-                middlewares.add(new MediaGenToolMiddleware(new DashScopeMultiModalTool(dashscopeApiKey)));
-                log.info("生图/生视频工具已启用 agentKey={}", agentKey);
+                Map<String, String> locked = MediaModelCatalog.lockedModels(rt.getMediaModels());
+                middlewares.add(new MediaGenToolMiddleware(new DashScopeMultiModalTool(dashscopeApiKey), locked));
+                log.info("生图/生视频工具已启用 agentKey={} 指定模型={}", agentKey, locked);
             }
         }
         return middlewares;
@@ -459,6 +511,15 @@ public class AgentAssembler {
     }
 
     /**
+     * feature.sandbox.isolationScope → {@link IsolationScope}（缺省 SESSION）。
+     * 沙箱与记忆路由必须用同一个作用域，否则记忆命名空间与沙箱复用粒度会错位。
+     */
+    private static IsolationScope isolationScope(AgentFeature.Sandbox sb) {
+        String raw = sb == null ? null : sb.getIsolationScope();
+        return IsolationScope.valueOf(raw == null || raw.isBlank() ? "SESSION" : raw.trim());
+    }
+
+    /**
      * 按 feature.sandbox 装配沙箱（SPEC §16.7 / §22.2 修订）：
      * shell 工具门控由 assemble() 统一负责（runtime.enableShell 优先，存量跟随沙箱）；
      * 启用且指定 sandboxRecord → 链路与凭证由记录决定（§22.2）；
@@ -507,8 +568,7 @@ public class AgentAssembler {
                 .sandboxIdleTimeoutSeconds(sb.getIdleTimeoutSeconds() != null
                         ? sb.getIdleTimeoutSeconds() : defaults.getDefaultIdleTimeoutSeconds());
         // isolationScope 为基类方法（返回基类型），不参与子类 fluent 链
-        spec.isolationScope(IsolationScope.valueOf(
-                sb.getIsolationScope() == null ? "SESSION" : sb.getIsolationScope()));
+        spec.isolationScope(isolationScope(sb));
         switch (persistence) {
             case "NONE" -> spec.snapshotSpec(new NoopSnapshotSpec());
             case "NAS" -> {
@@ -591,8 +651,7 @@ public class AgentAssembler {
         WorkspaceSpec ws = new WorkspaceSpec();
         ws.setRoot(workspaceRoot);
         spec.workspaceSpec(ws);
-        spec.isolationScope(IsolationScope.valueOf(
-                sb.getIsolationScope() == null ? "SESSION" : sb.getIsolationScope()));
+        spec.isolationScope(isolationScope(sb));
         switch (persistence) {
             case "NONE", "NAS" -> {
                 if ("NAS".equals(persistence)) {

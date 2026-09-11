@@ -93,12 +93,47 @@ export interface AgentRuntimeConfig {
   enableMcpConfig?: boolean;
   /** 生图/生视频工具开关（DashScope，SPEC-media-gen §4.3） */
   enableMediaGen?: boolean;
+  /** 各生成能力指定的模型（SPEC-media-gen §4.8）：字段留空 = 跟随工具默认 */
+  mediaModels?: AgentMediaModels;
   /** 权限模式（AgentScope permission system）：EXPLORE 只读探索 / BLOCK_DANGEROUS 阻止危险命令 / BYPASS 全部放行；未配置 = 不设权限上下文 */
   permissionMode?: 'EXPLORE' | 'BLOCK_DANGEROUS' | 'BYPASS';
   /** 工具白名单（空 = 不限制） */
   allowedTools?: string[];
   /** ReAct 最大迭代轮数 1–100；留空 = 默认 */
   maxIterations?: number;
+}
+
+/**
+ * feature.runtime.mediaModels 结构（SPEC-media-gen §4.8）：
+ * 打开生图/生视频开关后可按能力位指定生成模型，空 = 该能力跟随工具默认模型（如文生图 wanx-v1）。
+ */
+export interface AgentMediaModels {
+  /** 文生图（dashscope_text_to_image） */
+  textToImage?: string;
+  /** 图生图/改图（dashscope_image_to_image） */
+  imageToImage?: string;
+  /** 文生视频（dashscope_text_to_video） */
+  textToVideo?: string;
+  /** 图生视频（dashscope_image_to_video） */
+  imageToVideo?: string;
+  /** 首尾帧生视频（dashscope_first_and_last_frame_image_to_video） */
+  frameToVideo?: string;
+  /** 语音合成（dashscope_text_to_audio） */
+  textToAudio?: string;
+}
+
+/** /api/model/media-models 目录项（SPEC-media-gen §4.8：实测可用模型清单 + 默认值） */
+export interface MediaModelCatalogEntry {
+  /** runtime.mediaModels 的字段名 */
+  field: keyof AgentMediaModels;
+  /** 能力中文名（如「文生图」） */
+  label: string;
+  /** 对应工具名 */
+  tool: string;
+  /** 不指定时工具实际使用的默认模型 */
+  defaultModel: string;
+  /** 实测可用候选（仍可自由输入清单外的在售型号） */
+  models: string[];
 }
 
 /** feature.storage 结构（SPEC §22.1：图片存储载体按 Agent 选择） */

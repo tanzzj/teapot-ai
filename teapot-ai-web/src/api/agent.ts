@@ -1,5 +1,14 @@
 import { http, unwrap } from './http';
-import type { Agent, AgentDetail, MemoryUserGroup, PageData, Result, SessionHistoryItem, SessionMessageItem } from '../types';
+import type {
+  Agent,
+  AgentDetail,
+  MediaModelCatalogEntry,
+  MemoryUserGroup,
+  PageData,
+  Result,
+  SessionHistoryItem,
+  SessionMessageItem,
+} from '../types';
 
 export function agentList(params: { page?: number; size?: number; keyword?: string; includeDisabled?: boolean }) {
   return unwrap<PageData<Agent>>(http.get<Result<PageData<Agent>>>('/api/agent/list', { params }));
@@ -50,6 +59,11 @@ export function agentChat(agentKey: string, messageText: string, sessionId?: str
 
 export function modelPresets() {
   return unwrap<string[]>(http.get<Result<string[]>>('/api/model/presets'));
+}
+
+/** 生成模型目录（SPEC-media-gen §4.8）：按能力位给出可选生图/生视频/语音模型与默认值 */
+export function mediaModelCatalog() {
+  return unwrap<MediaModelCatalogEntry[]>(http.get<Result<MediaModelCatalogEntry[]>>('/api/model/media-models'));
 }
 
 /** Agent 全量会话历史列表（SPEC §24.9，仅 admin）：Web + 渠道两索引 union */

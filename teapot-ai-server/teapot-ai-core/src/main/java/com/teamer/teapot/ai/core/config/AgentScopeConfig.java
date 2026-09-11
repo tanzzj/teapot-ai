@@ -118,8 +118,8 @@ public class AgentScopeConfig {
     }
 
     /**
-     * 记忆文件系统路由（SPEC §27）：MEMORY.md / memory/ 路由到 Redis 叠加层（Redis 写层 +
-     * 本地只读基线）。仅非沙箱 Agent 生效（2.0.1 沙箱文件系统无路由挂载点）。
+     * 记忆文件系统路由（SPEC §27，本次修订）：MEMORY.md / memory/ 路由到 Redis。非沙箱与沙箱
+     * Agent 同一条链路（沙箱经 2.0.3 的 filesystemRoute 挂载，见 AgentAssembler）。
      */
     @Bean
     @ConditionalOnProperty(prefix = "teapot.ai.agentscope.redis", name = "memory-store", havingValue = "true")
@@ -132,6 +132,8 @@ public class AgentScopeConfig {
      * 存量本地记忆一次性迁移（SPEC §27）：仅当 migrate-legacy-memory=true 且 memory-store=true
      * 时，启动后扫描 workspace 把旧 MEMORY.md/memory/* 导入 Redis（create-if-absent 幂等，可重跑）。
      * 迁移后路由不再读磁盘，Redis 为记忆唯一来源；磁盘文件保留作只读归档。
+     * 沙箱 Agent 的记忆也可用同一机制导入：先把快照里的 MEMORY.md/memory/ 解到
+     * {@code workspace/<agentKey>/_agent/}（与隔离作用域 AGENT 对应的命名空间末段），再开启本开关。
      */
     @Bean
     @ConditionalOnProperty(prefix = "teapot.ai.agentscope.redis", name = "migrate-legacy-memory", havingValue = "true")

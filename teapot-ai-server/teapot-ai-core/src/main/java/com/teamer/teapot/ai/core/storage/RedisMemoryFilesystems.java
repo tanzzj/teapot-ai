@@ -34,9 +34,22 @@ import java.util.Map;
  * <p>存量本地记忆（路由上线前落在 {@code workspace/<agentKey>/<uid>/} 的文件）经
  * {@link #migrateLegacyMemory(Path)} 一次性导入 Redis（create-if-absent，幂等）。
  *
- * <p>沙箱 Agent 不适用：2.0.1 沙箱模式下文件系统固定为沙箱实现，无路由挂载点，记忆留在沙箱。
+ * <p>沙箱 Agent 同样适用（SPEC §27 修订）：旧限制「2.0.1 沙箱文件系统无路由挂载点」已由
+ * agentscope-java 2.0.3 的 {@code HarnessAgent.Builder#filesystemRoute} +
+ * {@code RoutedSandboxFilesystem} 解除，见 {@link #memoryFilesystem(String, IsolationScope)}。
  */
 public class RedisMemoryFilesystems {
+
+    /** 记忆主文件路由前缀（精确文件路由） */
+    public static final String MEMORY_ROUTE_FILE = "MEMORY.md";
+    /** 每日台账目录路由前缀（目录路由，含 {@code .consolidation_state} watermark） */
+    public static final String MEMORY_ROUTE_DIR = "memory/";
+    /**
+     * Agent 级共享记忆（{@link IsolationScope#AGENT} / {@link IsolationScope#GLOBAL}）的命名空间末段。
+     * 仍放在 {@code users/} 段下，是为了让 {@link #listMemoryUids(String)} 与记忆管理接口
+     * 无需区分隔离语义即可发现这份记忆。
+     */
+    public static final String AGENT_SHARED_UID = "_agent";
 
     private static final Logger log = LoggerFactory.getLogger(RedisMemoryFilesystems.class);
 
@@ -101,12 +114,27 @@ public class RedisMemoryFilesystems {
     public AbstractFilesystem localShellOverlay(String agentKey, Path workspace) {
         OverlayFilesystem defaultOverlay = (OverlayFilesystem) new LocalFilesystemSpec()
                 .toFilesystem(workspace, IsolationScope.USER.toNamespaceFactory());
-        RemoteFilesystem redisFs = new RemoteFilesystem(store, namespace(agentKey));
+        AbstractFilesystem redisFs = memoryFilesystem(agentKey, IsolationScope.USER);
         Map<String, AbstractFilesystem> routes = Map.of(
-                "memory/", redisFs,
-                "MEMORY.md", redisFs);
+                MEMORY_ROUTE_DIR, redisFs,
+                MEMORY_ROUTE_FILE, redisFs);
         return new RedisMemoryLocalFilesystem(
                 (AbstractSandboxFilesystem) defaultOverlay.getUpper(), defaultOverlay.getLower(), routes);
+    }
+
+    /**
+     * 沙箱 Agent 的记忆路由后端（SPEC §27 修订）：只把 {@code MEMORY.md} 与 {@code memory/}
+     * 两个前缀交给 Redis，其余工作区路径与 {@code shell_execute} 仍由沙箱文件系统承担。
+     *
+     * <p>调用方经 {@code HarnessAgent.Builder#filesystemRoute(prefix, fs)} 挂载，harness 会把
+     * 沙箱文件系统包成 {@code RoutedSandboxFilesystem}（主后端 = 沙箱，默认不命中即透传）。
+     *
+     * <p>命名空间末段跟随 Agent 的隔离作用域，与沙箱本身的隔离语义对齐：
+     * {@code USER} → userId（缺失回落 sessionId）、{@code SESSION} → sessionId、
+     * {@code AGENT}/{@code GLOBAL} → 固定 {@link #AGENT_SHARED_UID}（整个 Agent 共享一份）。
+     */
+    public AbstractFilesystem memoryFilesystem(String agentKey, IsolationScope scope) {
+        return new RemoteFilesystem(store, namespace(agentKey, scope));
     }
 
     /**
@@ -176,22 +204,19 @@ public class RedisMemoryFilesystems {
         }
     }
 
-    private NamespaceFactory namespace(String agentKey) {
-        return rc -> List.of("agents", agentKey, "users", resolveUid(rc));
-    }
-
-    /** userId 优先；缺失回落 sessionId；都无则 _default（与 IsolationScope.USER 降级语义一致） */
-    private static String resolveUid(RuntimeContext rc) {
-        if (rc != null) {
-            String uid = rc.getUserId();
-            if (uid != null && !uid.isBlank()) {
-                return uid;
-            }
-            String sid = rc.getSessionId();
-            if (sid != null && !sid.isBlank()) {
-                return sid;
-            }
+    /** 按隔离作用域派生命名空间 {@code agents/<agentKey>/users/<segment>}；
+     * {@code USER} 缺失 userId 时由 {@link IsolationScope#USER} 自身回落 sessionId，两者都无则 {@code _default} */
+    private NamespaceFactory namespace(String agentKey, IsolationScope scope) {
+        if (scope == IsolationScope.AGENT || scope == IsolationScope.GLOBAL) {
+            return rc -> List.of("agents", agentKey, "users", AGENT_SHARED_UID);
         }
-        return "_default";
+        NamespaceFactory derived = scope == null
+                ? IsolationScope.USER.toNamespaceFactory() : scope.toNamespaceFactory();
+        return rc -> {
+            List<String> tail = derived.getNamespace(rc);
+            String leaf = (tail == null || tail.isEmpty() || tail.get(0).isBlank())
+                    ? "_default" : tail.get(0);
+            return List.of("agents", agentKey, "users", leaf);
+        };
     }
 }
