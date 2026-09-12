@@ -6,6 +6,7 @@ import com.teamer.teapot.ai.core.middleware.SessionTitleGenMiddleware;
 import com.teamer.teapot.ai.core.mcp.McpConfigToolMiddleware;
 import com.teamer.teapot.ai.core.mcp.McpConfigTools;
 import com.teamer.teapot.ai.core.middleware.MediaGenToolMiddleware;
+import com.teamer.teapot.ai.core.model.*;
 import com.teamer.teapot.ai.core.tool.MediaArtifactPersistTool;
 import com.teamer.teapot.ai.core.tool.MediaModelCatalog;
 import com.teamer.teapot.ai.core.middleware.MediaModalGuardMiddleware;
@@ -22,10 +23,6 @@ import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.dao.ChatSessionMapper;
-import com.teamer.teapot.ai.core.model.AgentDO;
-import com.teamer.teapot.ai.core.model.AgentFeature;
-import com.teamer.teapot.ai.core.model.SandboxConfigDO;
-import com.teamer.teapot.ai.core.model.MCPConfigDO;
 import com.teamer.teapot.ai.core.service.AgentRuntimeHints;
 import com.teamer.teapot.ai.core.service.MCPConfigService;
 import com.teamer.teapot.ai.core.service.ModelRegistry;
@@ -159,19 +156,24 @@ public class AgentBuilder {
             throw new BizException("Agent 不存在或已停用：" + agentKey);
         }
         Path workspace = Path.of(properties.getAgentscope().getWorkspaceRoot()).resolve(agentKey);
-        // Agent↔Skill 绑定过滤（SPEC §6.1 第 4 条）：空绑定 = 两来源全集
+        // Agent ↔ Skill
         List<String> bound = agentSkillMapper.selectByAgentKey(agentKey)
-                .stream().map(b -> b.getSkillName()).toList();
-        SkillFilter skillFilter = bound.isEmpty()
-                ? SkillFilter.all()
-                : SkillFilter.only(bound.toArray(new String[0]));
+                .stream()
+                .map(AgentSkillBind::getSkillName)
+                .toList();
+        SkillFilter skillFilter = bound.isEmpty() ?
+                SkillFilter.all() :
+                SkillFilter.only(bound.toArray(new String[0]));
+
         int trigger = agentDO.getCompactionTrigger() == null
                 ? DEFAULT_COMPACTION_TRIGGER : agentDO.getCompactionTrigger();
         int keep = agentDO.getCompactionKeep() == null
                 ? DEFAULT_COMPACTION_KEEP : agentDO.getCompactionKeep();
+
         AgentFeature feature = AgentFeature.parse(agentDO.getFeature());
         AgentFeature.Sandbox sb = feature.getSandbox();
         AgentFeature.Runtime rt = feature.getRuntime();
+
         boolean thinking = rt != null && Boolean.TRUE.equals(rt.getThinkingMode());
 
         // skill 多来源（SPEC §15.7 扩展）：[mysql 只读, git?, oss?]，SkillFilter 按 name 跨来源过滤
