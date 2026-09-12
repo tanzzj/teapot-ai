@@ -1,4 +1,6 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.mcp;
+
+import com.teamer.teapot.ai.core.middleware.ToolProvidedMiddleware;
 
 /**
  * MCP 配置查询中间件（runtime.enableMcpConfig 开关）：

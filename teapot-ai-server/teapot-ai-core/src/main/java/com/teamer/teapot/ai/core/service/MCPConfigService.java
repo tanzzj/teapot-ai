@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamer.teapot.ai.common.exception.BizException;
-import com.teamer.teapot.ai.core.config.AuditService;
+import com.teamer.teapot.ai.core.audit.AuditService;
 import com.teamer.teapot.ai.core.dao.MCPConfigMapper;
 import com.teamer.teapot.ai.core.model.MCPConfigDO;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;

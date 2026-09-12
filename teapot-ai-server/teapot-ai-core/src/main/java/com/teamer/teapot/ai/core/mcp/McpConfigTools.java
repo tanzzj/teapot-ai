@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.mcp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamer.teapot.ai.common.exception.BizException;

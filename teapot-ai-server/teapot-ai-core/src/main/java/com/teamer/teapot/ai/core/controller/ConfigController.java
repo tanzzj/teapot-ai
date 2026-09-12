@@ -1,9 +1,11 @@
 package com.teamer.teapot.ai.core.controller;
 
 import com.teamer.teapot.ai.common.model.Result;
-import com.teamer.teapot.ai.core.config.AgentRunConnection;
-import com.teamer.teapot.ai.core.config.ConfigCryptoService;
-import com.teamer.teapot.ai.core.config.OssConnection;
+import com.teamer.teapot.ai.core.sandbox.SandboxConnectivity;
+import com.teamer.teapot.ai.core.sandbox.agentrun.AgentRunConnection;
+import com.teamer.teapot.ai.core.sandbox.e2b.E2bConnection;
+import com.teamer.teapot.ai.core.crypto.ConfigCryptoService;
+import com.teamer.teapot.ai.core.oss.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
 import com.teamer.teapot.ai.core.model.StorageConfigDO;
@@ -36,6 +38,8 @@ public class ConfigController {
 
     private final SysConfigService sysConfigService;
     private final AgentRunConnection agentRunConnection;
+    private final E2bConnection e2bConnection;
+    private final SandboxConnectivity sandboxConnectivity;
     private final TeapotAiProperties properties;
     private final OssConnection ossConnection;
     private final ImageStorageRouter imageStorageRouter;
@@ -44,6 +48,8 @@ public class ConfigController {
 
     public ConfigController(SysConfigService sysConfigService,
                             AgentRunConnection agentRunConnection,
+                            E2bConnection e2bConnection,
+                            SandboxConnectivity sandboxConnectivity,
                             TeapotAiProperties properties,
                             OssConnection ossConnection,
                             ImageStorageRouter imageStorageRouter,
@@ -51,6 +57,8 @@ public class ConfigController {
                             SandboxConfigService sandboxConfigService) {
         this.sysConfigService = sysConfigService;
         this.agentRunConnection = agentRunConnection;
+        this.e2bConnection = e2bConnection;
+        this.sandboxConnectivity = sandboxConnectivity;
         this.properties = properties;
         this.ossConnection = ossConnection;
         this.imageStorageRouter = imageStorageRouter;
@@ -63,8 +71,8 @@ public class ConfigController {
     public Result<Map<String, Object>> sandboxOptions() {
         Map<String, Object> options = new LinkedHashMap<>();
         // 任一链路可用即视为已接入；实际链路由 sandbox.link 配置路由（AgentRegistry）
-        options.put("configured", agentRunConnection.anyConfigured());
-        options.put("e2bConfigured", agentRunConnection.e2bConfigured());
+        options.put("configured", sandboxConnectivity.anyConfigured());
+        options.put("e2bConfigured", e2bConnection.configured());
         // 双链路配置项（sandbox.link / enabled，SPEC §16.5 修订）
         options.put("link", properties.getSandbox().getLink());
         options.put("e2bEnabled", properties.getSandbox().getE2b().isEnabled());
@@ -79,10 +87,10 @@ public class ConfigController {
         options.put("apiKeyMasked", ConfigCryptoService.mask(agentRunConnection.getApiKey()));
         options.put("accountIdMasked", ConfigCryptoService.mask(agentRunConnection.getAccountId()));
         options.put("mcpServerUrl", agentRunConnection.getMcpServerUrl());
-        options.put("e2bApiKeyMasked", ConfigCryptoService.mask(agentRunConnection.getE2bApiKey()));
-        options.put("e2bApiBaseUrl", agentRunConnection.getE2bApiBaseUrl());
-        options.put("e2bDomain", agentRunConnection.getE2bDomain());
-        options.put("e2bDefaultTemplate", agentRunConnection.getE2bDefaultTemplate());
+        options.put("e2bApiKeyMasked", ConfigCryptoService.mask(e2bConnection.getApiKey()));
+        options.put("e2bApiBaseUrl", e2bConnection.getApiBaseUrl());
+        options.put("e2bDomain", e2bConnection.getDomain());
+        options.put("e2bDefaultTemplate", e2bConnection.getDefaultTemplate());
         return Result.ok(options);
     }
 
@@ -99,10 +107,10 @@ public class ConfigController {
         putIfPresent(body, "mcpServerUrl", AgentRunConnection.KEY_MCP_URL, false);
         putIfPresent(body, "defaultTemplate", AgentRunConnection.KEY_DEFAULT_TEMPLATE, false);
         // E2B 兼容链路（apiKey 加密入库，其余明文）
-        putIfPresent(body, "e2bApiKey", AgentRunConnection.KEY_E2B_API_KEY, true);
-        putIfPresent(body, "e2bApiBaseUrl", AgentRunConnection.KEY_E2B_API_BASE_URL, false);
-        putIfPresent(body, "e2bDomain", AgentRunConnection.KEY_E2B_DOMAIN, false);
-        putIfPresent(body, "e2bDefaultTemplate", AgentRunConnection.KEY_E2B_DEFAULT_TEMPLATE, false);
+        putIfPresent(body, "e2bApiKey", E2bConnection.KEY_API_KEY, true);
+        putIfPresent(body, "e2bApiBaseUrl", E2bConnection.KEY_API_BASE_URL, false);
+        putIfPresent(body, "e2bDomain", E2bConnection.KEY_DOMAIN, false);
+        putIfPresent(body, "e2bDefaultTemplate", E2bConnection.KEY_DEFAULT_TEMPLATE, false);
         return sandboxOptions();
     }
 

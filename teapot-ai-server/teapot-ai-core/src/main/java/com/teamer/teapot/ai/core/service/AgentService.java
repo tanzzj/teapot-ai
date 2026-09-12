@@ -5,8 +5,8 @@ import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.common.model.PageData;
 import com.teamer.teapot.ai.core.agui.TeapotAguiAgentRegistrar;
 import com.teamer.teapot.ai.core.channel.ChannelHub;
-import com.teamer.teapot.ai.core.config.AgentRunConnection;
-import com.teamer.teapot.ai.core.config.AuditService;
+import com.teamer.teapot.ai.core.sandbox.SandboxConnectivity;
+import com.teamer.teapot.ai.core.audit.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
@@ -57,7 +57,7 @@ public class AgentService {
     private final TeapotAguiAgentRegistrar aguiRegistrar;
     private final AuditService auditService;
     private final TeapotAiProperties properties;
-    private final AgentRunConnection agentRunConnection;
+    private final SandboxConnectivity sandboxConnectivity;
     private final SandboxConfigService sandboxConfigService;
     private final StorageConfigService storageConfigService;
     private final ChannelConfigService channelConfigService;
@@ -67,7 +67,7 @@ public class AgentService {
     public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                         AgentRegistry agentRegistry, TeapotAguiAgentRegistrar aguiRegistrar,
                         AuditService auditService, TeapotAiProperties properties,
-                        AgentRunConnection agentRunConnection,
+                        SandboxConnectivity sandboxConnectivity,
                         SandboxConfigService sandboxConfigService,
                         StorageConfigService storageConfigService,
                         ChannelConfigService channelConfigService,
@@ -78,7 +78,7 @@ public class AgentService {
         this.aguiRegistrar = aguiRegistrar;
         this.auditService = auditService;
         this.properties = properties;
-        this.agentRunConnection = agentRunConnection;
+        this.sandboxConnectivity = sandboxConnectivity;
         this.sandboxConfigService = sandboxConfigService;
         this.storageConfigService = storageConfigService;
         this.channelConfigService = channelConfigService;
@@ -275,7 +275,7 @@ public class AgentService {
     private String validateFeature(Map<String, Object> featureMap) {
         try {
             AgentFeature feature = AgentFeature.parse(objectMapper.writeValueAsString(featureMap));
-            feature.validate(agentRunConnection.anyConfigured());
+            feature.validate(sandboxConnectivity.anyConfigured());
             validateFeatureRecords(feature);
             return feature.toJson();
         } catch (BizException e) {

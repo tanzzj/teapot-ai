@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.config;
+package com.teamer.teapot.ai.core.state;
 
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.State;

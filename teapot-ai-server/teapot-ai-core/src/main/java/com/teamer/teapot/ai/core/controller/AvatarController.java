@@ -2,7 +2,7 @@ package com.teamer.teapot.ai.core.controller;
 
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.common.model.Result;
-import com.teamer.teapot.ai.core.config.AuditService;
+import com.teamer.teapot.ai.core.audit.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.model.StorageConfigDO;
 import com.teamer.teapot.ai.core.service.AgentService;

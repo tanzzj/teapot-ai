@@ -10,7 +10,7 @@ import com.aliyun.sdk.service.oss2.models.ObjectSummary;
 import com.aliyun.sdk.service.oss2.models.PutObjectRequest;
 import com.aliyun.sdk.service.oss2.transport.BinaryData;
 import com.teamer.teapot.ai.common.exception.BizException;
-import com.teamer.teapot.ai.core.config.OssConnection;
+import com.teamer.teapot.ai.core.oss.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import io.agentscope.core.skill.AgentSkill;
 import io.agentscope.core.skill.repository.AgentSkillRepository;

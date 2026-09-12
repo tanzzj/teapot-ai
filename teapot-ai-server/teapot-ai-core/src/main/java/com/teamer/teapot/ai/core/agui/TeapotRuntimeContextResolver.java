@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
  * 故兼容从请求头 Authorization 直接解析 JWT（§22.5）。
  * 同线程内后续才解析 agent（AguiRequestProcessor.process 顺序），因此本方法同时从
  * forwardedProps 提取请求级开关（memoryMode / planMode）写入 AgentRuntimeHints，
- * 由 AgentAssembler 装配时消费（SPEC §25：chat 界面参数传递）。
+ * 由 AgentBuilder 装配时消费（SPEC §25：chat 界面参数传递）。
  */
 @Slf4j
 @Component

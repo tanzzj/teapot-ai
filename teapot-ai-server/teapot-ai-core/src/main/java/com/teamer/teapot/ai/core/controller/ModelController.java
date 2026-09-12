@@ -1,7 +1,7 @@
 package com.teamer.teapot.ai.core.controller;
 
 import com.teamer.teapot.ai.common.model.Result;
-import com.teamer.teapot.ai.core.agentscope.MediaModelCatalog;
+import com.teamer.teapot.ai.core.tool.MediaModelCatalog;
 import com.teamer.teapot.ai.core.model.ModelEntryDO;
 import com.teamer.teapot.ai.core.service.ModelService;
 import org.springframework.web.bind.annotation.DeleteMapping;

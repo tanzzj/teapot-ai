@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.channel;
+package com.teamer.teapot.ai.core.middleware;
 
 import com.teamer.teapot.ai.core.dao.ChannelSessionMapper;
 import com.teamer.teapot.ai.core.model.ChannelSessionDO;

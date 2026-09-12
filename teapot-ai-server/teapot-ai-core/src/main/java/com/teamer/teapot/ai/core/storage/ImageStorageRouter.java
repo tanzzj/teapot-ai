@@ -1,6 +1,6 @@
 package com.teamer.teapot.ai.core.storage;
 
-import com.teamer.teapot.ai.core.config.OssConnection;
+import com.teamer.teapot.ai.core.oss.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;

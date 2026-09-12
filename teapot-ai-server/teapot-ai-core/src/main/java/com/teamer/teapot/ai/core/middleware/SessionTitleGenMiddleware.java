@@ -1,6 +1,7 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.middleware;
 
 import com.teamer.teapot.ai.core.dao.ChatSessionMapper;
+import com.teamer.teapot.ai.core.model.ChatSessionDO;
 import io.agentscope.core.agent.Agent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;

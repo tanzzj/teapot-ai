@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.config;
+package com.teamer.teapot.ai.core.crypto;
 
 import com.teamer.teapot.ai.common.exception.BizException;
 import jakarta.annotation.PostConstruct;

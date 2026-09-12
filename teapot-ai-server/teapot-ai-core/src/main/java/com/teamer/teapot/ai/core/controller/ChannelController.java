@@ -2,7 +2,7 @@ package com.teamer.teapot.ai.core.controller;
 
 import com.teamer.teapot.ai.common.model.Result;
 import com.teamer.teapot.ai.core.channel.ChannelHub;
-import com.teamer.teapot.ai.core.config.ConfigCryptoService;
+import com.teamer.teapot.ai.core.crypto.ConfigCryptoService;
 import com.teamer.teapot.ai.core.model.ChannelConfigDO;
 import com.teamer.teapot.ai.core.service.ChannelConfigService;
 import org.springframework.web.bind.annotation.DeleteMapping;

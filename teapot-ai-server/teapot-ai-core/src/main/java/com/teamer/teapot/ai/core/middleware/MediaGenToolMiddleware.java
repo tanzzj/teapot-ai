@@ -1,5 +1,6 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.middleware;
 
+import com.teamer.teapot.ai.core.tool.MediaModelCatalog;
 import io.agentscope.core.agent.Agent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;

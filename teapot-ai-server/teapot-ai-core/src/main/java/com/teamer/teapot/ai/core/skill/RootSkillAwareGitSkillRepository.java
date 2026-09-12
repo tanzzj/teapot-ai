@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.config;
+package com.teamer.teapot.ai.core.skill;
 
 import io.agentscope.core.skill.AgentSkill;
 import io.agentscope.core.skill.repository.GitSkillRepository;

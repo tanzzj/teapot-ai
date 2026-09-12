@@ -1,8 +1,8 @@
 package com.teamer.teapot.ai.core.service;
 
 import com.teamer.teapot.ai.common.exception.BizException;
-import com.teamer.teapot.ai.core.config.AuditService;
-import com.teamer.teapot.ai.core.config.ConfigCryptoService;
+import com.teamer.teapot.ai.core.audit.AuditService;
+import com.teamer.teapot.ai.core.crypto.ConfigCryptoService;
 import com.teamer.teapot.ai.core.dao.SandboxConfigMapper;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;

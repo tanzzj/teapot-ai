@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.config;
+package com.teamer.teapot.ai.core.oss;
 
 import com.teamer.teapot.ai.core.model.StorageConfigDO;
 import com.teamer.teapot.ai.core.service.StorageConfigService;

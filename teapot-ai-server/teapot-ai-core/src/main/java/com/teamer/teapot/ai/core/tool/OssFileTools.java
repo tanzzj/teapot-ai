@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.tool;
 
 import com.aliyun.sdk.service.oss2.OSSClient;
 import com.aliyun.sdk.service.oss2.models.GetObjectRequest;
@@ -6,7 +6,8 @@ import com.aliyun.sdk.service.oss2.models.GetObjectResult;
 import com.aliyun.sdk.service.oss2.models.PutObjectRequest;
 import com.aliyun.sdk.service.oss2.transport.BinaryData;
 import com.teamer.teapot.ai.common.exception.BizException;
-import com.teamer.teapot.ai.core.config.OssConnection;
+import com.teamer.teapot.ai.core.middleware.OssToolMiddleware;
+import com.teamer.teapot.ai.core.oss.OssConnection;
 import com.teamer.teapot.ai.core.storage.OssClientManager;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;

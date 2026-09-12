@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.tool;
 
 import com.teamer.teapot.ai.core.model.AgentFeature;
 

@@ -5,7 +5,7 @@ package com.teamer.teapot.ai.core.service;
  * AG-UI 链路的整个请求（上下文解析 → agent 装配 → run）在同一线程池线程内完成
  * （AguiMvcController.handleInternal 的 executorService.submit 单 Runnable），
  * 因此 TeapotRuntimeContextResolver 从 forwardedProps 解析的开关可以安全地
- * 通过 ThreadLocal 传递给同线程内的 AgentAssembler 装配。
+ * 通过 ThreadLocal 传递给同线程内的 AgentBuilder 装配。
  * 缺失（未传参）= null，装配回落 Agent 配置。
  */
 public final class AgentRuntimeHints {

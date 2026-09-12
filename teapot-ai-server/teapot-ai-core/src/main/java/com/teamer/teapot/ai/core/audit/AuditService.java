@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.config;
+package com.teamer.teapot.ai.core.audit;
 
 import com.teamer.teapot.ai.core.model.AuditLogDO;
 import com.teamer.teapot.ai.core.dao.AuditLogMapper;

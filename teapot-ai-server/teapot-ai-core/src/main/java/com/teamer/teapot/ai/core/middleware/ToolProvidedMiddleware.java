@@ -1,4 +1,4 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.middleware;
 
 import io.agentscope.core.agent.Agent;
 import io.agentscope.core.agent.RuntimeContext;

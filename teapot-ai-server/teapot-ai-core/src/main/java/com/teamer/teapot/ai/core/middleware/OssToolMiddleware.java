@@ -1,4 +1,6 @@
-package com.teamer.teapot.ai.core.agentscope;
+package com.teamer.teapot.ai.core.middleware;
+
+import com.teamer.teapot.ai.core.tool.OssFileTools;
 
 /**
  * OSS 文件能力中间件（runtime.enableOssFile 开关）：

@@ -1,8 +1,8 @@
 package com.teamer.teapot.ai.core.service;
 
 import com.teamer.teapot.ai.common.exception.BizException;
-import com.teamer.teapot.ai.core.config.AuditService;
-import com.teamer.teapot.ai.core.config.RootSkillAwareGitSkillRepository;
+import com.teamer.teapot.ai.core.audit.AuditService;
+import com.teamer.teapot.ai.core.skill.RootSkillAwareGitSkillRepository;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.model.AgentSkillBind;

@@ -5,7 +5,8 @@ import com.teamer.teapot.ai.core.dao.ChannelSessionMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.ChannelConfigDO;
-import com.teamer.teapot.ai.core.service.AgentAssembler;
+import com.teamer.teapot.ai.core.AgentBuilder;
+import com.teamer.teapot.ai.core.middleware.ChannelSessionIndexMiddleware;
 import com.teamer.teapot.ai.core.service.ChannelConfigService;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.gateway.GatewayBootstrap;
@@ -23,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * ChannelHub（SPEC §24.4）：channel 链路长驻实例管理。
  * Map&lt;agentKey, GatewayBootstrap&gt;；gateway 持有 HarnessAgent 做会话排队，
- * 与 Web 链路（AgentRegistry 每轮重建）互不干扰，共享 AgentAssembler 装配规则。
+ * 与 Web 链路（AgentRegistry 每轮重建）互不干扰，共享 AgentBuilder 装配规则。
  * app_secret 仅在 start 时经 ChannelConfigService.getPlain 解密消费。
  */
 @Slf4j
@@ -33,16 +34,16 @@ public class ChannelHub {
     private final Map<String, GatewayBootstrap> gateways = new ConcurrentHashMap<>();
 
     private final AgentMapper agentMapper;
-    private final AgentAssembler agentAssembler;
+    private final AgentBuilder agentBuilder;
     private final ChannelConfigService channelConfigService;
     private final ChannelSessionMapper channelSessionMapper;
 
     public ChannelHub(AgentMapper agentMapper,
-                      AgentAssembler agentAssembler,
+                      AgentBuilder agentBuilder,
                       ChannelConfigService channelConfigService,
                       ChannelSessionMapper channelSessionMapper) {
         this.agentMapper = agentMapper;
-        this.agentAssembler = agentAssembler;
+        this.agentBuilder = agentBuilder;
         this.channelConfigService = channelConfigService;
         this.channelSessionMapper = channelSessionMapper;
     }
@@ -97,7 +98,7 @@ public class ChannelHub {
         if (!ChannelConfigService.configured(record)) {
             throw new IllegalStateException("连接器记录不可用（不存在或凭证不齐）：" + ch.getChannelRecord());
         }
-        HarnessAgent agent = agentAssembler.assemble(agentKey, List.of(
+        HarnessAgent agent = agentBuilder.assemble(agentKey, List.of(
                 new ChannelSessionIndexMiddleware(agentKey, record.getChannelType(), channelSessionMapper)));
         Channel channel = ChannelFactory.create(record, agentKey, ch);
         GatewayBootstrap gateway = GatewayBootstrap.builder()

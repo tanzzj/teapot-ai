@@ -2,6 +2,7 @@ package com.teamer.teapot.ai.core.channel;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.teamer.teapot.ai.core.controller.GitHubWebhookController;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.harness.agent.gateway.Gateway;

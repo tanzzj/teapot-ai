@@ -1,22 +1,23 @@
-package com.teamer.teapot.ai.core.service;
+package com.teamer.teapot.ai.core;
 
 import com.teamer.teapot.ai.common.exception.BizException;
-import com.teamer.teapot.ai.core.agentscope.DangerousCommandGuardMiddleware;
-import com.teamer.teapot.ai.core.agentscope.SessionTitleGenMiddleware;
-import com.teamer.teapot.ai.core.agentscope.McpConfigToolMiddleware;
-import com.teamer.teapot.ai.core.agentscope.McpConfigTools;
-import com.teamer.teapot.ai.core.agentscope.MediaGenToolMiddleware;
-import com.teamer.teapot.ai.core.agentscope.MediaArtifactPersistTool;
-import com.teamer.teapot.ai.core.agentscope.MediaModelCatalog;
-import com.teamer.teapot.ai.core.agentscope.MediaModalGuardMiddleware;
-import com.teamer.teapot.ai.core.agentscope.OssFileTools;
-import com.teamer.teapot.ai.core.agentscope.OssToolMiddleware;
-import com.teamer.teapot.ai.core.agentscope.PerMessageCheckpointMiddleware;
-import com.teamer.teapot.ai.core.agentscope.PermissionModeMiddleware;
-import com.teamer.teapot.ai.core.agentscope.ToolProvidedMiddleware;
-import com.teamer.teapot.ai.core.agentscope.UserAttachmentRefMiddleware;
-import com.teamer.teapot.ai.core.config.AgentRunConnection;
-import com.teamer.teapot.ai.core.config.OssConnection;
+import com.teamer.teapot.ai.core.middleware.DangerousCommandGuardMiddleware;
+import com.teamer.teapot.ai.core.middleware.SessionTitleGenMiddleware;
+import com.teamer.teapot.ai.core.mcp.McpConfigToolMiddleware;
+import com.teamer.teapot.ai.core.mcp.McpConfigTools;
+import com.teamer.teapot.ai.core.middleware.MediaGenToolMiddleware;
+import com.teamer.teapot.ai.core.tool.MediaArtifactPersistTool;
+import com.teamer.teapot.ai.core.tool.MediaModelCatalog;
+import com.teamer.teapot.ai.core.middleware.MediaModalGuardMiddleware;
+import com.teamer.teapot.ai.core.tool.OssFileTools;
+import com.teamer.teapot.ai.core.middleware.OssToolMiddleware;
+import com.teamer.teapot.ai.core.middleware.PerMessageCheckpointMiddleware;
+import com.teamer.teapot.ai.core.middleware.PermissionModeMiddleware;
+import com.teamer.teapot.ai.core.middleware.ToolProvidedMiddleware;
+import com.teamer.teapot.ai.core.middleware.UserAttachmentRefMiddleware;
+import com.teamer.teapot.ai.core.sandbox.agentrun.AgentRunConnection;
+import com.teamer.teapot.ai.core.sandbox.e2b.E2bConnection;
+import com.teamer.teapot.ai.core.oss.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
@@ -25,7 +26,10 @@ import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
 import com.teamer.teapot.ai.core.model.MCPConfigDO;
+import com.teamer.teapot.ai.core.service.AgentRuntimeHints;
 import com.teamer.teapot.ai.core.service.MCPConfigService;
+import com.teamer.teapot.ai.core.service.ModelRegistry;
+import com.teamer.teapot.ai.core.service.SandboxConfigService;
 import com.teamer.teapot.ai.core.storage.ImageStorageRouter;
 import com.teamer.teapot.ai.core.storage.OssClientManager;
 import io.agentscope.core.middleware.MiddlewareBase;
@@ -81,7 +85,7 @@ import java.util.Set;
  */
 @Slf4j
 @Component
-public class AgentAssembler {
+public class AgentBuilder {
 
     private static final int DEFAULT_COMPACTION_TRIGGER = 30;
     private static final int DEFAULT_COMPACTION_KEEP = 10;
@@ -100,6 +104,8 @@ public class AgentAssembler {
     /** 记忆文件系统路由（memory-store=false 时缺席，SPEC §27） */
     private final ObjectProvider<RedisMemoryFilesystems> memoryRoutesProvider;
     private final AgentRunConnection agentRunConnection;
+    /** E2B 兼容链路全局凭证（SPEC §16 修订，配置后优先于 AgentRun MCP 链路） */
+    private final E2bConnection e2bConnection;
     private final SandboxConfigService sandboxConfigService;
     /** MCP 系统配置服务（Agent 内联配置时不需，引用模式时需查 t_mcp_config） */
     private final MCPConfigService mcpConfigService;
@@ -112,7 +118,7 @@ public class AgentAssembler {
     @Value("${DASHSCOPE_API_KEY:}")
     private String dashscopeApiKey;
 
-    public AgentAssembler(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
+    public AgentBuilder(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                           ChatSessionMapper chatSessionMapper,
                           ModelRegistry modelRegistry, AgentStateStore stateStore,
                           @Qualifier("skillRepositoryAgent") MysqlSkillRepository skillRepositoryAgent,
@@ -121,6 +127,7 @@ public class AgentAssembler {
                           ObjectProvider<OssSkillRepository> ossRepoProvider,
                           ObjectProvider<RedisMemoryFilesystems> memoryRoutesProvider,
                           AgentRunConnection agentRunConnection,
+                          E2bConnection e2bConnection,
                           SandboxConfigService sandboxConfigService,
                           MCPConfigService mcpConfigService,
                           OssClientManager ossClientManager,
@@ -137,6 +144,7 @@ public class AgentAssembler {
         this.ossRepoProvider = ossRepoProvider;
         this.memoryRoutesProvider = memoryRoutesProvider;
         this.agentRunConnection = agentRunConnection;
+        this.e2bConnection = e2bConnection;
         this.sandboxConfigService = sandboxConfigService;
         this.mcpConfigService = mcpConfigService;
         this.ossClientManager = ossClientManager;
@@ -593,7 +601,7 @@ public class AgentAssembler {
      */
     private String resolveSandboxLink(String agentLink) {
         TeapotAiProperties.Sandbox cfg = properties.getSandbox();
-        boolean e2bUsable = cfg.getE2b().isEnabled() && agentRunConnection.e2bConfigured();
+        boolean e2bUsable = cfg.getE2b().isEnabled() && e2bConnection.configured();
         boolean agentrunUsable = cfg.getAgentrun().isEnabled() && agentRunConnection.configured();
         // agent 级覆盖：显式指定且可用则直接生效
         if (agentLink != null && !agentLink.isBlank() && !"auto".equalsIgnoreCase(agentLink)) {
@@ -628,7 +636,7 @@ public class AgentAssembler {
     /**
      * E2B 兼容链路装配（AgentRun E2B 端点，CLI 实测 template list/spawn 均可用）。
      * NAS 挂载为 AgentRun MCP 专属能力，E2B 链路降级为 no-op 快照并告警。
-     * record 非空时凭证取记录（§22.2），否则取全局 AgentRunConnection（存量兼容）。
+     * record 非空时凭证取记录（§22.2），否则取全局 {@link E2bConnection}（存量兼容）。
      */
     private void applyE2b(HarnessAgent.Builder builder, String agentKey, AgentFeature.Sandbox sb,
                           SandboxConfigDO record) {
@@ -637,9 +645,9 @@ public class AgentAssembler {
         String workspaceRoot = sb.getWorkspaceRoot() != null
                 ? sb.getWorkspaceRoot() : defaults.getDefaultWorkspaceRoot();
         E2bFilesystemSpec spec = new E2bFilesystemSpec()
-                .apiKey(record != null ? record.getE2bApiKey() : agentRunConnection.getE2bApiKey())
-                .apiBaseUrl(record != null ? record.getE2bApiBaseUrl() : agentRunConnection.getE2bApiBaseUrl())
-                .domain(record != null ? record.getE2bDomain() : agentRunConnection.getE2bDomain())
+                .apiKey(record != null ? record.getE2bApiKey() : e2bConnection.getApiKey())
+                .apiBaseUrl(record != null ? record.getE2bApiBaseUrl() : e2bConnection.getApiBaseUrl())
+                .domain(record != null ? record.getE2bDomain() : e2bConnection.getDomain())
                 .templateId(resolveE2bTemplate(sb, record))
                 .workspaceRoot(workspaceRoot)
                 .sandboxTimeoutSeconds(sb.getIdleTimeoutSeconds() != null
@@ -681,7 +689,7 @@ public class AgentAssembler {
                 return record.getDefaultTemplate();
             }
         }
-        String t = agentRunConnection.getE2bDefaultTemplate();
+        String t = e2bConnection.getDefaultTemplate();
         if (t == null || t.isBlank()) {
             t = agentRunConnection.getDefaultTemplate();
         }

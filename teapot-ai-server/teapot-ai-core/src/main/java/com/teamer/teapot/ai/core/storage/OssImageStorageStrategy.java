@@ -2,7 +2,7 @@ package com.teamer.teapot.ai.core.storage;
 
 import com.aliyun.sdk.service.oss2.models.PutObjectRequest;
 import com.teamer.teapot.ai.common.exception.BizException;
-import com.teamer.teapot.ai.core.config.OssConnection;
+import com.teamer.teapot.ai.core.oss.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.model.StorageConfigDO;
 import com.aliyun.sdk.service.oss2.transport.BinaryData;

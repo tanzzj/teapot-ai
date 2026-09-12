@@ -1,6 +1,9 @@
 package com.teamer.teapot.ai.core.config;
 
 import com.teamer.teapot.ai.common.exception.BizException;
+import com.teamer.teapot.ai.core.oss.OssConnection;
+import com.teamer.teapot.ai.core.skill.RootSkillAwareGitSkillRepository;
+import com.teamer.teapot.ai.core.state.LenientMysqlAgentStateStore;
 import com.teamer.teapot.ai.core.storage.OssClientManager;
 import com.teamer.teapot.ai.core.storage.OssSkillRepository;
 import com.teamer.teapot.ai.core.storage.RedisMemoryFilesystems;
@@ -119,7 +122,7 @@ public class AgentScopeConfig {
 
     /**
      * 记忆文件系统路由（SPEC §27，本次修订）：MEMORY.md / memory/ 路由到 Redis。非沙箱与沙箱
-     * Agent 同一条链路（沙箱经 2.0.3 的 filesystemRoute 挂载，见 AgentAssembler）。
+     * Agent 同一条链路（沙箱经 2.0.3 的 filesystemRoute 挂载，见 AgentBuilder）。
      */
     @Bean
     @ConditionalOnProperty(prefix = "teapot.ai.agentscope.redis", name = "memory-store", havingValue = "true")
