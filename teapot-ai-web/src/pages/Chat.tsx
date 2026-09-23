@@ -17,6 +17,7 @@ import { agentList } from '../api/agent';
 import { modelCapabilities } from '../api/model';
 import { aguiResponseParser, createAguiFetch, setSessionTitleHandler } from '../chat/aguiBridge';
 import { AskUserCard } from '../chat/AskUserCard';
+import { A2uiCard } from '../chat/A2uiCard';
 import { registerSubmit } from '../chat/askUserStore';
 import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
 import MediaGenCard from '../chat/MediaGenCard';
@@ -436,6 +437,10 @@ export default function Chat() {
         dashscope_image_to_video: MediaGenCard,
         dashscope_first_and_last_frame_image_to_video: MediaGenCard,
         dashscope_text_to_audio: MediaGenCard,
+        // A2UI surface 渲染：render/present 读工具结果信封，ask_user_question 读中断信封（表单）
+        a2ui_render: A2uiCard,
+        a2ui_present: A2uiCard,
+        a2ui_ask_user_question: A2uiCard,
       },
       session: {
         multiple: true,

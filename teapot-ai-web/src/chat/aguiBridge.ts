@@ -307,6 +307,8 @@ function createRunParser() {
             interruptId: String(i.id ?? ''),
             toolCallId: String(i.toolCallId ?? ''),
             toolName: String((i.metadata as Record<string, unknown> | undefined)?.toolName ?? ''),
+            // ask_user_question 挂起时 message = A2UI 信封 JSON（表单渲染数据源）
+            message: typeof i.message === 'string' ? i.message : undefined,
           })));
         }
         return {

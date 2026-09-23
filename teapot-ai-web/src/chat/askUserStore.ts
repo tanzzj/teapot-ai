@@ -18,6 +18,8 @@ export interface PendingInterrupt {
   interruptId: string;
   toolCallId: string;
   toolName: string;
+  /** AG-UI interrupt message：a2ui_ask_user_question 挂起时这里是 A2UI 信封 JSON */
+  message?: string;
 }
 
 export interface ResumeEntry {
@@ -30,6 +32,8 @@ let pending: PendingInterrupt[] = [];
 let armed: ResumeEntry[] = [];
 /** 卡片点击后展示在气泡里的已选文本（toolCallId → 选项），供卡片渲染「已回答」态 */
 const answeredSelection = new Map<string, string>();
+/** 已作答的恢复载荷（toolCallId → payload），供 A2UI 表单卡回显答案 */
+const answeredPayloads = new Map<string, Record<string, unknown>>();
 
 let submitFn: ((query: string) => void) | null = null;
 
@@ -38,11 +42,18 @@ export function registerSubmit(fn: ((query: string) => void) | null) {
   submitFn = fn;
 }
 
-/** 新一轮 RUN_FINISHED 到达时清空上一轮状态 */
+/** 非中断场景（a2ui_render/present 展示卡）：把答案作为普通用户消息发送 */
+export function submitMessage(text: string) {
+  submitFn?.(text);
+}
+
+/**
+ * 新一轮 RUN_FINISHED 到达时清空登记（answerSelection 例外保留：
+ * call_id 全局唯一，恢复轮结束后卡片仍需显示已作答态）。
+ */
 export function resetForRun() {
   pending = [];
   armed = [];
-  answeredSelection.clear();
 }
 
 /** 登记未决中断（interruptId 去重） */
@@ -66,19 +77,40 @@ export function getAnsweredSelection(toolCallId: string): string | undefined {
   return answeredSelection.get(toolCallId);
 }
 
+export function getAnsweredPayload(toolCallId: string): Record<string, unknown> | undefined {
+  return answeredPayloads.get(toolCallId);
+}
+
+/** 未决中断携带的 message（A2UI 信封 JSON），已消费/历史回放时为 undefined */
+export function getInterruptMessage(toolCallId: string): string | undefined {
+  return pending.find((p) => p.toolCallId === toolCallId)?.message;
+}
+
 /**
- * 用户点选某选项：被点中的中断 resolved（payload={selected}），其余 cancelled，
- * 随后以所选文本程序化提交，触发带 resume[] 的下一次 run。
+ * 通用作答：toolCallId 对应的中断 resolved（携带任意 payload，对象由后端 JSON 序列化
+ * 成恢复工具结果），其余中断置 cancelled，随后以 displayText 程序化提交触发下一次 run。
  */
-export function answerInterrupt(toolCallId: string, selected: string) {
+export function resolveInterrupt(
+  toolCallId: string,
+  payload: Record<string, unknown>,
+  displayText: string,
+) {
   if (!pending.some((p) => p.toolCallId === toolCallId)) return;
   armed = pending.map((p) =>
     p.toolCallId === toolCallId
-      ? { interruptId: p.interruptId, status: 'resolved' as const, payload: { selected } }
+      ? { interruptId: p.interruptId, status: 'resolved' as const, payload }
       : { interruptId: p.interruptId, status: 'cancelled' as const },
   );
-  answeredSelection.set(toolCallId, selected);
-  submitFn?.(selected);
+  answeredSelection.set(toolCallId, displayText);
+  answeredPayloads.set(toolCallId, payload);
+  submitFn?.(displayText);
+}
+
+/**
+ * 用户点选某选项（单选卡片）：resolved payload 固定为 {selected}。
+ */
+export function answerInterrupt(toolCallId: string, selected: string) {
+  resolveInterrupt(toolCallId, { selected }, selected);
 }
 
 /**

@@ -9,6 +9,7 @@ import {
 } from '@agentscope-ai/chat';
 import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
 import { createHistorySessionBridge } from './sessionBridge';
+import { A2uiCardReadOnly } from './A2uiCard';
 import SessionPanel from './SessionPanel';
 import type { SessionItem } from './sessionBridge';
 import { PHONE_BP } from '../theme/breakpoints';
@@ -101,6 +102,12 @@ export default function HistoryChatPanel({ agentKey }: { agentKey: string }) {
       fetch: async () => {
         throw new Error('session history is read-only');
       },
+    },
+    // 只读回放同样渲染 A2UI surface 卡片（禁交互；已回答表单回显答案）
+    customToolRenderConfig: {
+      a2ui_render: A2uiCardReadOnly,
+      a2ui_present: A2uiCardReadOnly,
+      a2ui_ask_user_question: A2uiCardReadOnly,
     },
     session: {
       multiple: true,
