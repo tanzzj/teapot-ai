@@ -106,7 +106,7 @@
                 <artifactId>agentscope-extensions-channel-dingtalk</artifactId>
                 <version>${agentscope.version}</version>
             </dependency>
-            <!-- A2UI 界面生成能力（纯 middleware 装配：a2ui_render / a2ui_present / a2ui_catalog / a2ui_ask_user_question） -->
+            <!-- A2UI 界面生成能力（纯 middleware 装配：a2ui_render / ask_user_question 表单档；另有 ClarificationMiddleware 纯文本澄清档） -->
             <dependency>
                 <groupId>io.agentscope</groupId>
                 <artifactId>agentscope-extensions-a2ui</artifactId>

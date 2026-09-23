@@ -10,6 +10,7 @@ import {
 import type { IAgentScopeRuntimeWebUIOptions } from '@agentscope-ai/chat';
 import { createHistorySessionBridge } from './sessionBridge';
 import { A2uiCardReadOnly } from './A2uiCard';
+import { AskQuestionCardReadOnly } from './AskUserCard';
 import SessionPanel from './SessionPanel';
 import type { SessionItem } from './sessionBridge';
 import { PHONE_BP } from '../theme/breakpoints';
@@ -107,7 +108,7 @@ export default function HistoryChatPanel({ agentKey }: { agentKey: string }) {
     customToolRenderConfig: {
       a2ui_render: A2uiCardReadOnly,
       a2ui_present: A2uiCardReadOnly,
-      a2ui_ask_user_question: A2uiCardReadOnly,
+      ask_user_question: AskQuestionCardReadOnly,
     },
     session: {
       multiple: true,

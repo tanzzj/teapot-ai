@@ -2,9 +2,9 @@ import type { A2uiComponent } from './envelope';
 import { extractObjects, str, strList } from './envelope';
 
 /**
- * a2ui_ask_user_question 挂起时信封只存在于 interrupt message（工具无 TOOL_CALL_RESULT）；
+ * ask_user_question（表单档）挂起时信封只存在于 interrupt message（工具无 TOOL_CALL_RESULT）；
  * 历史回放拿不到 message，则从工具入参 questions 前端重建同款表单
- * ——与后端 A2uiAskUserQuestionTool.toFormComponents 一一对应。
+ * ——与后端 AskUserQuestionTool.toFormComponents 一一对应。
  */
 
 export function extractQuestions(args: string): Record<string, unknown>[] {

@@ -18,7 +18,7 @@ export interface PendingInterrupt {
   interruptId: string;
   toolCallId: string;
   toolName: string;
-  /** AG-UI interrupt message：a2ui_ask_user_question 挂起时这里是 A2UI 信封 JSON */
+  /** AG-UI interrupt message：ask_user_question 挂起时这里是 A2UI 信封（表单档）或 questions JSON（纯文本档） */
   message?: string;
 }
 

@@ -273,7 +273,8 @@ public class AgentBuilder {
         for (ToolProvidedMiddleware middleware : toolMiddlewares) {
             builder.middleware(middleware);
         }
-        // A2UI 界面生成（feature.a2ui）：启用即挂 A2uiMiddleware，纯 middleware 自装配 4 个 a2ui 工具
+        // A2UI 界面生成（feature.a2ui）：启用即挂 A2uiMiddleware，注册 a2ui_render + ask_user_question
+        // （表单档，覆盖 Web 链路默认挂的纯文本澄清档；组件 DSL 在 SDK 渲染子 Agent 内）
         applyA2ui(builder, feature.getA2ui(), agentKey);
         // 媒体模态守卫（SPEC-media-gen §4.4）：模型能力位未声明的媒体块（如 qwen3.8-max 的 audio）
         // 在请求视图里降级为文本引用，避免产物块一旦进入历史就被每轮重放、被平台 400 钉死整个会话；
@@ -391,8 +392,11 @@ public class AgentBuilder {
      * a2ui 命名空间 → A2uiMiddleware 挂载（Agent 画 UI）：
      * enabled=true 时按配置构建 A2uiConfig（字段留空 = 回落 SDK 默认：内置 basic catalog、
      * 渲染后中断开启、组件数 50、surface 跨轮持久化）；middleware 在 build 前挂载，
-     * 经 ToolkitAware#rebindToolkit 自动注册 a2ui_render / a2ui_present / a2ui_catalog /
-     * a2ui_ask_user_question 四工具。catalog 在构造期加载，加载失败降级为不挂载并告警，不阻断对话。
+     * 经 ToolkitAware#rebindToolkit 自动注册 a2ui_render / ask_user_question（表单档）两工具
+     * （自然语言意图入参；组件 DSL 与 a2ui_catalog 收进 SDK 内部的渲染子 Agent，主 Agent 不感知；
+     * 原 a2ui_present 并入 a2ui_render，渲染后停止本轮由 stopAfterPresent 控制）；
+     * 渲染子模型缺省回落本 Agent 模型。
+     * catalog 在构造期加载，加载失败降级为不挂载并告警，不阻断对话。
      */
     private void applyA2ui(HarnessAgent.Builder builder, AgentFeature.A2ui cfg, String agentKey) {
         if (cfg == null || !Boolean.TRUE.equals(cfg.getEnabled())) {
@@ -452,6 +456,9 @@ public class AgentBuilder {
         }
         if (Boolean.TRUE.equals(rt.getEnablePlanMode())) {
             builder.enablePlanMode(true);
+        }
+        if (Boolean.TRUE.equals(rt.getEnablePendingToolRecovery())) {
+            builder.enablePendingToolRecovery(true);
         }
         if (rt.getAllowedTools() != null && !rt.getAllowedTools().isEmpty()) {
             ToolsConfig toolsConfig = new ToolsConfig();

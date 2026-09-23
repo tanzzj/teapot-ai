@@ -101,6 +101,8 @@ export interface AgentRuntimeConfig {
   allowedTools?: string[];
   /** ReAct 最大迭代轮数 1–100；留空 = 默认 */
   maxIterations?: number;
+  /** Pending tool 恢复：恢复运行时为孤儿 pending tool call 自动补合成错误结果续跑；未配置 = 关闭 */
+  enablePendingToolRecovery?: boolean;
 }
 
 /**
@@ -127,13 +129,13 @@ export interface AgentMediaModels {
  * 字段缺省 = 回落 SDK 默认（内置 basic catalog、渲染后中断开启、组件数 50、surface 跨轮持久化）。
  */
 export interface AgentA2uiConfig {
-  /** 是否启用（获得 a2ui_render / a2ui_present / a2ui_catalog / a2ui_ask_user_question 工具） */
+  /** 是否启用（主 Agent 获得 a2ui_render / ask_user_question 表单档；组件目录与树由 SDK 渲染子 Agent 持有。未启用时仍有框架 ClarificationMiddleware 的纯文本 ask_user_question） */
   enabled?: boolean;
   /** 组件目录标识（信封 catalogId），留空 = agentscope.io:a2ui/basic */
   catalogId?: string;
   /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json；自定义资源需放在服务端 */
   catalogResource?: string;
-  /** 渲染后中断：a2ui_present 成功后停止本轮、等待用户操作；留空 = 开启 */
+  /** 渲染后中断：a2ui_render 成功后停止本轮、等待用户操作；留空 = 开启 */
   stopAfterPresent?: boolean;
   /** 单信封组件数上限 1–500，留空 = 50 */
   maxComponents?: number;

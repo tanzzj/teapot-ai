@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { AppstoreOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { ToolCall } from '@agentscope-ai/chat';
 import type { A2uiComponent } from '../a2ui/envelope';
-import { extractObjects, parseEnvelope, toolErrorText } from '../a2ui/envelope';
+import { parseEnvelope, toolErrorText } from '../a2ui/envelope';
 import { extractQuestions, questionsToComponents } from '../a2ui/askForm';
 import { A2uiSurfaceView, collectFields } from '../a2ui/A2uiSurfaceView';
 import {
@@ -15,11 +16,13 @@ import {
 import { CardShell, headerRow } from './PlanCards';
 
 /**
- * A2UI surface 渲染卡片（挂在 customToolRenderConfig 的三个工具名上）：
- * - a2ui_render / a2ui_present：信封 = TOOL_CALL_RESULT 文本（content[1].data.output），
- *   流式中途从 arguments.components 容错预览；
- * - a2ui_ask_user_question：工具挂起无 result，信封 = interrupt message（askUserStore），
- *   历史回放拿不到 message 时从入参 questions 前端重建表单；
+ * A2UI surface 渲染卡片（挂在 customToolRenderConfig 的 a2ui_render 与 ask 分发器上）：
+ * - a2ui_render：surface 只渲染工具返回的信封结果
+ *   （content[1].data.output = 信封 JSON）；未拿到信封（执行中的 toolcall、错误文本）
+ *   一律回落到默认 ToolCall 块；入参只有自然语言 description
+ *   （组件树由 SDK 内部的渲染子 Agent 生成）；
+ * - ask_user_question 表单档（a2ui 开启时框架注册）：工具挂起无 result，
+ *   信封 = interrupt message（askUserStore），由 AskUserCard 的分发器路由到这里；
  *   提交 → resume payload = {字段name: 答案} 对象（后端 JSON 序列化为工具结果）。
  * 提交派发：ask 未决走 resolveInterrupt（带 resume 恢复）；展示卡走普通消息发送。
  */
@@ -27,6 +30,7 @@ import { CardShell, headerRow } from './PlanCards';
 interface ToolData {
   name?: string;
   call_id?: string;
+  server_label?: string;
   arguments?: string;
   output?: string;
 }
@@ -36,7 +40,7 @@ interface RuntimeMessageLike {
   content?: { data?: ToolData }[];
 }
 
-const TOOL_ASK = 'a2ui_ask_user_question';
+const TOOL_ASK = 'ask_user_question';
 
 /** 恢复工具结果 = 答案 JSON 文本（历史回放）；信封之外的 object 才认 */
 function parseAnswersJson(text?: string): Record<string, unknown> | null {
@@ -76,9 +80,7 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
     if (isAsk) {
       return interruptEnv?.components ?? questionsToComponents(extractQuestions(args));
     }
-    return env?.components ?? (extractObjects(args, 'components').filter(
-      (c) => typeof c.component === 'string',
-    ) as unknown as A2uiComponent[]);
+    return env?.components ?? [];
   }, [isAsk, interruptEnv, env, args]);
 
   const fields = useMemo(() => collectFields(components), [components]);
@@ -91,6 +93,21 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
   const [submitError, setSubmitError] = useState('');
 
   const errorText = !env && !interruptEnv ? toolErrorText(output) : null;
+
+  // 非信封的 render/present 结果（执行中的 toolcall、错误文本）→ 默认 ToolCall 块：
+  // toolcall 就按 toolcall 展示，surface 只在信封结果到达后渲染
+  if (!isAsk && !env) {
+    const serverLabel = data?.content?.[0]?.data?.server_label;
+    return (
+      <ToolCall
+        title={serverLabel ? `${serverLabel} / ${name}` : name}
+        loading={loading}
+        defaultOpen={loading}
+        input={args}
+        output={output ?? ''}
+      />
+    );
+  }
 
   if (errorText) {
     return (

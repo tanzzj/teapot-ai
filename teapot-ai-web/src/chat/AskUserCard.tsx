@@ -1,12 +1,23 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { QuestionCircleOutlined } from '@ant-design/icons';
-import { answerInterrupt, getAnsweredSelection, isPendingToolCall } from './askUserStore';
+import { parseEnvelope, str, bool, strList } from '../a2ui/envelope';
+import { extractQuestions } from '../a2ui/askForm';
+import { A2uiCard } from './A2uiCard';
+import {
+  getAnsweredPayload,
+  getAnsweredSelection,
+  getInterruptMessage,
+  isPendingToolCall,
+  resolveInterrupt,
+} from './askUserStore';
 import { CardShell, headerRow } from './PlanCards';
 
 /**
- * ask_user_question 问题卡片：工具挂起时渲染问题与选项，点击选项即作答
- * （经 askUserStore 程序化提交，下一次 run 携带 resume[] 恢复执行）。
- * 数据形态与 PlanCards 一致：content[0].data = { name, call_id, arguments }。
+ * ask_user_question（框架 ClarificationMiddleware 纯文本档）问题卡片：
+ * 挂起时渲染 questions[]（text/select/multi_select/confirm，与框架工具 schema 一致）为
+ * 纯文本问题卡，提交 → resolveInterrupt（payload = {id: 答案}，恢复工具结果）。
+ * a2ui 开启时服务端注册的是表单档（interrupt message = A2UI 信封），由挂载分发器
+ * AskQuestionCard 分流到 A2uiCard 渲染表单，本文件不再消费旧 {question, options} 形态。
  */
 
 interface ToolData {
@@ -21,93 +32,219 @@ interface RuntimeMessageLike {
   content?: { data?: ToolData }[];
 }
 
-/** 流式容错解析 {question, options[]}：先整段 JSON，未完成时逐字段正则兜底 */
-function parseQuestion(argsStr: string): { question: string; options: string[] } {
-  if (!argsStr) return { question: '', options: [] };
-  try {
-    const obj = JSON.parse(argsStr) as { question?: unknown; options?: unknown };
-    const options = Array.isArray(obj?.options)
-      ? obj.options.filter((o): o is string => typeof o === 'string' && o.trim() !== '')
-      : [];
-    return { question: typeof obj?.question === 'string' ? obj.question : '', options };
-  } catch {
-    const q = /"question"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(argsStr);
-    let question = '';
-    if (q) {
-      try {
-        question = JSON.parse(`"${q[1]}"`) as string;
-      } catch {
-        question = q[1];
-      }
-    }
-    const options: string[] = [];
-    const list = /"options"\s*:\s*\[([^\]]*)/.exec(argsStr);
-    if (list) {
-      const itemRe = /"((?:\\.|[^"\\])*)"/g;
-      let m: RegExpExecArray | null;
-      while ((m = itemRe.exec(list[1])) !== null) {
-        try {
-          const text = JSON.parse(`"${m[1]}"`) as string;
-          if (text.trim()) options.push(text);
-        } catch {
-          // 流式中途的未闭合字面量，跳过
-        }
-      }
-    }
-    return { question, options };
-  }
+interface Question {
+  id: string;
+  text: string;
+  type: string;
+  options: string[];
+  required: boolean;
 }
 
-export function AskUserCard({ data }: { data: RuntimeMessageLike }) {
+/** 恢复工具结果 = 答案 JSON 文本（历史回放）；非 object 不认 */
+function parseAnswersJson(text?: string): Record<string, unknown> | null {
+  if (!text || text.trimStart().startsWith('Error')) return null;
+  try {
+    const obj = JSON.parse(text) as unknown;
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      return obj as Record<string, unknown>;
+    }
+  } catch {
+    // 非 JSON（如错误提示）不认
+  }
+  return null;
+}
+
+function fmtAnswer(v: unknown): string {
+  if (Array.isArray(v)) return v.join('、');
+  if (typeof v === 'boolean') return v ? '是' : '否';
+  if (v === 'yes') return '是';
+  if (v === 'no') return '否';
+  return String(v ?? '');
+}
+
+function toQuestions(raw: Record<string, unknown>[]): Question[] {
+  return raw.map((q) => {
+    const type = str(q.type) ?? 'text';
+    const options = strList(q.options);
+    return {
+      id: str(q.id)!,
+      text: str(q.question) ?? '',
+      type,
+      options: type === 'confirm' && !options.length ? ['yes', 'no'] : options,
+      required: bool(q.required),
+    };
+  });
+}
+
+const chipStyle = (selected: boolean, clickable: boolean): React.CSSProperties => ({
+  padding: '4px 12px',
+  borderRadius: 8,
+  fontSize: 13,
+  cursor: clickable ? 'pointer' : 'default',
+  border: selected ? '1px solid #1a1a1d' : '1px solid rgba(26, 26, 29, 0.12)',
+  background: selected ? 'rgba(26, 26, 29, 0.06)' : 'rgba(255, 255, 255, 0.6)',
+  color: selected ? 'rgba(26, 26, 29, 0.95)' : 'rgba(26, 26, 29, 0.8)',
+  fontWeight: selected ? 600 : 400,
+  transition: 'all 0.15s ease',
+  wordBreak: 'break-word',
+});
+
+export function AskUserCard({ data, readOnly }: { data: RuntimeMessageLike; readOnly?: boolean }) {
   const args = data?.content?.[0]?.data?.arguments ?? '';
   const callId = data?.content?.[0]?.data?.call_id ?? '';
   const output = data?.content?.[1]?.data?.output;
-  const { question, options } = useMemo(() => parseQuestion(args), [args]);
 
+  const questions = useMemo(() => toQuestions(extractQuestions(args)), [args]);
   const pending = isPendingToolCall(callId);
-  const clicked = getAnsweredSelection(callId);
-  const answered = clicked ?? (typeof output === 'string' && output ? output : undefined);
+  const answeredText = getAnsweredSelection(callId);
+  const answeredPayload = getAnsweredPayload(callId);
+  const answered = answeredPayload ?? parseAnswersJson(output) ?? undefined;
 
-  if (!question && !options.length) return null;
+  const [values, setValues] = useState<Record<string, string | string[]>>({});
+  const [error, setError] = useState('');
 
-  const chip = answered
+  if (!questions.length) return null;
+
+  const interactive = !readOnly && pending && !answeredPayload;
+
+  const chip = answeredText !== undefined || answered
     ? <span style={{ color: '#52c41a' }}>已回答</span>
     : pending
-      ? <span style={{ color: 'rgba(26, 26, 29, 0.45)' }}>请选择一项</span>
+      ? <span style={{ color: 'rgba(26, 26, 29, 0.45)' }}>请作答</span>
       : <span style={{ color: 'rgba(26, 26, 29, 0.35)' }}>已跳过</span>;
 
+  const submit = () => {
+    if (!interactive) return;
+    const answers: Record<string, unknown> = {};
+    const lines: string[] = [];
+    for (const q of questions) {
+      const v = values[q.id];
+      const empty = v === undefined || v === '' || (Array.isArray(v) && !v.length);
+      if (q.required && empty) {
+        setError(`请回答「${q.text}」`);
+        return;
+      }
+      if (empty) continue;
+      answers[q.id] = v;
+      lines.push(`${q.text}: ${fmtAnswer(v)}`);
+    }
+    setError('');
+    resolveInterrupt(callId, answers, lines.join('\n') || '已提交');
+  };
+
+  const pick = (q: Question, opt: string) => {
+    setError('');
+    if (q.type === 'multi_select') {
+      setValues((prev) => {
+        const cur = Array.isArray(prev[q.id]) ? (prev[q.id] as string[]) : [];
+        return {
+          ...prev,
+          [q.id]: cur.includes(opt) ? cur.filter((x) => x !== opt) : [...cur, opt],
+        };
+      });
+    } else {
+      setValues((prev) => ({ ...prev, [q.id]: opt }));
+    }
+  };
+
   return (
-    <CardShell header={headerRow(<QuestionCircleOutlined />, question || '请确认', chip)}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {options.map((opt) => {
-          const selected = answered === opt;
-          const clickable = pending && !answered;
+    <CardShell header={headerRow(<QuestionCircleOutlined />, '请确认', chip)}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {questions.map((q) => {
+          // 已作答/历史回放：直接展示「问题: 答案」行
+          if (!interactive) {
+            const a = answered ? answered[q.id] : undefined;
+            return (
+              <div key={q.id} style={{ fontSize: 13, wordBreak: 'break-word' }}>
+                <span style={{ fontWeight: 600 }}>{q.text}</span>
+                <span style={{ color: a === undefined ? 'rgba(26, 26, 29, 0.35)' : 'rgba(26, 26, 29, 0.85)' }}>
+                  ：{a === undefined ? '未作答' : fmtAnswer(a)}
+                </span>
+              </div>
+            );
+          }
+          const v = values[q.id];
           return (
-            <div
-              key={opt}
-              onClick={() => {
-                if (clickable) answerInterrupt(callId, opt);
-              }}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 8,
-                fontSize: 13,
-                cursor: clickable ? 'pointer' : 'default',
-                border: selected
-                  ? '1px solid #1a1a1d'
-                  : '1px solid rgba(26, 26, 29, 0.12)',
-                background: selected ? 'rgba(26, 26, 29, 0.06)' : 'rgba(255, 255, 255, 0.6)',
-                color: selected ? 'rgba(26, 26, 29, 0.95)' : 'rgba(26, 26, 29, 0.8)',
-                fontWeight: selected ? 600 : 400,
-                transition: 'all 0.15s ease',
-                wordBreak: 'break-word',
-              }}
-            >
-              {opt}
+            <div key={q.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {q.text}
+                {q.required ? <span style={{ color: '#ff4d4f', marginLeft: 2 }}>*</span> : null}
+              </div>
+              {q.type === 'text' ? (
+                <input
+                  value={typeof v === 'string' ? v : ''}
+                  onChange={(e) => {
+                    setError('');
+                    setValues((prev) => ({ ...prev, [q.id]: e.target.value }));
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    border: '1px solid rgba(26, 26, 29, 0.12)',
+                    background: 'rgba(255, 255, 255, 0.6)',
+                    outline: 'none',
+                  }}
+                />
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {q.options.map((opt) => {
+                    const selected =
+                      q.type === 'multi_select'
+                        ? Array.isArray(v) && v.includes(opt)
+                        : v === opt;
+                    return (
+                      <div key={opt} onClick={() => pick(q, opt)} style={chipStyle(selected, true)}>
+                        {fmtAnswer(opt)}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
+        {interactive ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div
+              onClick={submit}
+              style={{
+                ...chipStyle(false, true),
+                fontWeight: 600,
+                border: '1px solid #1a1a1d',
+                background: '#1a1a1d',
+                color: '#fff',
+              }}
+            >
+              提交
+            </div>
+            {error ? <span style={{ fontSize: 12, color: '#ff4d4f' }}>{error}</span> : null}
+          </div>
+        ) : null}
       </div>
     </CardShell>
   );
+}
+
+/**
+ * ask_user_question 统一挂载分发：中断 message 可解析为 A2UI 信封（a2ui 开启时的表单档）
+ * → A2uiCard 表单；否则（纯文本澄清档、历史回放）→ AskUserCard 纯文本问题卡。
+ */
+export function AskQuestionCard({
+  data,
+  readOnly,
+}: {
+  data: RuntimeMessageLike;
+  readOnly?: boolean;
+}) {
+  const callId = data?.content?.[0]?.data?.call_id ?? '';
+  const envelope = isPendingToolCall(callId)
+    ? parseEnvelope(getInterruptMessage(callId))
+    : null;
+  if (envelope) return <A2uiCard data={data} readOnly={readOnly} />;
+  return <AskUserCard data={data} readOnly={readOnly} />;
+}
+
+export function AskQuestionCardReadOnly(props: { data: RuntimeMessageLike }) {
+  return <AskQuestionCard {...props} readOnly />;
 }

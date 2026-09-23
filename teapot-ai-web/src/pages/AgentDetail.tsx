@@ -27,6 +27,7 @@ import {
   SparkMagicWandLine,
   SparkMemoryLine,
   SparkMultiAgentLine,
+  SparkApplicationToolLine,
   SparkPlusLine,
 } from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -79,7 +80,7 @@ import type {
   StorageRecordName,
 } from '../types';
 
-type Section = 'profile' | 'basic' | 'tools' | 'multiagent' | 'memory' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
+type Section = 'profile' | 'basic' | 'tools' | 'a2ui' | 'multiagent' | 'memory' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
 
 /** 胶囊菜单展开宽度（移动端悬浮展开层同宽） */
 const MENU_W = 208;
@@ -429,6 +430,7 @@ export default function AgentDetailPage() {
           permissionMode: rt.permissionMode,
           allowedTools: rt.allowedTools,
           maxIterations: rt.maxIterations,
+          enablePendingToolRecovery: !!rt.enablePendingToolRecovery,
         },
         // 缺省命名空间 = 启用（与后端 MVP 语义一致，SPEC §25）
         multiagent: {
@@ -691,6 +693,7 @@ export default function AgentDetailPage() {
     { key: 'profile', label: 'Profile', icon: <SparkIdLine /> },
     { key: 'basic', label: 'Basic Info', icon: <SparkDocumentLine /> },
     { key: 'tools', label: 'Tool & Advanced', icon: <SparkSettingLine /> },
+    { key: 'a2ui', label: 'A2UI', icon: <SparkApplicationToolLine /> },
     { key: 'multiagent', label: 'MultiAgent', icon: <SparkMultiAgentLine /> },
     { key: 'memory', label: '记忆', icon: <SparkMemoryLine /> },
     { key: 'sandbox', label: 'Sandbox', icon: <SparkInternetLine /> },
@@ -777,7 +780,7 @@ export default function AgentDetailPage() {
           </div>
         </div>
         <div style={{ flex: 1 }} />
-        {(section === 'basic' || section === 'tools' || section === 'multiagent' || section === 'memory' || section === 'sandbox' || section === 'channel') && (
+        {(section === 'basic' || section === 'tools' || section === 'a2ui' || section === 'multiagent' || section === 'memory' || section === 'sandbox' || section === 'channel') && (
           <Button type="primary" onClick={onSave} loading={saving}>
             Save
           </Button>
@@ -1215,6 +1218,16 @@ export default function AgentDetailPage() {
                         <Switch />
                       </Form.Item>
                     </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        name={['runtime', 'enablePendingToolRecovery']}
+                        label="Pending Tool 恢复"
+                        valuePropName="checked"
+                        tooltip="开启后恢复运行时，孤儿 pending tool call（挂起工具的重启/断链场景）会被自动补一条合成错误结果，Agent 可继续对话而非直接报错；关闭 = SDK 默认（不恢复）"
+                      >
+                        <Switch />
+                      </Form.Item>
+                    </Col>
                   </Row>
                   {/* 生成模型指定（SPEC-media-gen §4.8）：开关打开才展开，六个能力位各自可选 */}
                   {!!mediaGenEnabled && mediaCatalog.length > 0 && (
@@ -1254,12 +1267,19 @@ export default function AgentDetailPage() {
                       message="生成模型目录加载失败，本次仅能使用各工具默认模型；可刷新重试"
                     />
                   )}
-                  {/* A2UI 界面生成（feature.a2ui，AgentScope a2ui 扩展）：开启即挂 A2uiMiddleware */}
+                </Form>
+              </div>
+            )}
+
+            {/* A2UI 界面生成（feature.a2ui，AgentScope a2ui 扩展）：开启即挂 A2uiMiddleware */}
+            {section === 'a2ui' && (
+              <div className="glass-card" style={{ padding: 24 }}>
+                <Form form={form} layout="vertical">
                   <Form.Item
                     name={['a2ui', 'enabled']}
                     label="A2UI 界面生成"
                     valuePropName="checked"
-                    tooltip="开启后 Agent 获得 a2ui_render / a2ui_present / a2ui_catalog / a2ui_ask_user_question 工具，可在对话中渲染表单、卡片、选项等交互界面；关闭 = 存量行为"
+                    tooltip="开启后主 Agent 获得 a2ui_render / ask_user_question（表单档）工具，可在对话中渲染表单、卡片、选项等交互界面（组件目录与组件树由 SDK 内部渲染子 Agent 持有）；关闭时 ask_user_question 仍可用作纯文本问题卡（框架内置澄清能力）；关闭 = 存量行为"
                   >
                     <Switch />
                   </Form.Item>
@@ -1291,7 +1311,7 @@ export default function AgentDetailPage() {
                             name={['a2ui', 'stopAfterPresent']}
                             label="渲染后中断"
                             valuePropName="checked"
-                            tooltip="a2ui_present 成功后停止本轮、等待用户在界面上操作后再继续；关闭则 Agent 渲染后自行推进"
+                            tooltip="a2ui_render 成功后停止本轮、等待用户在界面上操作后再继续；关闭则 Agent 渲染后自行推进"
                           >
                             <Switch />
                           </Form.Item>

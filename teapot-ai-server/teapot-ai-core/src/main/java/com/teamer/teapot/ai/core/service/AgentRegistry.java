@@ -1,6 +1,7 @@
 package com.teamer.teapot.ai.core.service;
 
 import com.teamer.teapot.ai.core.AgentBuilder;
+import io.agentscope.extensions.a2ui.ClarificationMiddleware;
 import io.agentscope.harness.agent.HarnessAgent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -25,7 +26,9 @@ public class AgentRegistry {
 
     /** 每次调用均重新构建（不走缓存，配置即时生效） */
     public HarnessAgent getOrCreate(String agentKey) {
-        return agentBuilder.assemble(agentKey, List.of());
+        // ask_user_question（纯文本澄清档）仅挂 Web/AG-UI 链路：渠道无法渲染问题卡片，挂起将无人应答；
+        // a2ui 开启时 A2uiMiddleware 在 extras 之后 rebind，同名注册表单档覆盖此澄清档
+        return agentBuilder.assemble(agentKey, List.of(new ClarificationMiddleware()));
     }
 
     /** 实例不再缓存，无状态可失效；保留接口兼容 AgentService/SkillService 调用 */

@@ -525,13 +525,13 @@ public class AgentFeature {
      */
     @Data
     public static class A2ui {
-        /** 是否启用（挂载 A2uiMiddleware，获得 a2ui_render / a2ui_present / a2ui_catalog / a2ui_ask_user_question） */
+        /** 是否启用（挂载 A2uiMiddleware，主 Agent 获得 a2ui_render / ask_user_question 表单档；组件目录与组件树由 SDK 内部渲染子 Agent 持有。未启用时 Web 链路仍有 ClarificationMiddleware 的纯文本 ask_user_question） */
         private Boolean enabled;
         /** 组件目录标识（信封 catalogId 字段），留空 = agentscope.io:a2ui/basic */
         private String catalogId;
         /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json（扩展 jar 内置基础目录） */
         private String catalogResource;
-        /** 渲染后中断：a2ui_present 成功后是否停止本轮 acting（等用户操作），留空 = true */
+        /** 渲染后中断：a2ui_render 成功后是否停止本轮 acting（等用户操作），留空 = true */
         private Boolean stopAfterPresent;
         /** 单信封组件数上限 [1,500]，留空 = 50 */
         private Integer maxComponents;
@@ -598,6 +598,8 @@ public class AgentFeature {
         private List<String> allowedTools;
         /** ReAct 最大迭代轮数 [1,100]；null = SDK 默认 */
         private Integer maxIterations;
+        /** Pending tool 恢复：恢复运行时为孤儿 pending tool call 自动补合成错误结果，使 Agent 续跑而非报错；null = 关闭（SDK 默认） */
+        private Boolean enablePendingToolRecovery;
     }
 
     /**

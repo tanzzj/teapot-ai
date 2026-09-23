@@ -16,7 +16,7 @@ import type { SessionItem } from '../chat/sessionBridge';
 import { agentList } from '../api/agent';
 import { modelCapabilities } from '../api/model';
 import { aguiResponseParser, createAguiFetch, setSessionTitleHandler } from '../chat/aguiBridge';
-import { AskUserCard } from '../chat/AskUserCard';
+import { AskQuestionCard } from '../chat/AskUserCard';
 import { A2uiCard } from '../chat/A2uiCard';
 import { registerSubmit } from '../chat/askUserStore';
 import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
@@ -425,7 +425,9 @@ export default function Chat() {
         plan_write: PlanWriteCard,
         plan_exit: PlanExitCard,
         todo_write: TodoWriteCard,
-        ask_user_question: AskUserCard,
+        // ask_user_question 统一挂载点：框架按 Agent 配置注册两档之一——
+        // 中断 message 是 A2UI 信封（a2ui 开）→ A2uiCard 表单；否则 → AskUserCard 纯文本问题卡
+        ask_user_question: AskQuestionCard,
         // 媒体生成卡片（SPEC-media-gen 修订）：dashscope_* 工具结果中的 image/video/audio 块
         // 经 ImageGenerator / DefaultCards.Videos / Audios 可视化，替代默认折叠面板。
         // 清单须覆盖全部「产出媒体块」的 DashScope 工具（fork DashScopeMultiModalTool）：
@@ -437,10 +439,10 @@ export default function Chat() {
         dashscope_image_to_video: MediaGenCard,
         dashscope_first_and_last_frame_image_to_video: MediaGenCard,
         dashscope_text_to_audio: MediaGenCard,
-        // A2UI surface 渲染：render/present 读工具结果信封，ask_user_question 读中断信封（表单）
+        // A2UI surface 渲染：render 读工具结果信封；ask_user_question 见上方统一挂载点分发；
+        // a2ui_present 已并入 a2ui_render，仅为旧会话历史回放保留挂载点
         a2ui_render: A2uiCard,
         a2ui_present: A2uiCard,
-        a2ui_ask_user_question: A2uiCard,
       },
       session: {
         multiple: true,
