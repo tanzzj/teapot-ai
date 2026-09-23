@@ -74,6 +74,11 @@
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-channel-dingtalk</artifactId>
         </dependency>
+        <!-- A2UI 界面生成能力（feature.a2ui 开关，AgentBuilder 挂 A2uiMiddleware） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-a2ui</artifactId>
+        </dependency>
         <!-- JDA：Discord Gateway 客户端（SPEC §24 修订：Discord 渠道自实现适配器） -->
         <dependency>
             <groupId>net.dv8tion</groupId>

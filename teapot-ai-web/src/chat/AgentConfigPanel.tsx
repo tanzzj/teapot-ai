@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Collapse, Spin, Tag } from 'antd';
 import { IconButton, Tooltip } from '@agentscope-ai/design';
 import { SparkOperateLeftLine, SparkOperateRightLine } from '@agentscope-ai/icons';
 import { agentDetail } from '../api/agent';
 import type {
+  AgentA2uiConfig,
   AgentChannelConfig,
   AgentDetail,
   AgentMCPConfig,
@@ -20,6 +22,7 @@ interface ParsedFeature {
   channel?: AgentChannelConfig;
   mcp?: AgentMCPConfig;
   multiagent?: AgentMultiAgentConfig;
+  a2ui?: AgentA2uiConfig;
 }
 
 /** 键值行：左灰标签 + 右值 */
@@ -42,9 +45,6 @@ const mono: React.CSSProperties = { fontFamily: 'Menlo, Consolas, monospace' };
 
 /** 收起态跨会话记忆（与左栏 teapot-chat-left-collapsed 对称，仅宽屏渲染本面板） */
 const LS_RIGHT_COLLAPSED = 'teapot-chat-agent-panel-collapsed';
-
-/** 收起后留下的竖条宽度 */
-const RAIL_W = 34;
 
 /** 生成能力位中文名（SPEC-media-gen §4.8：与 runtime.mediaModels 字段对应，仅展示用） */
 const MEDIA_MODEL_LABELS: Record<string, string> = {
@@ -69,6 +69,19 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
   useEffect(() => {
     localStorage.setItem(LS_RIGHT_COLLAPSED, collapsed ? '1' : '0');
   }, [collapsed]);
+
+  /** 顶栏折叠开关的 Portal 挂载点（AppLayout header 内 id=teapot-header-extra） */
+  const [toggleSlot, setToggleSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const find = () => {
+      const el = document.getElementById('teapot-header-extra');
+      if (el) setToggleSlot(el);
+      else raf = requestAnimationFrame(find);
+    };
+    find();
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   useEffect(() => {
     if (!agentKey) return;
@@ -95,6 +108,7 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
   const ch = feature.channel;
   const mcp = feature.mcp;
   const ma = feature.multiagent;
+  const a2ui = feature.a2ui;
 
   const items = useMemo(() => {
     if (!agent) return [];
@@ -140,6 +154,15 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
             {rt?.enableOssFile && <KV k="OSS 文件" v={<EnabledTag on />} />}
             {rt?.enableMcpConfig && <KV k="MCP 配置查询" v={<EnabledTag on />} />}
             {rt?.enableMediaGen && <KV k="生图/生视频" v={<EnabledTag on />} />}
+            {a2ui?.enabled && (
+              <>
+                <KV k="A2UI 界面" v={<EnabledTag on />} />
+                <KV k="渲染后中断" v={<EnabledTag on={a2ui.stopAfterPresent !== false} />} />
+                {a2ui.catalogResource && (
+                  <KV k="A2UI Catalog" v={<span style={mono}>{a2ui.catalogResource}</span>} />
+                )}
+              </>
+            )}
             {/* 指定的生成模型（SPEC-media-gen §4.8）：未配置的保持默认，不占行 */}
             {rt?.enableMediaGen
               && Object.entries(rt.mediaModels ?? {})
@@ -229,57 +252,44 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
   }, [agent, detail, rt, sb, ch, mcp, ma]);
 
   return (
-    <aside
-      style={{
-        width: collapsed ? RAIL_W : 320,
-        flexShrink: 0,
-        height: '100%',
-        overflowX: 'hidden',
-        overflowY: collapsed ? 'hidden' : 'auto',
-        borderLeft: '1px solid rgba(0, 0, 0, 0.05)',
-        padding: collapsed ? '48px 0 16px' : '48px 16px 16px',
-        boxSizing: 'border-box',
-        // 与模板左栏一致的单边过渡，收起/展开时对话区宽度同步收窄/放宽
-        transition: 'width .2s ease, padding .2s ease',
-      }}
-    >
-      {collapsed ? (
-        /* 收起后的唯一还原入口（右缘竖条） */
-        <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <Tooltip title="展开 Agent 配置">
+    <>
+      {toggleSlot &&
+        createPortal(
+          <Tooltip title={collapsed ? '展开 Agent 配置' : '收起 Agent 配置'}>
             <IconButton
               bordered={false}
-              aria-label="展开 Agent 配置"
-              icon={<SparkOperateLeftLine size={16} />}
-              onClick={() => setCollapsed(false)}
+              aria-label="切换 Agent 配置"
+              icon={collapsed ? <SparkOperateLeftLine size={16} /> : <SparkOperateRightLine size={16} />}
+              onClick={() => setCollapsed((v) => !v)}
             />
-          </Tooltip>
-        </div>
-      ) : (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 12 }}>
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-                fontSize: 14,
-                fontWeight: 700,
-                color: 'rgba(26, 26, 29, 0.92)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Agent 配置
-            </div>
-            <Tooltip title="收起 Agent 配置">
-              <IconButton
-                bordered={false}
-                aria-label="收起 Agent 配置"
-                icon={<SparkOperateRightLine size={16} />}
-                onClick={() => setCollapsed(true)}
-              />
-            </Tooltip>
+          </Tooltip>,
+          toggleSlot,
+        )}
+      {!collapsed && (
+        <aside
+          style={{
+            width: 320,
+            flexShrink: 0,
+            height: '100%',
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            borderLeft: '1px solid rgba(0, 0, 0, 0.05)',
+            padding: '16px 16px',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div
+            style={{
+              marginBottom: 12,
+              fontSize: 14,
+              fontWeight: 700,
+              color: 'rgba(26, 26, 29, 0.92)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Agent 配置
           </div>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
@@ -293,8 +303,8 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
               items={items}
             />
           )}
-        </>
+        </aside>
       )}
-    </aside>
+    </>
   );
 }

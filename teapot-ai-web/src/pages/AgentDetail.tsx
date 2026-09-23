@@ -59,6 +59,7 @@ import { useAuthStore } from '../store/auth';
 import { useIsPhone } from '../hooks/useIsPhone';
 import { PHONE_BP } from '../theme/breakpoints';
 import type {
+  AgentA2uiConfig,
   AgentChannelConfig,
   AgentMCPConfig,
   AgentMCPServer,
@@ -227,6 +228,8 @@ export default function AgentDetailPage() {
   const memFlushTrigger = Form.useWatch(['memory', 'flushTrigger'], form);
   /** 生图/生视频开关：开启后才展示六个能力位的模型选择器（SPEC-media-gen §4.8） */
   const mediaGenEnabled = Form.useWatch(['runtime', 'enableMediaGen'], form);
+  /** A2UI 开关：开启后才展示 catalog 与停止语义子配置 */
+  const a2uiEnabled = Form.useWatch(['a2ui', 'enabled'], form);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   /** Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组的记忆文件清单，支持逐条删除 */
@@ -337,6 +340,7 @@ export default function AgentDetailPage() {
       let mem: Partial<AgentMemoryConfig> = {};
       let st: Partial<AgentSessionTitleConfig> = {};
       let comp: Partial<AgentCompactionConfig> = {};
+      let a2ui: Partial<AgentA2uiConfig> = {};
       let storageTarget = 'base64';
       let parsedFeature: Record<string, unknown> = {};
       if (d.agent.feature) {
@@ -367,6 +371,9 @@ export default function AgentDetailPage() {
             }
             if (f.compaction) {
               comp = f.compaction;
+            }
+            if (f.a2ui) {
+              a2ui = f.a2ui;
             }
             if (f.storage && f.storage.mode === 'oss' && f.storage.storageRecord) {
               storageTarget = f.storage.storageRecord;
@@ -439,6 +446,15 @@ export default function AgentDetailPage() {
         },
         compaction: {
           modelId: comp.modelId,
+        },
+        // a2ui 缺省不启用；渲染后中断/持久化未配置时回显 SDK 默认 true（与后端回落一致）
+        a2ui: {
+          enabled: !!a2ui.enabled,
+          catalogId: a2ui.catalogId,
+          catalogResource: a2ui.catalogResource,
+          stopAfterPresent: a2ui.stopAfterPresent !== false,
+          maxComponents: a2ui.maxComponents,
+          surfacePersistEnabled: a2ui.surfacePersistEnabled !== false,
         },
       });
       setBoundSkills(d.skillNames || []);
@@ -520,7 +536,7 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
       channel?: Partial<AgentChannelConfig>;
@@ -531,6 +547,7 @@ export default function AgentDetailPage() {
       sessionTitle?: Partial<AgentSessionTitleConfig>;
       compaction?: Partial<AgentCompactionConfig>;
       compactionEnabled?: boolean;
+      a2ui?: Partial<AgentA2uiConfig>;
     };
     const payload: Record<string, unknown> = { ...rest };
     // 压缩开关 ↔ 列值映射：关 = -1/-1；开且未填有效值时回落默认 30/10（SPEC §25）
@@ -635,6 +652,26 @@ export default function AgentDetailPage() {
         feature.compaction = compactionFeature;
       } else {
         delete feature.compaction;
+      }
+    }
+    if (a2ui !== undefined) {
+      // 关闭时仅提交 {enabled:false}；开启时 catalog 空串 = 未配置（回落 SDK 默认），不落冗余键
+      if (!a2ui.enabled) {
+        feature.a2ui = { enabled: false };
+      } else {
+        const a2uiOut: Record<string, unknown> = { ...a2ui };
+        for (const key of ['catalogId', 'catalogResource']) {
+          const v = a2uiOut[key];
+          if (typeof v === 'string' && v.trim()) {
+            a2uiOut[key] = v.trim();
+          } else {
+            delete a2uiOut[key];
+          }
+        }
+        if (a2uiOut.maxComponents == null) {
+          delete a2uiOut.maxComponents;
+        }
+        feature.a2ui = a2uiOut;
       }
     }
     if (Object.keys(feature).length > 0) {
@@ -1216,6 +1253,70 @@ export default function AgentDetailPage() {
                       showIcon
                       message="生成模型目录加载失败，本次仅能使用各工具默认模型；可刷新重试"
                     />
+                  )}
+                  {/* A2UI 界面生成（feature.a2ui，AgentScope a2ui 扩展）：开启即挂 A2uiMiddleware */}
+                  <Form.Item
+                    name={['a2ui', 'enabled']}
+                    label="A2UI 界面生成"
+                    valuePropName="checked"
+                    tooltip="开启后 Agent 获得 a2ui_render / a2ui_present / a2ui_catalog / a2ui_ask_user_question 工具，可在对话中渲染表单、卡片、选项等交互界面；关闭 = 存量行为"
+                  >
+                    <Switch />
+                  </Form.Item>
+                  {!!a2uiEnabled && (
+                    <>
+                      <Row gutter={16}>
+                        <Col xs={24} sm={12}>
+                          <Form.Item
+                            name={['a2ui', 'catalogId']}
+                            label="Catalog ID"
+                            tooltip="信封内声明的组件目录标识，留空 = agentscope.io:a2ui/basic"
+                          >
+                            <Input allowClear placeholder="agentscope.io:a2ui/basic" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12}>
+                          <Form.Item
+                            name={['a2ui', 'catalogResource']}
+                            label="Catalog 资源路径"
+                            tooltip="组件目录 JSON 在服务端 classpath 的路径，留空 = 扩展内置 a2ui/basic-catalog.json；自定义目录需将文件放入服务端 resources，保存时校验存在性"
+                          >
+                            <Input allowClear placeholder="a2ui/basic-catalog.json" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      <Row gutter={16}>
+                        <Col xs={24} sm={8}>
+                          <Form.Item
+                            name={['a2ui', 'stopAfterPresent']}
+                            label="渲染后中断"
+                            valuePropName="checked"
+                            tooltip="a2ui_present 成功后停止本轮、等待用户在界面上操作后再继续；关闭则 Agent 渲染后自行推进"
+                          >
+                            <Switch />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={8}>
+                          <Form.Item
+                            name={['a2ui', 'surfacePersistEnabled']}
+                            label="界面状态跨轮持久化"
+                            valuePropName="checked"
+                            tooltip="开启后 surface 状态写入会话状态存储，多轮可持续更新同一界面；关闭则界面状态仅存活于单轮"
+                          >
+                            <Switch />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={8}>
+                          <Form.Item
+                            name={['a2ui', 'maxComponents']}
+                            label="单信封组件数上限"
+                            tooltip="1–500，留空 = 50"
+                          >
+                            <InputNumber min={1} max={500} style={{ width: '100%' }} placeholder="50" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                    </>
                   )}
                 </Form>
               </div>

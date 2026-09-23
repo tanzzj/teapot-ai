@@ -122,6 +122,25 @@ export interface AgentMediaModels {
   textToAudio?: string;
 }
 
+/**
+ * feature.a2ui 结构：Agent 画 UI 能力（AgentScope a2ui 扩展，纯 middleware 装配）。
+ * 字段缺省 = 回落 SDK 默认（内置 basic catalog、渲染后中断开启、组件数 50、surface 跨轮持久化）。
+ */
+export interface AgentA2uiConfig {
+  /** 是否启用（获得 a2ui_render / a2ui_present / a2ui_catalog / a2ui_ask_user_question 工具） */
+  enabled?: boolean;
+  /** 组件目录标识（信封 catalogId），留空 = agentscope.io:a2ui/basic */
+  catalogId?: string;
+  /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json；自定义资源需放在服务端 */
+  catalogResource?: string;
+  /** 渲染后中断：a2ui_present 成功后停止本轮、等待用户操作；留空 = 开启 */
+  stopAfterPresent?: boolean;
+  /** 单信封组件数上限 1–500，留空 = 50 */
+  maxComponents?: number;
+  /** surface 状态跨轮持久化；关闭则界面状态仅存活于单轮 */
+  surfacePersistEnabled?: boolean;
+}
+
 /** /api/model/media-models 目录项（SPEC-media-gen §4.8：实测可用模型清单 + 默认值） */
 export interface MediaModelCatalogEntry {
   /** runtime.mediaModels 的字段名 */

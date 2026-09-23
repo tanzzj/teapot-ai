@@ -34,6 +34,8 @@ public class AgentFeature {
     public static final String NS_SESSION_TITLE = "sessionTitle";
     /** 压缩摘要模型覆盖（trigger/keep 仍在 AgentDO 列，本命名空间仅 modelId） */
     public static final String NS_COMPACTION = "compaction";
+    /** A2UI 界面生成（AgentScope a2ui 扩展）：Agent 画 UI 能力开关 + catalog 与停止语义配置 */
+    public static final String NS_A2UI = "a2ui";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
@@ -50,6 +52,8 @@ public class AgentFeature {
     /** 闲置超时合法区间（SPEC §16.6） */
     private static final int IDLE_MIN_SECONDS = 300;
     private static final int IDLE_MAX_SECONDS = 21600;
+    /** a2ui 单信封组件数上限（配置校验区间） */
+    private static final int A2UI_MAX_COMPONENTS_LIMIT = 500;
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
@@ -264,6 +268,26 @@ public class AgentFeature {
         }
     }
 
+    /** a2ui 命名空间；未配置返回 null（按不启用处理，存量 Agent 零影响） */
+    @SuppressWarnings("unchecked")
+    public A2ui getA2ui() {
+        Object raw = namespaces.get(NS_A2UI);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, A2ui.class);
+    }
+
+    /** 写入/替换 a2ui 命名空间 */
+    public void setA2ui(A2ui a2ui) {
+        if (a2ui == null) {
+            namespaces.remove(NS_A2UI);
+        } else {
+            namespaces.put(NS_A2UI, MAPPER.convertValue(a2ui, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
     /**
      * 保存时强校验（SPEC §16.6/§22 校验表）：不合法直接抛 BizException 拒绝。
      * 记录存在性由 AgentService 补充校验（模型层不依赖 Service）。
@@ -276,6 +300,7 @@ public class AgentFeature {
         validateMcp();
         validateRuntime();
         validateMemory();
+        validateA2ui();
         Sandbox sb = getSandbox();
         if (sb == null) {
             return;
@@ -391,6 +416,27 @@ public class AgentFeature {
         }
     }
 
+    /**
+     * a2ui 命名空间校验：启用时自定义 catalogResource 必须真实存在于服务端 classpath
+     * （catalog 在 A2uiMiddleware 构造期加载，缺失会导致该 Agent 每轮构建失败，故保存即拦截）；
+     * maxComponents 区间 [1,500]。
+     */
+    private void validateA2ui() {
+        A2ui cfg = getA2ui();
+        if (cfg == null || !Boolean.TRUE.equals(cfg.getEnabled())) {
+            return;
+        }
+        if (cfg.getMaxComponents() != null
+                && (cfg.getMaxComponents() < 1 || cfg.getMaxComponents() > A2UI_MAX_COMPONENTS_LIMIT)) {
+            throw new BizException("a2ui maxComponents 超出范围（1–" + A2UI_MAX_COMPONENTS_LIMIT + "）");
+        }
+        String resource = cfg.getCatalogResource();
+        if (!isBlank(resource)
+                && AgentFeature.class.getClassLoader().getResource(resource.trim()) == null) {
+            throw new BizException("a2ui catalogResource 不存在（服务端 classpath）：" + resource.trim());
+        }
+    }
+
     /** mcp 命名空间校验：启用时 servers 不能为空；每条 server 必须 record 或 transport 二选一 */
     private void validateMcp() {
         MCP mcp = getMcp();
@@ -471,6 +517,26 @@ public class AgentFeature {
     public static class Compaction {
         /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
         private String modelId;
+    }
+
+    /**
+     * a2ui 命名空间结构（AgentScope a2ui 扩展）：Agent 画 UI 能力。
+     * 字段全部可空（null = 回落 A2uiConfig SDK 默认）；enabled 缺省不启用，存量 Agent 零影响。
+     */
+    @Data
+    public static class A2ui {
+        /** 是否启用（挂载 A2uiMiddleware，获得 a2ui_render / a2ui_present / a2ui_catalog / a2ui_ask_user_question） */
+        private Boolean enabled;
+        /** 组件目录标识（信封 catalogId 字段），留空 = agentscope.io:a2ui/basic */
+        private String catalogId;
+        /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json（扩展 jar 内置基础目录） */
+        private String catalogResource;
+        /** 渲染后中断：a2ui_present 成功后是否停止本轮 acting（等用户操作），留空 = true */
+        private Boolean stopAfterPresent;
+        /** 单信封组件数上限 [1,500]，留空 = 50 */
+        private Integer maxComponents;
+        /** surface 状态跨轮持久化（AgentStateStore），留空 = true；关闭则 surface 仅存活于单轮 */
+        private Boolean surfacePersistEnabled;
     }
 
     /** mcp 命名空间结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置） */
