@@ -297,6 +297,17 @@ button[class*='btn-primary'] {
   background: #bfbfbf;
 }
 
+/* 隐藏滚动条但保留滚动能力（左侧会话列表） */
+.teapot-scroll-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.teapot-scroll-hide::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 /* ── 移动端顶栏下拉菜单放大（SPEC：popup menu 放大）
    antd v5 内置规则 .ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item 特异性 (0,3,0)，
    此处同特异性 + !important 确保胜出 ── */

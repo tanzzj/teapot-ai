@@ -716,7 +716,7 @@ export default function Chat() {
           }}
         />
       )}
-      <div style={{ height: '100%', flex: 1, minWidth: 0, display: showHome ? 'none' : undefined }}>
+      <div style={{ height: '100%', flex: 1, minWidth: 0, overflow: 'hidden', display: showHome ? 'none' : undefined }}>
         {/* key=agentKey：切换 Agent 时整体重建，会话列表随之按新 Agent 重载 */}
         <AgentScopeRuntimeWebUI key={currentAgent} options={options} ref={webUIRef} />
       </div>

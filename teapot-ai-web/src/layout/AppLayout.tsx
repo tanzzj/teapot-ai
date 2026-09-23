@@ -199,6 +199,9 @@ export default function AppLayout() {
           {/* 对话页顶栏 Agent 选择器（原聊天区右上角，移至全局 header） */}
           <AgentSelector />
 
+          {/* 对话页右侧 Agent 配置面板折叠开关的 Portal 挂载点（仅桌面聊天页填充，其余为空） */}
+          <div id="teapot-header-extra" style={{ display: 'flex', alignItems: 'center' }} />
+
           {/* 用户菜单：对话页已下沉到左栏底部 UserFooter（连同系统配置入口），顶栏不再展示 */}
           {!isChatPage && !(isMobile && mobileView === 'chat') && (
             <UserMenu showName={!isMobile} />
@@ -206,7 +209,7 @@ export default function AppLayout() {
         </header>
 
         {/* 内容区 */}
-        <main style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <main style={{ flex: 1, minHeight: 0, overflow: isChatPage ? 'hidden' : 'auto' }}>
           <Outlet />
         </main>
       </div>

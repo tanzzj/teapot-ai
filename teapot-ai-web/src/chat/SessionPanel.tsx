@@ -127,6 +127,7 @@ export default function SessionPanel(props: { title: string; onNavigate?: () => 
       )}
 
       <div
+        className="teapot-scroll-hide"
         style={{
           flex: 1,
           minHeight: 0,
