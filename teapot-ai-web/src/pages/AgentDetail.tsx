@@ -28,6 +28,7 @@ import {
   SparkMemoryLine,
   SparkMultiAgentLine,
   SparkApplicationToolLine,
+  SparkGuardrailLine,
   SparkPlusLine,
 } from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -61,6 +62,7 @@ import { useIsPhone } from '../hooks/useIsPhone';
 import { PHONE_BP } from '../theme/breakpoints';
 import type {
   AgentA2uiConfig,
+  AgentGuardConfig,
   AgentChannelConfig,
   AgentMCPConfig,
   AgentMCPServer,
@@ -80,7 +82,7 @@ import type {
   StorageRecordName,
 } from '../types';
 
-type Section = 'profile' | 'basic' | 'tools' | 'a2ui' | 'multiagent' | 'memory' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
+type Section = 'profile' | 'basic' | 'tools' | 'a2ui' | 'guard' | 'multiagent' | 'memory' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
 
 /** 胶囊菜单展开宽度（移动端悬浮展开层同宽） */
 const MENU_W = 208;
@@ -231,6 +233,8 @@ export default function AgentDetailPage() {
   const mediaGenEnabled = Form.useWatch(['runtime', 'enableMediaGen'], form);
   /** A2UI 开关：开启后才展示 catalog 与停止语义子配置 */
   const a2uiEnabled = Form.useWatch(['a2ui', 'enabled'], form);
+  const guardEnabled = Form.useWatch(['guard', 'enabled'], form);
+  const guardMode = Form.useWatch(['guard', 'mode'], form);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   /** Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组的记忆文件清单，支持逐条删除 */
@@ -342,6 +346,7 @@ export default function AgentDetailPage() {
       let st: Partial<AgentSessionTitleConfig> = {};
       let comp: Partial<AgentCompactionConfig> = {};
       let a2ui: Partial<AgentA2uiConfig> = {};
+      let gd: Partial<AgentGuardConfig> = {};
       let storageTarget = 'base64';
       let parsedFeature: Record<string, unknown> = {};
       if (d.agent.feature) {
@@ -375,6 +380,9 @@ export default function AgentDetailPage() {
             }
             if (f.a2ui) {
               a2ui = f.a2ui;
+            }
+            if (f.guard) {
+              gd = f.guard;
             }
             if (f.storage && f.storage.mode === 'oss' && f.storage.storageRecord) {
               storageTarget = f.storage.storageRecord;
@@ -457,6 +465,18 @@ export default function AgentDetailPage() {
           stopAfterPresent: a2ui.stopAfterPresent !== false,
           maxComponents: a2ui.maxComponents,
           surfacePersistEnabled: a2ui.surfacePersistEnabled !== false,
+          appendPreference: a2ui.appendPreference,
+          renderNoThinking: a2ui.renderNoThinking === true,
+        },
+        // 意图守卫：规则列表回显成多行文本；阈值/拒答文案未配置时留空跟随 SDK 默认
+        guard: {
+          enabled: !!gd.enabled,
+          mode: gd.mode ?? 'jev',
+          modelId: gd.modelId,
+          acceptText: argsToLines(gd.acceptIntents),
+          rejectText: argsToLines(gd.rejectIntents),
+          allowThreshold: gd.allowThreshold,
+          denyMessage: gd.denyMessage,
         },
       });
       setBoundSkills(d.skillNames || []);
@@ -538,7 +558,7 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, guard, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
       channel?: Partial<AgentChannelConfig>;
@@ -550,6 +570,7 @@ export default function AgentDetailPage() {
       compaction?: Partial<AgentCompactionConfig>;
       compactionEnabled?: boolean;
       a2ui?: Partial<AgentA2uiConfig>;
+      guard?: Partial<AgentGuardConfig> & { acceptText?: string; rejectText?: string };
     };
     const payload: Record<string, unknown> = { ...rest };
     // 压缩开关 ↔ 列值映射：关 = -1/-1；开且未填有效值时回落默认 30/10（SPEC §25）
@@ -662,7 +683,7 @@ export default function AgentDetailPage() {
         feature.a2ui = { enabled: false };
       } else {
         const a2uiOut: Record<string, unknown> = { ...a2ui };
-        for (const key of ['catalogId', 'catalogResource']) {
+        for (const key of ['catalogId', 'catalogResource', 'appendPreference']) {
           const v = a2uiOut[key];
           if (typeof v === 'string' && v.trim()) {
             a2uiOut[key] = v.trim();
@@ -673,7 +694,35 @@ export default function AgentDetailPage() {
         if (a2uiOut.maxComponents == null) {
           delete a2uiOut.maxComponents;
         }
+        if (a2uiOut.renderNoThinking !== true) {
+          delete a2uiOut.renderNoThinking;
+        }
         feature.a2ui = a2uiOut;
+      }
+    }
+    if (guard !== undefined) {
+      // 意图守卫：关闭仅提交 {enabled:false}；多行文本转规则数组，空阈值/空文案不落键（回落 SDK 默认）
+      if (!guard.enabled) {
+        feature.guard = { enabled: false };
+      } else {
+        const guardOut: Record<string, unknown> = {
+          enabled: true,
+          mode: guard.mode ?? 'jev',
+          acceptIntents: linesToArgs(guard.acceptText ?? ''),
+          rejectIntents: linesToArgs(guard.rejectText ?? ''),
+        };
+        if (guardOut.mode === 'llm') {
+          if (guard.modelId) {
+            guardOut.modelId = guard.modelId;
+          }
+        } else if (guard.allowThreshold != null) {
+          // 放行阈值仅 JEV 模式有意义
+          guardOut.allowThreshold = guard.allowThreshold;
+        }
+        if (typeof guard.denyMessage === 'string' && guard.denyMessage.trim()) {
+          guardOut.denyMessage = guard.denyMessage.trim();
+        }
+        feature.guard = guardOut;
       }
     }
     if (Object.keys(feature).length > 0) {
@@ -694,6 +743,7 @@ export default function AgentDetailPage() {
     { key: 'basic', label: 'Basic Info', icon: <SparkDocumentLine /> },
     { key: 'tools', label: 'Tool & Advanced', icon: <SparkSettingLine /> },
     { key: 'a2ui', label: 'A2UI', icon: <SparkApplicationToolLine /> },
+    { key: 'guard', label: '意图守卫', icon: <SparkGuardrailLine /> },
     { key: 'multiagent', label: 'MultiAgent', icon: <SparkMultiAgentLine /> },
     { key: 'memory', label: '记忆', icon: <SparkMemoryLine /> },
     { key: 'sandbox', label: 'Sandbox', icon: <SparkInternetLine /> },
@@ -780,7 +830,7 @@ export default function AgentDetailPage() {
           </div>
         </div>
         <div style={{ flex: 1 }} />
-        {(section === 'basic' || section === 'tools' || section === 'a2ui' || section === 'multiagent' || section === 'memory' || section === 'sandbox' || section === 'channel') && (
+        {(section === 'basic' || section === 'tools' || section === 'a2ui' || section === 'guard' || section === 'multiagent' || section === 'memory' || section === 'sandbox' || section === 'channel') && (
           <Button type="primary" onClick={onSave} loading={saving}>
             Save
           </Button>
@@ -1333,6 +1383,129 @@ export default function AgentDetailPage() {
                             tooltip="1–500，留空 = 50"
                           >
                             <InputNumber min={1} max={500} style={{ width: '100%' }} placeholder="50" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      <Row gutter={16}>
+                        <Col xs={24} sm={8}>
+                          <Form.Item
+                            name={['a2ui', 'renderNoThinking']}
+                            label="渲染子模型关闭思考"
+                            valuePropName="checked"
+                            tooltip="渲染子 Agent 输出结构化组件树，思考只会拖慢渲染：开启后子模型显式下发 enable_thinking=false（qwen3 混合思考模型不传参数时服务端默认开启思考）；关闭 = 子模型跟随主模型实例，思考随 Agent 级配置"
+                          >
+                            <Switch />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      <Form.Item
+                        name={['a2ui', 'appendPreference']}
+                        label="用户界面偏好（一行一条，可选）"
+                        tooltip="追加进主模型系统提示词与渲染子 Agent 提示词的常驻偏好（如「界面文案用中文」「表单紧凑一点」）；每次画界面都会带上，留空 = 不追加"
+                      >
+                        <Input.TextArea
+                          rows={3}
+                          placeholder={'界面文案用中文\n表单字段紧凑排列'}
+                          style={{ fontFamily: 'monospace' }}
+                        />
+                      </Form.Item>
+                    </>
+                  )}
+                </Form>
+              </div>
+            )}
+
+            {section === 'guard' && (
+              <div className="glass-card" style={{ padding: 24 }}>
+                <Form form={form} layout="vertical">
+                  <Form.Item
+                    name={['guard', 'enabled']}
+                    label="启用意图守卫"
+                    valuePropName="checked"
+                    tooltip="开启后每条用户请求先按规则判定是否允许（JEV 决策模型或大模型判定，见下）；未通过时主模型看不到该请求，直接返回拒答文案。至少填写一条接受/拒绝意图规则才会挂载"
+                  >
+                    <Switch />
+                  </Form.Item>
+                  {!!guardEnabled && (
+                    <>
+                      <Row gutter={16}>
+                        <Col xs={24} sm={12}>
+                          <Form.Item
+                            name={['guard', 'mode']}
+                            label="拦截方式"
+                            tooltip="jev=TypeSafe JEV 决策模型（概率判定，需服务端 TYPESAFE_API_KEY，缺密钥跳过挂载）；llm=用一个大模型按规则做 ACCEPT/REJECT 判定，无需额外密钥"
+                          >
+                            <Select
+                              options={[
+                                { value: 'jev', label: 'JEV 决策模型（默认）' },
+                                { value: 'llm', label: '大模型判定' },
+                              ]}
+                            />
+                          </Form.Item>
+                        </Col>
+                        {guardMode === 'llm' && (
+                          <Col xs={24} sm={12}>
+                            <Form.Item
+                              name={['guard', 'modelId']}
+                              label="判定模型"
+                              tooltip="意图判定使用的模型，留空跟随 Agent 主模型（建议选轻量快模型，判定会增加每轮首字延迟）"
+                            >
+                              <Select
+                                allowClear
+                                placeholder="跟随 Agent 主模型"
+                                options={models.map((m) => ({ label: m, value: m }))}
+                              />
+                            </Form.Item>
+                          </Col>
+                        )}
+                      </Row>
+                      <Row gutter={16}>
+                        <Col xs={24} sm={12}>
+                          <Form.Item
+                            name={['guard', 'acceptText']}
+                            label="接受的意图（一行一条）"
+                            tooltip="白名单意图描述，例如「编程问答」「查询订单状态」。填写后未命中任何接受意图的请求会被拒绝"
+                          >
+                            <Input.TextArea
+                              rows={6}
+                              placeholder={'编程问答\n查询订单状态'}
+                              style={{ fontFamily: 'monospace' }}
+                            />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12}>
+                          <Form.Item
+                            name={['guard', 'rejectText']}
+                            label="拒绝的意图（一行一条）"
+                            tooltip="黑名单意图描述，例如「索要他人隐私」「生成违法内容」。命中任一拒绝意图的请求会被直接拒答"
+                          >
+                            <Input.TextArea
+                              rows={6}
+                              placeholder={'索要他人隐私\n生成违法内容'}
+                              style={{ fontFamily: 'monospace' }}
+                            />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      <Row gutter={16}>
+                        {guardMode !== 'llm' && (
+                          <Col xs={24} sm={8}>
+                            <Form.Item
+                              name={['guard', 'allowThreshold']}
+                              label="放行阈值"
+                              tooltip="JEV 给出「请求被允许」的概率低于该值即拒绝，0–1，留空 = 0.5（仅 JEV 模式）"
+                            >
+                              <InputNumber min={0} max={1} step={0.05} style={{ width: '100%' }} placeholder="0.5" />
+                            </Form.Item>
+                          </Col>
+                        )}
+                        <Col xs={24} sm={guardMode === 'llm' ? 24 : 16}>
+                          <Form.Item
+                            name={['guard', 'denyMessage']}
+                            label="拒答文案"
+                            tooltip="被拒绝时回复给用户的内容，留空 = 内置默认文案（JEV 模式为英文，LLM 模式为中文）"
+                          >
+                            <Input allowClear placeholder="抱歉，该请求不符合本 Agent 的使用范围。" />
                           </Form.Item>
                         </Col>
                       </Row>

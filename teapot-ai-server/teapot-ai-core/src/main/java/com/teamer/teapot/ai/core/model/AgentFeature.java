@@ -36,6 +36,8 @@ public class AgentFeature {
     public static final String NS_COMPACTION = "compaction";
     /** A2UI 界面生成（AgentScope a2ui 扩展）：Agent 画 UI 能力开关 + catalog 与停止语义配置 */
     public static final String NS_A2UI = "a2ui";
+    /** 意图守卫（AgentScope jev 扩展）：JEV 判定用户请求意图，接受/拒绝规则可配置 */
+    public static final String NS_GUARD = "guard";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
@@ -54,6 +56,13 @@ public class AgentFeature {
     private static final int IDLE_MAX_SECONDS = 21600;
     /** a2ui 单信封组件数上限（配置校验区间） */
     private static final int A2UI_MAX_COMPONENTS_LIMIT = 500;
+    /** a2ui 用户界面偏好长度上限（进两份系统提示词，防配置失控） */
+    private static final int A2UI_PREFERENCE_MAX_LENGTH = 1000;
+    /** guard 规则条数上限与单条长度上限（拼接进一条 JEV 判断文本，防配置失控撑爆请求体） */
+    private static final int GUARD_MAX_RULES = 30;
+    /** 意图守卫拦截方式可选值：jev=JEV 决策模型 / llm=大模型判定 */
+    private static final Set<String> GUARD_MODES = Set.of("jev", "llm");
+    private static final int GUARD_MAX_RULE_LENGTH = 500;
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
@@ -288,6 +297,26 @@ public class AgentFeature {
         }
     }
 
+    /** guard 命名空间；未配置返回 null（按不启用处理） */
+    @SuppressWarnings("unchecked")
+    public Guard getGuard() {
+        Object raw = namespaces.get(NS_GUARD);
+        if (!(raw instanceof Map)) {
+            return null;
+        }
+        return MAPPER.convertValue(raw, Guard.class);
+    }
+
+    /** 写入/替换 guard 命名空间 */
+    public void setGuard(Guard guard) {
+        if (guard == null) {
+            namespaces.remove(NS_GUARD);
+        } else {
+            namespaces.put(NS_GUARD, MAPPER.convertValue(guard, new TypeReference<Map<String, Object>>() {
+            }));
+        }
+    }
+
     /**
      * 保存时强校验（SPEC §16.6/§22 校验表）：不合法直接抛 BizException 拒绝。
      * 记录存在性由 AgentService 补充校验（模型层不依赖 Service）。
@@ -301,6 +330,7 @@ public class AgentFeature {
         validateRuntime();
         validateMemory();
         validateA2ui();
+        validateGuard();
         Sandbox sb = getSandbox();
         if (sb == null) {
             return;
@@ -435,6 +465,42 @@ public class AgentFeature {
                 && AgentFeature.class.getClassLoader().getResource(resource.trim()) == null) {
             throw new BizException("a2ui catalogResource 不存在（服务端 classpath）：" + resource.trim());
         }
+        String preference = cfg.getAppendPreference();
+        if (preference != null && preference.trim().length() > A2UI_PREFERENCE_MAX_LENGTH) {
+            throw new BizException("a2ui appendPreference 最多 " + A2UI_PREFERENCE_MAX_LENGTH + " 字符");
+        }
+    }
+
+    /**
+     * guard 命名空间校验：allowThreshold 区间 [0,1]；规则条数 ≤30、单条非空白且 ≤500 字符
+     * （规则会被拼接成一条 JEV 判断文本，防止配置失控）。
+     */
+    private void validateGuard() {
+        Guard gd = getGuard();
+        if (gd == null || !Boolean.TRUE.equals(gd.getEnabled())) {
+            return;
+        }
+        if (gd.getAllowThreshold() != null && (gd.getAllowThreshold() < 0 || gd.getAllowThreshold() > 1)) {
+            throw new BizException("guard allowThreshold 超出范围（0–1）");
+        }
+        if (!isBlank(gd.getMode()) && !GUARD_MODES.contains(gd.getMode().trim().toLowerCase())) {
+            throw new BizException("guard mode 非法，可选值：" + GUARD_MODES);
+        }
+        List<String> rules = List.of(
+                gd.getAcceptIntents() == null ? List.<String>of() : gd.getAcceptIntents(),
+                gd.getRejectIntents() == null ? List.<String>of() : gd.getRejectIntents())
+                .stream().flatMap(List::stream).toList();
+        if (rules.size() > GUARD_MAX_RULES) {
+            throw new BizException("guard 意图规则最多 " + GUARD_MAX_RULES + " 条");
+        }
+        for (String rule : rules) {
+            if (isBlank(rule)) {
+                throw new BizException("guard 意图规则不能为空白条目");
+            }
+            if (rule.trim().length() > GUARD_MAX_RULE_LENGTH) {
+                throw new BizException("guard 意图规则单条最多 " + GUARD_MAX_RULE_LENGTH + " 字符");
+            }
+        }
     }
 
     /** mcp 命名空间校验：启用时 servers 不能为空；每条 server 必须 record 或 transport 二选一 */
@@ -537,6 +603,40 @@ public class AgentFeature {
         private Integer maxComponents;
         /** surface 状态跨轮持久化（AgentStateStore），留空 = true；关闭则 surface 仅存活于单轮 */
         private Boolean surfacePersistEnabled;
+        /**
+         * 用户界面偏好（自由文本，可多行，一行一条）：同时追加进主模型系统提示词与
+         * 渲染子 Agent 提示词（SDK A2uiConfig.appendPreference），留空 = 不追加。
+         */
+        private String appendPreference;
+        /**
+         * 渲染子模型显式关闭思考（DashScope enableThinking=false）：开启时渲染子 Agent
+         * 使用本 Agent 模型的无思考实例（子模型输出结构化组件树，思考只会拖慢渲染）；
+         * 留空/false = 不覆写，子模型跟随 Agent 主模型实例（思考随 Agent 级配置）。
+         */
+        private Boolean renderNoThinking;
+    }
+
+    /**
+     * guard 命名空间结构（AgentScope jev 扩展）：JEV 意图守卫。
+     * 接受/拒绝意图各一组自由文本规则，装配时拼成一条判断文本对最新用户消息提问；
+     * 未启用或两类规则都为空 → 不挂 JevIntentGuardMiddleware（存量 Agent 零影响）。
+     */
+    @Data
+    public static class Guard {
+        /** 是否启用意图守卫（jev 模式需服务端配置 TYPESAFE_API_KEY，缺失时跳过挂载并告警） */
+        private Boolean enabled;
+        /** 拦截方式：jev=JEV 决策模型（默认）/ llm=大模型判定 */
+        private String mode;
+        /** llm 模式的判定模型，留空 = 跟随 Agent 主模型 */
+        private String modelId;
+        /** 接受的意图（白名单语义，每条一句 instruction 文本） */
+        private List<String> acceptIntents;
+        /** 拒绝的意图（黑名单语义，每条一句 instruction 文本） */
+        private List<String> rejectIntents;
+        /** 放行阈值（仅 jev 模式）：P(允许) 低于该值即拒绝 [0,1]，留空 = 0.5（SDK 默认） */
+        private Double allowThreshold;
+        /** 拒答文案，留空 = 各模式内置默认 */
+        private String denyMessage;
     }
 
     /** mcp 命名空间结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置） */

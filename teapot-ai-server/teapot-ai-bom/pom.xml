@@ -112,6 +112,12 @@
                 <artifactId>agentscope-extensions-a2ui</artifactId>
                 <version>${agentscope.version}</version>
             </dependency>
+            <!-- JEV（TypeSafe System One）决策客户端 + 示例中间件（feature.guard 意图守卫挂载 JevIntentGuardMiddleware） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-jev</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
             <!-- JDA（SPEC §24 修订：Discord 渠道自实现 channel 适配器） -->
             <dependency>
                 <groupId>net.dv8tion</groupId>

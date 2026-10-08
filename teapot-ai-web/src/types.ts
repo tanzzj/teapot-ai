@@ -141,6 +141,31 @@ export interface AgentA2uiConfig {
   maxComponents?: number;
   /** surface 状态跨轮持久化；关闭则界面状态仅存活于单轮 */
   surfacePersistEnabled?: boolean;
+  /** 用户界面偏好（自由文本，一行一条）：同时追加进主模型系统提示词与渲染子 Agent 提示词；留空 = 不追加 */
+  appendPreference?: string;
+  /** 渲染子模型显式关闭思考（DashScope enableThinking=false）；关闭 = 子模型跟随主模型实例 */
+  renderNoThinking?: boolean;
+}
+
+/**
+ * feature.guard 结构：意图守卫（拦截方式 jev=JEV 决策模型 / llm=大模型判定）。
+ * 启用且至少配一条意图规则才挂载中间件；jev 模式需服务端 TYPESAFE_API_KEY，缺密钥跳过挂载。
+ */
+export interface AgentGuardConfig {
+  /** 是否启用意图守卫（主模型看到请求前先判定用户意图） */
+  enabled?: boolean;
+  /** 拦截方式：jev=JEV 决策模型（默认，需服务端 TYPESAFE_API_KEY）/ llm=大模型判定 */
+  mode?: 'jev' | 'llm';
+  /** llm 模式的判定模型，留空 = 跟随 Agent 主模型 */
+  modelId?: string;
+  /** 接受的意图（白名单语义，每条一句判断指令） */
+  acceptIntents?: string[];
+  /** 拒绝的意图（黑名单语义，每条一句判断指令） */
+  rejectIntents?: string[];
+  /** 放行阈值 0–1（仅 jev 模式）：P(允许) 低于该值即拒绝，留空 = 0.5 */
+  allowThreshold?: number;
+  /** 拒答文案，留空 = 各模式内置默认 */
+  denyMessage?: string;
 }
 
 /** /api/model/media-models 目录项（SPEC-media-gen §4.8：实测可用模型清单 + 默认值） */

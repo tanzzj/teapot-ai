@@ -2,6 +2,7 @@ package com.teamer.teapot.ai.core;
 
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.core.middleware.DangerousCommandGuardMiddleware;
+import com.teamer.teapot.ai.core.middleware.LlmIntentGuardMiddleware;
 import com.teamer.teapot.ai.core.middleware.SessionTitleGenMiddleware;
 import com.teamer.teapot.ai.core.mcp.McpConfigToolMiddleware;
 import com.teamer.teapot.ai.core.mcp.McpConfigTools;
@@ -45,6 +46,8 @@ import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.a2ui.A2uiConfig;
 import io.agentscope.extensions.a2ui.A2uiMiddleware;
+import io.agentscope.extensions.judge.jev.JevClient;
+import io.agentscope.extensions.judge.jev.example.JevIntentGuardMiddleware;
 import io.agentscope.extensions.model.dashscope.tool.DashScopeMultiModalTool;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunFilesystemSpec;
 import io.agentscope.extensions.sandbox.agentrun.AgentRunNasMountConfig;
@@ -116,6 +119,11 @@ public class AgentBuilder {
     /** 生图/生视频工具密钥（SPEC-media-gen §4.1：复用现有环境变量，不落库） */
     @Value("${DASHSCOPE_API_KEY:}")
     private String dashscopeApiKey;
+    /** JEV（TypeSafe System One）决策密钥（feature.guard 意图守卫；环境变量注入，不落库，与 DASHSCOPE 同款） */
+    @Value("${TYPESAFE_API_KEY:}")
+    private String jevApiKey;
+    /** 共享 JevClient（懒建，缺密钥为 null；无状态 HTTP client，跨 Agent 复用） */
+    private volatile JevClient jevClient;
 
     public AgentBuilder(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
                           ChatSessionMapper chatSessionMapper,
@@ -275,7 +283,9 @@ public class AgentBuilder {
         }
         // A2UI 界面生成（feature.a2ui）：启用即挂 A2uiMiddleware，注册 a2ui_render + ask_user_question
         // （表单档，覆盖 Web 链路默认挂的纯文本澄清档；组件 DSL 在 SDK 渲染子 Agent 内）
-        applyA2ui(builder, feature.getA2ui(), agentKey);
+        applyA2ui(builder, feature.getA2ui(), agentKey, agentDO.getModelId());
+        // 意图守卫（feature.guard）：启用且有规则 → 按 mode 挂 JEV 判定或大模型判定守卫
+        applyGuard(builder, feature.getGuard(), agentKey, agentDO.getModelId());
         // 媒体模态守卫（SPEC-media-gen §4.4）：模型能力位未声明的媒体块（如 qwen3.8-max 的 audio）
         // 在请求视图里降级为文本引用，避免产物块一旦进入历史就被每轮重放、被平台 400 钉死整个会话；
         // 不依赖生成开关，任何来源的媒体块（工具产物/用户上传）都走同一守卫
@@ -395,10 +405,12 @@ public class AgentBuilder {
      * 经 ToolkitAware#rebindToolkit 自动注册 a2ui_render / ask_user_question（表单档）两工具
      * （自然语言意图入参；组件 DSL 与 a2ui_catalog 收进 SDK 内部的渲染子 Agent，主 Agent 不感知；
      * 原 a2ui_present 并入 a2ui_render，渲染后停止本轮由 stopAfterPresent 控制）；
-     * 渲染子模型缺省回落本 Agent 模型。
+     * 渲染子模型缺省回落本 Agent 模型；renderNoThinking=true 时显式注入本 Agent 模型的
+     * 无思考实例（同守卫判定同款 resolveNoThinking 链路）。
      * catalog 在构造期加载，加载失败降级为不挂载并告警，不阻断对话。
      */
-    private void applyA2ui(HarnessAgent.Builder builder, AgentFeature.A2ui cfg, String agentKey) {
+    private void applyA2ui(HarnessAgent.Builder builder, AgentFeature.A2ui cfg, String agentKey,
+                           String defaultModelId) {
         if (cfg == null || !Boolean.TRUE.equals(cfg.getEnabled())) {
             return;
         }
@@ -418,15 +430,97 @@ public class AgentBuilder {
         if (cfg.getSurfacePersistEnabled() != null) {
             cb.surfacePersistEnabled(cfg.getSurfacePersistEnabled());
         }
+        if (notBlank(cfg.getAppendPreference())) {
+            cb.appendPreference(cfg.getAppendPreference().trim());
+        }
         A2uiConfig config = cb.build();
         try {
-            builder.middleware(new A2uiMiddleware(config));
+            A2uiMiddleware middleware = Boolean.TRUE.equals(cfg.getRenderNoThinking())
+                    // 子模型输出结构化组件树，思考纯属拖慢渲染：显式关闭（同守卫判定同款链路）
+                    ? new A2uiMiddleware(config, modelRegistry.resolveNoThinking(defaultModelId))
+                    : new A2uiMiddleware(config);
+            builder.middleware(middleware);
         } catch (Exception e) {
-            log.error("A2UI catalog 加载失败，界面能力降级为不挂载 agentKey={}：{}", agentKey, e.getMessage());
+            log.error("A2UI 挂载失败（catalog/渲染子模型解析），界面能力降级为不挂载 agentKey={}：{}",
+                    agentKey, e.getMessage());
             return;
         }
-        log.info("A2UI 界面生成已启用 agentKey={} catalog={} stopAfterPresent={} surfacePersist={}",
-                agentKey, config.catalogResource(), config.stopAfterPresent(), config.surfacePersistEnabled());
+        log.info("A2UI 界面生成已启用 agentKey={} catalog={} stopAfterPresent={} surfacePersist={} 渲染子模型={}",
+                agentKey, config.catalogResource(), config.stopAfterPresent(), config.surfacePersistEnabled(),
+                Boolean.TRUE.equals(cfg.getRenderNoThinking())
+                        ? defaultModelId + "(关闭思考)" : "跟随主模型");
+    }
+
+    /**
+     * 意图守卫（feature.guard）：接受/拒绝意图规则拼成判断文本，主模型看到请求前判定意图，
+     * 被拒请求由内置拒答模型直接回绝（不进主模型）。拦截方式按 mode 分支：
+     * jev=JEV 决策模型（需 TYPESAFE_API_KEY，缺密钥跳过挂载并告警，与生图工具同款先例）；
+     * llm=大模型判定（判定模型按 modelId 解析，留空跟随 Agent 主模型；判定实例统一显式关闭思考）。
+     * 门控：enabled + 至少一条规则。
+     */
+    private void applyGuard(HarnessAgent.Builder builder, AgentFeature.Guard cfg, String agentKey,
+                            String defaultModelId) {
+        if (cfg == null || !Boolean.TRUE.equals(cfg.getEnabled())) {
+            return;
+        }
+        List<String> rules = new ArrayList<>();
+        if (cfg.getAcceptIntents() != null) {
+            cfg.getAcceptIntents().stream().filter(AgentBuilder::notBlank)
+                    .forEach(intent -> rules.add("接受的意图：" + intent.trim()));
+        }
+        if (cfg.getRejectIntents() != null) {
+            cfg.getRejectIntents().stream().filter(AgentBuilder::notBlank)
+                    .forEach(intent -> rules.add("拒绝的意图：" + intent.trim()));
+        }
+        if (rules.isEmpty()) {
+            log.info("意图守卫已启用但未配置意图规则，跳过挂载 agentKey={}", agentKey);
+            return;
+        }
+        String mode = notBlank(cfg.getMode()) ? cfg.getMode().trim().toLowerCase() : "jev";
+        if ("llm".equals(mode)) {
+            // 判定输出只有 ACCEPT/REJECT，思考纯属拖慢守卫：统一显式关闭思考
+            // （qwen3 混合思考模型不下发参数时服务端默认开启）
+            Model judgeModel = modelRegistry.resolveNoThinking(
+                    notBlank(cfg.getModelId()) ? cfg.getModelId().trim() : defaultModelId);
+            builder.middleware(new LlmIntentGuardMiddleware(judgeModel, rules,
+                    notBlank(cfg.getDenyMessage()) ? cfg.getDenyMessage().trim() : null));
+            log.info("意图守卫已挂载(LLM 判定) agentKey={} 规则数={} 判定模型={}",
+                    agentKey, rules.size(), judgeModel.getModelName());
+            return;
+        }
+        JevClient client = jevClientOrNull();
+        if (client == null) {
+            log.warn("意图守卫已启用但 TYPESAFE_API_KEY 未配置，跳过挂载 agentKey={}", agentKey);
+            return;
+        }
+        JevIntentGuardMiddleware.Builder gb = JevIntentGuardMiddleware.builder(client)
+                .guardRules(rules.toArray(new String[0]));
+        if (cfg.getAllowThreshold() != null) {
+            gb.allowThreshold(cfg.getAllowThreshold());
+        }
+        if (notBlank(cfg.getDenyMessage())) {
+            gb.denyMessage(cfg.getDenyMessage().trim());
+        }
+        builder.middleware(gb.build());
+        log.info("意图守卫已挂载(JEV) agentKey={} 规则数={} allowThreshold={}",
+                agentKey, rules.size(), cfg.getAllowThreshold() == null ? 0.5 : cfg.getAllowThreshold());
+    }
+
+    /** 共享 JevClient（懒建双检锁）；密钥未配置返回 null */
+    private JevClient jevClientOrNull() {
+        if (!notBlank(jevApiKey)) {
+            return null;
+        }
+        JevClient client = jevClient;
+        if (client == null) {
+            synchronized (this) {
+                if (jevClient == null) {
+                    jevClient = JevClient.builder().apiKey(jevApiKey.trim()).build();
+                }
+                client = jevClient;
+            }
+        }
+        return client;
     }
 
     /**

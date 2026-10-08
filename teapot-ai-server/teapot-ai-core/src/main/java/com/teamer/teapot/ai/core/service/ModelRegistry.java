@@ -30,6 +30,12 @@ public class ModelRegistry {
     /** thinking 模式实例的缓存 key 后缀（与普通实例分槽） */
     private static final String THINK_SUFFIX = "#think";
 
+    /**
+     * 显式不思考实例的缓存 key 后缀。qwen3 混合思考模型（如 qwen3.8-flash）服务端
+     * 默认开启思考，不传参数不等于关闭——判定类轻量调用必须显式 enable_thinking=false。
+     */
+    private static final String NO_THINK_SUFFIX = "#nothink";
+
     private final Map<String, Model> cache = new ConcurrentHashMap<>();
 
     private final ModelEntryMapper modelEntryMapper;
@@ -56,10 +62,28 @@ public class ModelRegistry {
      * openai 供应商无对应 builder 能力，thinking 被忽略。
      */
     public Model resolve(String modelId, boolean thinking) {
+        return resolve(modelId, thinking ? Boolean.TRUE : null);
+    }
+
+    /**
+     * 解析显式关闭思考的实例（DashScope 下发 enable_thinking=false）：
+     * 用于意图守卫判定等轻量调用，不依赖混合思考模型的服务端默认值。
+     * openai 供应商无对应 builder 能力，行为与普通解析一致。
+     */
+    public Model resolveNoThinking(String modelId) {
+        return resolve(modelId, Boolean.FALSE);
+    }
+
+    /**
+     * 解析 Model 实例并缓存；thinking 三态：TRUE=显式开启、FALSE=显式关闭、null=不下发参数
+     * （DashScope 混合思考模型此时跟随服务端默认，多为开启）。
+     */
+    private Model resolve(String modelId, Boolean thinking) {
         if (modelId == null || modelId.isBlank()) {
             throw new BizException("modelId 不能为空");
         }
-        String key = thinking ? modelId + THINK_SUFFIX : modelId;
+        String key = thinking == null ? modelId
+                : modelId + (thinking ? THINK_SUFFIX : NO_THINK_SUFFIX);
         return cache.computeIfAbsent(key, k -> create(modelId, thinking));
     }
 
@@ -67,6 +91,7 @@ public class ModelRegistry {
     public void evict(String modelId) {
         cache.remove(modelId);
         cache.remove(modelId + THINK_SUFFIX);
+        cache.remove(modelId + NO_THINK_SUFFIX);
     }
 
     /**
@@ -93,7 +118,7 @@ public class ModelRegistry {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
-    private Model create(String modelId, boolean thinking) {
+    private Model create(String modelId, Boolean thinking) {
         int idx = modelId.indexOf(':');
         if (idx <= 0 || idx == modelId.length() - 1) {
             throw new BizException("modelId 格式须为 provider:model：" + modelId);
@@ -115,9 +140,10 @@ public class ModelRegistry {
                         && (entry.getCapabilities().contains("image") || entry.getCapabilities().contains("video"))) {
                     builder.endpointType(EndpointType.MULTIMODAL);
                 }
-                // Agent 级思考模式开关：模型层 enableThinking（GenerateOptions 无此开关）
-                if (thinking) {
-                    builder.enableThinking(true);
+                // Agent 级思考模式开关：模型层 enableThinking（GenerateOptions 无此开关）；
+                // 三态透传，FALSE 显式关闭混合思考模型的服务端默认思考
+                if (thinking != null) {
+                    builder.enableThinking(thinking);
                 }
                 yield builder.build();
             }
@@ -125,7 +151,7 @@ public class ModelRegistry {
                 if (openaiApiKey.isBlank()) {
                     throw new BizException("未配置 OPENAI_API_KEY，无法使用 " + modelId);
                 }
-                if (thinking) {
+                if (Boolean.TRUE.equals(thinking)) {
                     // OpenAIChatModel.Builder 无 enableThinking 能力，忽略 Agent 级思考模式开关
                     log.warn("openai 供应商不支持思考模式开关，已忽略 modelId={}", modelId);
                 }
