@@ -13,8 +13,9 @@ die "usage: bench.pl <dir with rules.txt/cases.tsv> results.jsonl\n" if !$dir ||
 my $threshold = $ENV{BENCH_THRESHOLD} // 0.5;
 my $jev_model = $ENV{BENCH_JEV_MODEL} // "jev-latest";
 my $llm_model = $ENV{BENCH_LLM_MODEL} // "qwen3.8-flash";
+my $only      = $ENV{BENCH_ONLY} // "all";   # jev | llm | all
 my $jev_key   = $ENV{TYPESAFE_API_KEY}   or die "TYPESAFE_API_KEY missing";
-my $ds_key    = $ENV{DASHSCOPE_API_KEY}  or die "DASHSCOPE_API_KEY missing";
+my $ds_key    = $ENV{DASHSCOPE_API_KEY}  or die "DASHSCOPE_API_KEY missing" if $only ne 'jev';
 
 sub read_lines {
     my ($f) = @_;
@@ -130,6 +131,16 @@ sub llm_ask {
     return { ms => $ms, tls => $tls, out => $content, dec => $dec };
 }
 
+sub side_json {
+    my ($x) = @_;
+    my $s = '"ms":' . $x->{ms} . ',"tls":' . ($x->{tls} // -1);
+    $s .= defined $x->{noul} ? ',"noul":' . $x->{noul} : '';
+    $s .= ($x->{out} // '') ne '' ? ',"out":"' . esc($x->{out}) . '"' : '';
+    $s .= $x->{dec} ? ',"dec":"' . $x->{dec} . '"'
+                    : ',"err":"' . esc($x->{err} // '?') . '"';
+    return '{' . $s . '}';
+}
+
 open my $out, '>:raw', $out_file or die "open $out_file: $!";
 my @cases = grep { length } @{ read_lines("$dir/cases.tsv") };
 my $n = scalar @cases;
@@ -139,26 +150,18 @@ for my $line (@cases) {
     last if $limit && $i >= $limit;
     $i++;
     my ($id, $expect, $text) = split /\t/, $line, 3;
-    my $j = jev_ask($text);
-    sleep 0.15;
-    my $l = llm_ask($text);
-    sleep 0.15;
-    print $out sprintf(
-        '{"id":%d,"expect":"%s","jev":{"ms":%d,"tls":%d%s%s},"llm":{"ms":%d,"tls":%d%s%s}}' . "\n",
-        $id, $expect,
-        $j->{ms}, $j->{tls} // -1,
-        defined $j->{noul} ? ',"noul":' . $j->{noul} : '',
-        $j->{dec} ? ',"dec":"' . $j->{dec} . '"'
-                  : ',"err":"' . esc($j->{err} // '?') . '"',
-        $l->{ms}, $l->{tls} // -1,
-        ($l->{out} // '') ne '' ? ',"out":"' . esc($l->{out}) . '"' : '',
-        $l->{dec} ? ',"dec":"' . $l->{dec} . '"'
-                  : ',"err":"' . esc($l->{err} // '?') . '"');
+    my ($j, $l);
+    if ($only ne 'llm') { $j = jev_ask($text); sleep 0.15 }
+    if ($only ne 'jev') { $l = llm_ask($text); sleep 0.15 }
+    my @parts = ('"id":' . $id, '"expect":"' . esc($expect) . '"');
+    push @parts, '"jev":' . side_json($j) if $j;
+    push @parts, '"llm":' . side_json($l) if $l;
+    print $out '{' . join(',', @parts) . "}" . "\n";
     $out->flush;
     printf STDERR "[%03d/%03d] id=%s exp=%s jev=%s(%sms) llm=%s(%sms)\n",
         $i, $n, $id, $expect,
-        $j->{dec} // 'ERR', $j->{ms},
-        $l->{dec} // 'ERR', $l->{ms};
+        $j ? ($j->{dec} // 'ERR') : '-', $j ? $j->{ms} : -1,
+        $l ? ($l->{dec} // 'ERR') : '-', $l ? $l->{ms} : -1;
 }
 close $out;
 print "BENCH_DONE $out_file lines=$i\n";

@@ -15,11 +15,13 @@ function stats(arr) {
 }
 
 function side(name) {
+  const rows2 = rows.filter((r) => r[name]);
+  if (!rows2.length) return null;
   let ok = 0, err = 0, unparsed = 0;
   let tp = 0, fp = 0, tn = 0, fn = 0; // REJECT = positive class (拦截)
   const lat = [], warm = [];
   const mism = [];
-  for (const r of rows) {
+  for (const r of rows2) {
     const x = r[name];
     if (x.err) { err++; /* production failOpen -> ACCEPT(pass) */ }
     const dec = x.dec || 'ACCEPT'; // failOpen: error/unparsed => pass
@@ -37,7 +39,7 @@ function side(name) {
     lat.push(x.ms);
     if (x.tls > 0) warm.push(x.ms - x.tls);
   }
-  return { name, acc: pct(ok, rows.length), ok, err, mism, tp, fp, tn, fn, lat: stats(lat), warm: stats(warm) };
+  return { name, acc: pct(ok, rows2.length), ok, n: rows2.length, err, mism, tp, fp, tn, fn, lat: stats(lat), warm: stats(warm) };
 }
 
 const jev = side('jev');
@@ -45,7 +47,7 @@ const llm = side('llm');
 
 // noul distribution
 const buckets = {};
-for (const r of rows) if (r.jev.noul !== undefined) {
+for (const r of rows) if (r.jev && r.jev.noul !== undefined) {
   const b = Math.floor(r.jev.noul * 10) / 10;
   const k = b.toFixed(1);
   buckets[k] = buckets[k] || { ACCEPT: 0, REJECT: 0 };
@@ -53,20 +55,21 @@ for (const r of rows) if (r.jev.noul !== undefined) {
 }
 
 // threshold sweep for JEV
+const jevRows = rows.filter((r) => r.jev);
 const sweep = [];
 for (let t = 0.1; t <= 0.9; t += 0.1) {
   let ok = 0;
-  for (const r of rows) {
+  for (const r of jevRows) {
     if (r.jev.noul === undefined) { ok += r.expect === 'ACCEPT' ? 1 : 0; continue; }
     const passed = !(r.jev.noul < t);
     if (passed === (r.expect === 'ACCEPT')) ok++;
   }
-  sweep.push(`threshold=${t.toFixed(1)} acc=${pct(ok, rows.length)}`);
+  sweep.push(`threshold=${t.toFixed(1)} acc=${pct(ok, jevRows.length)}`);
 }
 
-for (const s of [jev, llm]) {
+for (const s of [jev, llm].filter(Boolean)) {
   console.log(`\n== ${s.name} ==`);
-  console.log(`accuracy=${s.acc} (ok ${s.ok}/${rows.length}) errors=${s.err}`);
+  console.log(`accuracy=${s.acc} (ok ${s.ok}/${s.n}) errors=${s.err}`);
   console.log(`混淆: TP(正确拦截)=${s.tp} FP(误拦)=${s.fp} FN(漏拦)=${s.fn} TN(正确放行)=${s.tn}`);
   console.log(`latency(ms)   ${JSON.stringify(s.lat)}`);
   console.log(`warm(ms,去TLS) ${JSON.stringify(s.warm)}`);
