@@ -1,0 +1,245 @@
+{
+  "catalogId": "teamer:a2ui/teapot",
+  "version": "1.0",
+  "components": {
+    "Heading": {
+      "description": "Section heading.",
+      "props": {
+        "text": { "type": "string", "description": "Heading text." },
+        "level": { "type": "integer", "enum": [1, 2, 3], "description": "Heading level, default 2." }
+      },
+      "required": ["text"]
+    },
+    "Text": {
+      "description": "Plain paragraph text.",
+      "props": {
+        "text": { "type": "string", "description": "Paragraph content." },
+        "muted": { "type": "boolean", "description": "Render in secondary color." }
+      },
+      "required": ["text"]
+    },
+    "Markdown": {
+      "description": "Markdown block rendered with the chat renderer.",
+      "props": {
+        "content": { "type": "string", "description": "Markdown source." }
+      },
+      "required": ["content"]
+    },
+    "Table": {
+      "description": "Data table.",
+      "props": {
+        "columns": { "type": "array", "items": { "type": "string" }, "description": "Column headers." },
+        "rows": { "type": "array", "items": { "type": "array" }, "description": "Row values, each row aligned with columns." },
+        "caption": { "type": "string", "description": "Optional caption below the table." }
+      },
+      "required": ["columns", "rows"]
+    },
+    "List": {
+      "description": "Ordered or unordered list.",
+      "props": {
+        "items": { "type": "array", "items": { "type": "string" }, "description": "List entries." },
+        "ordered": { "type": "boolean", "description": "Number the entries when true." }
+      },
+      "required": ["items"]
+    },
+    "Image": {
+      "description": "Image from URL or data URI.",
+      "props": {
+        "src": { "type": "string", "description": "Image URL." },
+        "alt": { "type": "string", "description": "Alternative text." }
+      },
+      "required": ["src"]
+    },
+    "Alert": {
+      "description": "Highlighted callout box.",
+      "props": {
+        "text": { "type": "string", "description": "Alert content." },
+        "kind": { "type": "string", "enum": ["info", "success", "warning", "error"], "description": "Visual tone, default info." }
+      },
+      "required": ["text"]
+    },
+    "Badge": {
+      "description": "Small status badge.",
+      "props": {
+        "text": { "type": "string", "description": "Badge label." },
+        "tone": { "type": "string", "enum": ["neutral", "info", "success", "warning", "error"], "description": "Visual tone, default neutral." }
+      },
+      "required": ["text"]
+    },
+    "Card": {
+      "description": "Bordered container with an optional title.",
+      "props": {
+        "title": { "type": "string", "description": "Card title." }
+      },
+      "required": []
+    },
+    "Row": {
+      "description": "Horizontal layout container; following components until Column/Divider are its children (simple flow model).",
+      "props": {
+        "gap": { "type": "integer", "description": "Gap in pixels." }
+      },
+      "required": []
+    },
+    "Column": {
+      "description": "Vertical layout container segment; closes the current Row.",
+      "props": {
+        "gap": { "type": "integer", "description": "Gap in pixels." }
+      },
+      "required": []
+    },
+    "Divider": {
+      "description": "Horizontal rule.",
+      "props": {},
+      "required": []
+    },
+    "Tabs": {
+      "description": "Tabbed panes.",
+      "props": {
+        "tabs": {
+          "type": "array",
+          "description": "Pane list. Each item is an object: {label: string, content: string (markdown)}.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["label", "content"]
+          }
+        }
+      },
+      "required": ["tabs"]
+    },
+    "ProgressBar": {
+      "description": "Determinate progress bar.",
+      "props": {
+        "value": { "type": "number", "description": "Current value." },
+        "max": { "type": "number", "description": "Upper bound, default 100." },
+        "label": { "type": "string", "description": "Caption above the bar." }
+      },
+      "required": ["value"]
+    },
+    "TextInput": {
+      "description": "Single-line input.",
+      "props": {
+        "name": { "type": "string", "description": "Answer key." },
+        "label": { "type": "string", "description": "Field label." },
+        "placeholder": { "type": "string", "description": "Placeholder text." },
+        "required": { "type": "boolean", "description": "Block submit while empty." }
+      },
+      "required": ["name"]
+    },
+    "TextArea": {
+      "description": "Multi-line input.",
+      "props": {
+        "name": { "type": "string", "description": "Answer key." },
+        "label": { "type": "string", "description": "Field label." },
+        "rows": { "type": "integer", "description": "Visible rows, default 3." }
+      },
+      "required": ["name"]
+    },
+    "Select": {
+      "description": "Dropdown selection; set multiple=true for multi-select.",
+      "props": {
+        "name": { "type": "string", "description": "Answer key." },
+        "label": { "type": "string", "description": "Field label." },
+        "options": { "type": "array", "items": { "type": "string" }, "description": "Selectable choices." },
+        "multiple": { "type": "boolean", "description": "Allow several selections." }
+      },
+      "required": ["name", "options"]
+    },
+    "Checkbox": {
+      "description": "Single boolean checkbox.",
+      "props": {
+        "name": { "type": "string", "description": "Answer key." },
+        "label": { "type": "string", "description": "Label next to the box." },
+        "checked": { "type": "boolean", "description": "Initial state." }
+      },
+      "required": ["name", "label"]
+    },
+    "RadioGroup": {
+      "description": "Exclusive choice group.",
+      "props": {
+        "name": { "type": "string", "description": "Answer key." },
+        "label": { "type": "string", "description": "Group label." },
+        "options": { "type": "array", "items": { "type": "string" }, "description": "Selectable choices." }
+      },
+      "required": ["name", "options"]
+    },
+    "Button": {
+      "description": "Action button; action=submit attaches the form answers to the resume payload.",
+      "props": {
+        "text": { "type": "string", "description": "Button label." },
+        "action": { "type": "string", "enum": ["submit", "link"], "description": "Button behavior, default submit." },
+        "href": { "type": "string", "description": "Target URL when action=link." }
+      },
+      "required": ["text"]
+    },
+    "Form": {
+      "description": "Explicit form wrapper with inline field list (alternative to flat input components).",
+      "props": {
+        "name": { "type": "string", "description": "Form answer namespace." },
+        "fields": {
+          "type": "array",
+          "description": "Field definitions rendered in order. Each item is an object: {name: string, label: string, type: string, options?: string[], required?: boolean}.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "label": { "type": "string" },
+              "type": { "type": "string", "enum": ["text", "textarea", "select", "checkbox", "radio"] },
+              "options": { "type": "array", "items": { "type": "string" } },
+              "required": { "type": "boolean" }
+            },
+            "required": ["name", "label", "type"]
+          }
+        },
+        "submitText": { "type": "string", "description": "Submit button label, default Submit." }
+      },
+      "required": ["fields"]
+    },
+    "FileDrop": {
+      "description": "File upload dropzone (upload handled by the frontend).",
+      "props": {
+        "name": { "type": "string", "description": "Answer key for uploaded file references." },
+        "label": { "type": "string", "description": "Dropzone caption." },
+        "accept": { "type": "string", "description": "Comma-separated accepted file types." }
+      },
+      "required": ["name"]
+    },
+    "TakeoutStoreList": {
+      "description": "Takeout store recommendation cards, laid out as one white card per store in a horizontally scrolling row. Use when suggesting 2+ nearby shops with representative dishes; put each store's dishes in its own card instead of separate components. Omitting `stores` renders the built-in mock demo card.",
+      "props": {
+        "title": { "type": "string", "description": "Optional caption above the cards, e.g. 附近高分外卖." },
+        "stores": {
+          "type": "array",
+          "description": "Stores to recommend (2-6). Each item is an object: {name: string, logo?: string (image URL, or an emoji when there is no URL), badges?: string[] (short tags, rendered green, e.g. [\"可堂食\"]), rating?: number (out of 5, rendered as 4.5分), minOrder?: number (minimum order amount, rendered as 起送¥15), eta?: number|string (delivery time, a number renders as 28分钟), desc?: string (one or two sentences on why it fits the user), items?: array of representative dishes, actionText?: string (default 进店逛逛), actionValue?: string (the message sent when the user clicks the button; defaults to actionText)}. Each dish object is {name: string, image?: string, sales?: string (e.g. 已售2000+), rank?: string (e.g. 近30天该店热销第2名), price?: number}. Omit a dish price only when genuinely unknown; the meta line is built from rating/minOrder/eta.",
+          "items": { "type": "object" }
+        }
+      },
+      "required": []
+    },
+    "TakeoutOrderCard": {
+      "description": "Takeout order confirmation card: shop line, ordered items with specs, delivery and fee rows, then the payable total and action buttons. Use when the user is reviewing or about to place an order; never invent an address or a fee. Omitting every prop renders the built-in mock demo card.",
+      "props": {
+        "shop": {
+          "type": "object",
+          "description": "Shop header, rendered with a trailing chevron. Shape: {name: string, logo?: string (image URL or emoji)}."
+        },
+        "items": {
+          "type": "array",
+          "description": "Ordered dishes (rendered above the divider). Each item is an object: {name: string, image?: string, spec?: string (chosen spec, rendered as an editable-looking chip, e.g. 中辣 / 常温), price?: number (unit price), qty?: number (rendered as x1)}."
+        },
+        "rows": {
+          "type": "array",
+          "description": "Label/value rows below the divider, in display order. Each item is an object: {label: string, value?: string|number, hint?: string (grey placeholder in place of value, e.g. 点击说明对商家的要求), notes?: string[] (small orange detail snippets after the value, e.g. the discount breakdown 千问每日必减¥2.2), tone?: string (normal by default; discount and total render in the orange price color, total is bold and larger), clickable?: boolean (trailing chevron for rows the user can reopen, e.g. 送达时间/配送至)}. Make the payable amount the last row with tone total."
+        },
+        "actions": {
+          "type": "array",
+          "description": "Buttons below the rows (2 at most). Each item is an object: {text: string, value?: string (message sent on click; defaults to text), kind?: string (primary or ghost; ghost is the neutral shop-entering button), icon?: string (alipay for the payment button)}."
+        }
+      },
+      "required": []
+    }
+  }
+}

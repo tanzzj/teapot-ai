@@ -149,6 +149,12 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
       setValues((prev) => ({ ...prev, [n]: v }));
     },
     disabled: !interactive,
+    // 业务卡按钮 → 普通消息发送；ask 卡的动作仍走表单 resume，不接按钮
+    onAction: isAsk
+      ? undefined
+      : (text: string) => {
+          if (interactive && text) submitMessage(text);
+        },
   };
 
   const chip = isAsk

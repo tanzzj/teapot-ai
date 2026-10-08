@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { Markdown } from '@agentscope-ai/chat';
 import type { A2uiComponent } from './envelope';
 import { bool, num, str, strList } from './envelope';
+import { TakeoutStoreList, takeoutStoreListFromProps } from './takeout/TakeoutStoreList';
+import { TakeoutOrderCard, takeoutOrderCardFromProps } from './takeout/TakeoutOrderCard';
 
 /**
- * basic catalog（agentscope.io:a2ui/basic，22 组件）前端渲染注册表。
+ * basic catalog（agentscope.io:a2ui/basic，22 组件）+ teapot 业务卡（外卖两件套）
+ * 前端渲染注册表。
  * 表单类组件通过 FormCtx 双向绑定到 surface 级 values（键 = props.name），
  * Button(action=submit) 触发 onSubmit 由外层收集/校验/派发。
  */
@@ -13,6 +16,8 @@ export interface FormCtx {
   values: Record<string, unknown>;
   setValue: (name: string, v: unknown) => void;
   disabled: boolean;
+  /** 展示型卡片的按钮派发（外卖卡的「进店逛逛 / 支付宝付款」等），由外层接到消息发送 */
+  onAction?: (text: string) => void;
 }
 
 const labelStyle: React.CSSProperties = {
@@ -404,6 +409,22 @@ export function A2uiWidget({
       return <FormWidget comp={comp} ctx={ctx} onSubmit={onSubmit} />;
     case 'FileDrop':
       return <FileDropWidget comp={comp} ctx={ctx} />;
+    case 'TakeoutStoreList':
+      return (
+        <TakeoutStoreList
+          {...takeoutStoreListFromProps(p)}
+          disabled={ctx.disabled}
+          onAction={ctx.onAction}
+        />
+      );
+    case 'TakeoutOrderCard':
+      return (
+        <TakeoutOrderCard
+          {...takeoutOrderCardFromProps(p)}
+          disabled={ctx.disabled}
+          onAction={ctx.onAction}
+        />
+      );
     case 'Row':
     case 'Column':
       // 流式排版容器由 layoutFlow 消费；单独出现（如未闭合流）按透传渲染
