@@ -326,7 +326,9 @@ export default function Skills() {
             maxCount={1}
             fileList={importFileList}
             beforeUpload={(file) => {
-              setImportFileList([file as unknown as UploadFile]);
+              setImportFileList([
+                { uid: file.uid, name: file.name, size: file.size, type: file.type, originFileObj: file },
+              ]);
               return false;
             }}
             onRemove={() => setImportFileList([])}
