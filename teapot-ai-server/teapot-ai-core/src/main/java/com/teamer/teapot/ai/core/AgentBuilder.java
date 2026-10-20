@@ -46,6 +46,7 @@ import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.a2ui.A2uiConfig;
 import io.agentscope.extensions.a2ui.A2uiMiddleware;
+import io.agentscope.extensions.a2ui.ToolInstallingMiddleware;
 import io.agentscope.extensions.judge.jev.JevClient;
 import io.agentscope.extensions.judge.jev.example.JevIntentGuardMiddleware;
 import io.agentscope.extensions.model.dashscope.tool.DashScopeMultiModalTool;
@@ -56,11 +57,13 @@ import io.agentscope.extensions.sandbox.e2b.E2bFilesystemSpec;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
+import io.agentscope.harness.agent.filesystem.local.LocalFilesystem;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
 import io.agentscope.harness.agent.sandbox.snapshot.LocalSnapshotSpec;
 import io.agentscope.harness.agent.sandbox.snapshot.NoopSnapshotSpec;
+import io.agentscope.harness.agent.session.WorkspaceSessionLogStore;
 import io.agentscope.harness.agent.tools.McpServerConfig;
 import io.agentscope.harness.agent.tools.McpServerRegistrar;
 import io.agentscope.harness.agent.tools.ToolsConfig;
@@ -273,9 +276,15 @@ public class AgentBuilder {
         // 工具提供型中间件（OSS 文件 / MCP 配置，按 runtime 开关）：
         // 中间件须在 build 前挂载（onSystemPrompt 注入），工具在 build 后注册到 Toolkit（MCP 同款链路）
         List<ToolProvidedMiddleware> toolMiddlewares = buildToolMiddlewares(agentKey, workspace, rt, feature.getMcp());
+        // 自带工具的中间件（澄清档 / a2ui 档）：SDK 已取消 build 期回调中间件装工具的机制，
+        // 改由装配方在 build 后按挂载顺序显式 installTools；同名工具后注册者覆盖，故顺序不可调换
+        List<ToolInstallingMiddleware> toolInstalling = new ArrayList<>();
         if (extraMiddlewares != null) {
             for (MiddlewareBase middleware : extraMiddlewares) {
                 builder.middleware(middleware);
+                if (middleware instanceof ToolInstallingMiddleware installer) {
+                    toolInstalling.add(installer);
+                }
             }
         }
         for (ToolProvidedMiddleware middleware : toolMiddlewares) {
@@ -283,7 +292,11 @@ public class AgentBuilder {
         }
         // A2UI 界面生成（feature.a2ui）：启用即挂 A2uiMiddleware，注册 a2ui_render + ask_user_question
         // （表单档，覆盖 Web 链路默认挂的纯文本澄清档；组件 DSL 在 SDK 渲染子 Agent 内）
-        applyA2ui(builder, feature.getA2ui(), agentKey, agentDO.getModelId());
+        A2uiMiddleware a2uiMiddleware =
+                applyA2ui(builder, feature.getA2ui(), agentKey, agentDO.getModelId());
+        if (a2uiMiddleware != null) {
+            toolInstalling.add(a2uiMiddleware);
+        }
         // 意图守卫（feature.guard）：启用且有规则 → 按 mode 挂 JEV 判定或大模型判定守卫
         applyGuard(builder, feature.getGuard(), agentKey, agentDO.getModelId());
         // 媒体模态守卫（SPEC-media-gen §4.4）：模型能力位未声明的媒体块（如 qwen3.8-max 的 audio）
@@ -334,6 +347,9 @@ public class AgentBuilder {
             if (tools != null && agent.getToolkit() != null) {
                 agent.getToolkit().registerTool(tools);
             }
+        }
+        for (ToolInstallingMiddleware installer : toolInstalling) {
+            installer.installTools(agent.getToolkit());
         }
         // 生成产物转存（SPEC-media-gen §4.9）：必须在工具注册之后，按名取回已注册工具再同名覆盖为装饰器
         applyMediaArtifactPersist(agent, agentKey, rt);
@@ -401,18 +417,21 @@ public class AgentBuilder {
     /**
      * a2ui 命名空间 → A2uiMiddleware 挂载（Agent 画 UI）：
      * enabled=true 时按配置构建 A2uiConfig（字段留空 = 回落 SDK 默认：内置 basic catalog、
-     * 渲染后中断开启、组件数 50、surface 跨轮持久化）；middleware 在 build 前挂载，
-     * 经 ToolkitAware#rebindToolkit 自动注册 a2ui_render / ask_user_question（表单档）两工具
-     * （自然语言意图入参；组件 DSL 与 a2ui_catalog 收进 SDK 内部的渲染子 Agent，主 Agent 不感知；
-     * 原 a2ui_present 并入 a2ui_render，渲染后停止本轮由 stopAfterPresent 控制）；
+     * 渲染后中断开启、组件数 50、surface 跨轮持久化）；middleware 在 build 前挂载（onSystemPrompt
+     * 注入需要），其 a2ui_render / ask_user_question（表单档）两工具由调用方在 build 后经
+     * installTools 注册（SDK 已无 build 期自动装档回调；自然语言意图入参；组件 DSL 与 a2ui_catalog
+     * 收进 SDK 内部的渲染子 Agent，主 Agent 不感知；原 a2ui_present 并入 a2ui_render，
+     * 渲染后停止本轮由 stopAfterPresent 控制）；
      * 渲染子模型缺省回落本 Agent 模型；renderNoThinking=true 时显式注入本 Agent 模型的
      * 无思考实例（同守卫判定同款 resolveNoThinking 链路）。
      * catalog 在构造期加载，加载失败降级为不挂载并告警，不阻断对话。
+     *
+     * @return 已挂载的中间件（供 build 后装工具）；未启用或挂载失败时为 {@code null}
      */
-    private void applyA2ui(HarnessAgent.Builder builder, AgentFeature.A2ui cfg, String agentKey,
-                           String defaultModelId) {
+    private A2uiMiddleware applyA2ui(HarnessAgent.Builder builder, AgentFeature.A2ui cfg,
+                                     String agentKey, String defaultModelId) {
         if (cfg == null || !Boolean.TRUE.equals(cfg.getEnabled())) {
-            return;
+            return null;
         }
         A2uiConfig.Builder cb = A2uiConfig.builder();
         if (notBlank(cfg.getCatalogId())) {
@@ -434,21 +453,24 @@ public class AgentBuilder {
             cb.appendPreference(cfg.getAppendPreference().trim());
         }
         A2uiConfig config = cb.build();
+        A2uiMiddleware a2ui = null;
         try {
             A2uiMiddleware middleware = Boolean.TRUE.equals(cfg.getRenderNoThinking())
                     // 子模型输出结构化组件树，思考纯属拖慢渲染：显式关闭（同守卫判定同款链路）
                     ? new A2uiMiddleware(config, modelRegistry.resolveNoThinking(defaultModelId))
                     : new A2uiMiddleware(config);
             builder.middleware(middleware);
+            a2ui = middleware;
         } catch (Exception e) {
             log.error("A2UI 挂载失败（catalog/渲染子模型解析），界面能力降级为不挂载 agentKey={}：{}",
                     agentKey, e.getMessage());
-            return;
+            return null;
         }
         log.info("A2UI 界面生成已启用 agentKey={} catalog={} stopAfterPresent={} surfacePersist={} 渲染子模型={}",
                 agentKey, config.catalogResource(), config.stopAfterPresent(), config.surfacePersistEnabled(),
                 Boolean.TRUE.equals(cfg.getRenderNoThinking())
                         ? defaultModelId + "(关闭思考)" : "跟随主模型");
+        return a2ui;
     }
 
     /**
