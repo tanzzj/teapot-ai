@@ -51,7 +51,7 @@ http.interceptors.response.use(
     if (body && typeof body.code === 'number' && body.code !== 0) {
       // 401 业务码：token 过期由下方 AxiosError 分支处理；其余业务错误直接提示
       if (body.code === 401) {
-        redirectToLogin();
+        handleUnauthorized(body.message);
       } else {
         message.error(body.message || '操作失败');
       }
@@ -73,7 +73,8 @@ http.interceptors.response.use(
       if (newToken) {
         return http.request(error.config!);
       }
-      redirectToLogin();
+      const body = error.response?.data as Result<unknown> | undefined;
+      handleUnauthorized(body?.message);
     } else if (status === 403) {
       message.error('无权限执行该操作');
     } else {
@@ -83,6 +84,16 @@ http.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+/** 401 有两种语义：登录页上的是凭证/锁定失败，原因必须提示给用户；
+ * 其余页面上的是会话过期，静默跳登录 */
+function handleUnauthorized(text?: string) {
+  if (window.location.pathname.startsWith('/login')) {
+    message.error(text || '登录失败');
+    return;
+  }
+  redirectToLogin();
+}
 
 export function redirectToLogin() {
   localStorage.removeItem(ACCESS_TOKEN_KEY);
