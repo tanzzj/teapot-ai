@@ -266,6 +266,12 @@ public class AgentBuilder {
                 AbstractFilesystem memoryFs = memoryRoutes.memoryFilesystem(agentKey, scope);
                 builder.filesystemRoute(RedisMemoryFilesystems.MEMORY_ROUTE_FILE, memoryFs);
                 builder.filesystemRoute(RedisMemoryFilesystems.MEMORY_ROUTE_DIR, memoryFs);
+                // 会话日志（agents/ 前缀）不能落沙箱：SandboxBackedFilesystem 有意不支持
+                // durable sessionStorage，未注入时整轮调用直接抛 UnsupportedOperationException
+                // （上游 a2cbea5c 起 WorkspaceSessionLogStore 不再隐式用工作区后端）。
+                // 落本地磁盘 journal 目录，与沙箱生命周期解耦。
+                builder.sessionLogStore(new WorkspaceSessionLogStore(
+                        new LocalFilesystem(workspace.resolve("journal"))));
                 log.info("沙箱 Agent 记忆已统一路由到 Redis agentKey={} isolationScope={}", agentKey, scope);
             } else {
                 // 非沙箱（含降级）路径：本地叠加（含 shell）+ 记忆路径改指 Redis；降级路径已禁 shell，路由仍保留本地叠加能力
