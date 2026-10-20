@@ -41,17 +41,23 @@ public class RootSkillAwareGitSkillRepository extends GitSkillRepository {
     @Override
     public List<AgentSkill> getAllSkills() {
         List<AgentSkill> skills;
+        RuntimeException officialFailure = null;
         try {
             skills = new ArrayList<>(super.getAllSkills());
         } catch (RuntimeException e) {
             // skillsRoot 配置失效等异常不阻断兜底扫描
             log.warn("Git skill 官方扫描失败，尝试根级 SKILL.md 兜底：{}", e.getMessage());
             skills = new ArrayList<>();
+            officialFailure = e;
         }
         AgentSkill rootSkill = loadRootSkill();
         if (rootSkill != null
                 && skills.stream().noneMatch(s -> rootSkill.getName().equals(s.getName()))) {
             skills.add(rootSkill);
+        }
+        if (skills.isEmpty() && officialFailure != null) {
+            // 兜底也没找到时不掩盖原始故障（如未 sync / clone 失败），否则上层只能看到误导性的"未找到"
+            throw officialFailure;
         }
         return skills;
     }

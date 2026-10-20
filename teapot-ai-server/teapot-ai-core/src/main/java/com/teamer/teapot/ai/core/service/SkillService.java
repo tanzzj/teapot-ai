@@ -359,6 +359,9 @@ public class SkillService {
         RootSkillAwareGitSkillRepository repo = new RootSkillAwareGitSkillRepository(
                 trimmedUrl, trimmedBranch, tmpDir, "git", false, null);
         try {
+            // autoSync=false 的临时仓库必须先显式 sync()，否则官方读路径直接抛
+            // "Repository is not synchronized"；拉取失败在此处即报"Git 仓库拉取失败"
+            repo.sync();
             skills = repo.getAllSkills();
         } catch (BizException e) {
             throw e;
