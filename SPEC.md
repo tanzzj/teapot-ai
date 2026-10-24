@@ -2535,7 +2535,7 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 ] }
 ```
 
-`AgentFeature` 侧（`NS_CUSTOM_MODELS`）：`getCustomModels()/setCustomModels()`（空表 = 移除命名空间），`CustomModel.modelId()` 生成 `provider:modelName`，`capabilitySet()` 归一能力位。校验：provider ∈ {dashscope, openai}、modelName 必填、**apiKey 必填**、`baseUrl` 若填必须 `http` 开头、能力位 ∈ {image, video}、`provider:modelName` 不得重复、条数 ≤ 20。
+`AgentFeature` 侧（`NS_CUSTOM_MODELS`）：`getCustomModels()/setCustomModels()`（空表 = 移除命名空间），`CustomModel.modelId()` 生成 `provider:modelName`，`capabilitySet()` 归一能力位。校验：provider ∈ {dashscope, openai}、modelName 必填、**apiKey 必填**、`baseUrl` 若填必须 `http` 开头、能力位 ∈ {image, video}、`provider:modelName` 不得重复、**条数 ≤ 1**（`CUSTOM_MODEL_MAX`，§29.8；存储仍是数组，按 modelId 查凭证的形状不变）。
 
 ### §29.3 密钥三原则：加密入库 / 留空沿用 / 出参永不出服
 
@@ -2557,9 +2557,9 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 
 ### §29.6 前端
 
-- `components/modelOptions.ts`：`modelSelectOptions(systemModels, customModels)` 产出两组（「系统模型」/「本 Agent 自定义」，空组不下发）；自定义组的 label 是 `展示名（provider:model）`。**随表单实时值变化，新增一行立刻可选中，不必先保存**——五处下拉同源（`Form.useWatch('customModels')` + `useMemo`）。
-- Basic Info 新增「自定义模型」`Form.List` 编辑器：provider 下拉 / modelName（必填）/ displayName / API Key（`Input.Password`，占位符按 `hasApiKey` 在「已配置，留空不修改」与「sk-...」间切换，校验器允许"留空但已配置"）/ baseUrl / capabilities 多选 / 删除，底部「添加自定义模型」默认 `provider: dashscope`。回填时把 `capabilities` 逗号串拆成数组，`customModels` 未配置给 `[]`（`Form.List` 的 value 不接受 null）。
-- 保存时过滤掉 provider/modelName 不完整的行，空表则 `delete feature.customModels`；`hasApiKey` 不提交。
+- Basic Info 的「模型来源」单选（`modelSource`，纯 UI 字段，保存时从 payload 里解构掉）：**空间模型 / 自定义模型 二选一**（§29.8）。选自定义才渲染那一行字段——供应商下拉 / 模型名（必填）/ 展示名 / API Key（`Input.Password`，占位符按 `hasApiKey` 在「已配置，留空不修改」与「sk-...」间切换，校验器允许"留空但已配置"）/ baseUrl / 多模态能力多选；此时 Model 下拉 `disabled` 且值随「模型名」实时同步（`useEffect` 写 `modelId`），切回空间模型则清空自带行、并在主模型正指向它时清掉 `modelId` 逼用户重选。回填时 `modelSource = customModels.length > 0 ? 'custom' : 'system'`，`customModels` 只取第一条（历史多条截断）。
+- `components/modelOptions.ts`：`modelSelectOptions(systemModels, customModels)` 产出两组（「系统模型」/「本 Agent 自定义」，空组不下发）；自定义组的 label 是 `展示名（provider:model）`。主模型与压缩/守卫/记忆/标题四处子模型下拉同源（`Form.useWatch` + `useMemo`），子模型在自定义模式下仍可两边各选。
+- 保存时按来源分叉：`modelSource === 'custom'` 且 provider/模型名齐全才下发 `feature.customModels = [该行]` 并把 `payload.modelId` 钉成它的 `provider:model`；否则（选空间模型，或自定义没填完）`delete feature.customModels` —— 服务端见不到该命名空间即清除密文。`hasApiKey` 不提交。
 - 顺带修正：`modelPresets()` 由裸调改成 `modelPresets(d.agent.workspaceId ?? 0)`，系统模型下拉按 Agent 所属空间过滤，与 §28.11 的保存闸门同源。
 
 ### §29.7 验证与风险
@@ -2579,6 +2579,18 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 - 主密钥轮换会让存量密文不可解 → 装配整轮失败（按设计点名报错，用户重填即可），但没有 v2 双密钥并存的平滑方案。
 - 删除一条仍被 `runtime/guard/memory/...` 引用的自带模型：该 modelId 既不在系统开放列表也不在自带列表里，会被 §28.11 闸门拒绝保存（表现为"改不动"），提示信息是闸门的原文，暂未专门优化。
 - `mcp`/`sandbox` 等命名空间与自定义模型无耦合，`AgentFeature` 的未知命名空间原样保留机制保证老 feature 不丢字段。
+
+### §29.8 改成「模型来源二选一、只允许一条」（2026-10-24 用户看图后修订）
+
+v67 的形态是「Model 下拉里混进一个自定义组 + Basic Info 下面一个可加无数行的 `Form.List`」，用户看着就是"能配好几个自定义模型"。当场否掉：**要么用空间分配的模型，要么自定义一个，不存在多个**。
+
+落地（`AgentDetail.tsx` + `AgentFeature.java`，接口与存储形状不变）：
+- 新增 UI 字段 `modelSource`（`Radio.Group` 空间模型 / 自定义模型），保存时从 payload 解构掉，不发后端；回显按 `customModels.length` 反推。
+- 自定义模式下字段固定落在 `['customModels', 0, *]`（不再是 `Form.List`，也就没有"添加/删除"两枚按钮和那条空态提示），Model 下拉 `disabled` 且由 `useEffect` 跟着「供应商 + 模型名」实时改写。
+- 切回空间模型：`customModels` 置空数组；若主模型正指向那个自带 id 就清空 `modelId`，避免留一个"本空间不可见"的残值让用户在保存时被 §28.11 闸门莫名其妙拒掉。
+- 后端 `CUSTOM_MODEL_MAX` 20 → **1**，把约束真正钉住（数组形状保留：`ModelRegistry` 按 modelId 查凭证、`sealCustomModelKeys` 按 modelId 继承密文都不需要改）。
+
+**验证**：`mvn -o -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build`（`tsc -b` + vite）通过，入口 `index-CSOFXUMQ.js`。中途一次类型失败值得记：主模型 `options` 写成"自定义时给扁平单项、系统时给分组项"的三元，antd 推断成两个不兼容的数组联合 → TS2322；改成两种情况都用同一份分组 `modelOptions`（自定义时靠 `disabled` 锁住）后消失。**未做**：真机目视（尚未发布）。
 
 ---
 

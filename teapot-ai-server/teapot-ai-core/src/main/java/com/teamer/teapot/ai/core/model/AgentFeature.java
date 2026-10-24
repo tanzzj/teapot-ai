@@ -70,8 +70,8 @@ public class AgentFeature {
     private static final Set<String> MODEL_PROVIDERS = Set.of("dashscope", "openai");
     /** 模型能力位可选值（与 t_model_entry.capabilities 同语义） */
     private static final Set<String> MODEL_CAPABILITIES = Set.of("image", "video");
-    /** Agent 自带模型条数上限（防 feature 无限膨胀） */
-    private static final int CUSTOM_MODEL_MAX = 20;
+    /** 一个 Agent 只允许一个自带模型（存储仍是数组，便于按 modelId 查凭证与后续演进） */
+    private static final int CUSTOM_MODEL_MAX = 1;
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
