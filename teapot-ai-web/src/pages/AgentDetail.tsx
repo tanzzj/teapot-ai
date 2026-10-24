@@ -46,6 +46,8 @@ import { sandboxOptions, sandboxRecordNames, storageRecordNames } from '../api/c
 import { channelRegistry } from '../api/channelConfig';
 import { mcpRegistry } from '../api/mcpConfig';
 import { ResponsiveModal } from '../components/ResponsiveModal';
+import { modelSelectOptions } from '../components/modelOptions';
+import type { CustomModelRow } from '../components/modelOptions';
 import {
   MCPConfigFormFields,
   argsToLines,
@@ -221,6 +223,10 @@ export default function AgentDetailPage() {
   const mcpEnabled = Form.useWatch(['mcp', 'enabled'], form);
   /** MCP Server 列表（弹窗编辑后需重渲染，走 useWatch） */
   const mcpServers = Form.useWatch(['mcp', 'mcpServers'], form) as AgentMCPServer[] | undefined;
+  /** 自定义模型行（feature.customModels，SPEC §29）：列表编辑器与五处模型下拉共用同一份实时值 */
+  const customModels = Form.useWatch('customModels', form) as CustomModelRow[] | undefined;
+  /** 模型下拉分组项：系统模型 + 本 Agent 自带模型（SPEC §29） */
+  const modelOptions = useMemo(() => modelSelectOptions(models, customModels), [models, customModels]);
   /** MCP Server 新增/编辑弹窗（复用系统配置 MCP 弹窗表单，§MCP） */
   const [mcpModal, setMcpModal] = useState<{ mode: 'create' | 'edit'; index: number } | null>(null);
   const [mcpModalForm] = Form.useForm();
@@ -312,9 +318,8 @@ export default function AgentDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [d, presets, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog] = await Promise.all([
+      const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog] = await Promise.all([
         agentDetail(agentKey),
-        modelPresets(),
         skillList(),
         sandboxOptions(),
         storageRecordNames().catch(() => [] as StorageRecordName[]),
@@ -323,6 +328,9 @@ export default function AgentDetailPage() {
         mcpRegistry().catch(() => [] as MCPRecordName[]),
         mediaModelCatalog().catch(() => [] as MediaModelCatalogEntry[]),
       ]);
+      // 系统模型按 Agent 所属空间过滤（SPEC §28.11），与后端保存闸门同源；
+      // 存量未归属的 Agent 落全局桶 0
+      const presets = await modelPresets(d.agent.workspaceId ?? 0);
       setSbOptions(sbOpts);
       setStorageNames(ossNames);
       setSandboxNames(sbRecordNames);
@@ -347,6 +355,7 @@ export default function AgentDetailPage() {
       let comp: Partial<AgentCompactionConfig> = {};
       let a2ui: Partial<AgentA2uiConfig> = {};
       let gd: Partial<AgentGuardConfig> = {};
+      let cms: CustomModelRow[] = [];
       let storageTarget = 'base64';
       let parsedFeature: Record<string, unknown> = {};
       if (d.agent.feature) {
@@ -383,6 +392,19 @@ export default function AgentDetailPage() {
             }
             if (f.guard) {
               gd = f.guard;
+            }
+            if (Array.isArray(f.customModels)) {
+              // apiKey 出服务端即清空（SPEC §29），界面靠 hasApiKey 提示「已配置，留空不修改」
+              cms = (f.customModels as Record<string, unknown>[]).map((m) => ({
+                provider: m.provider as string,
+                modelName: m.modelName as string,
+                displayName: m.displayName as string | undefined,
+                baseUrl: m.baseUrl as string | undefined,
+                hasApiKey: !!m.hasApiKey,
+                capabilities: typeof m.capabilities === 'string' && m.capabilities
+                  ? (m.capabilities as string).split(',')
+                  : undefined,
+              }));
             }
             if (f.storage && f.storage.mode === 'oss' && f.storage.storageRecord) {
               storageTarget = f.storage.storageRecord;
@@ -478,6 +500,8 @@ export default function AgentDetailPage() {
           allowThreshold: gd.allowThreshold,
           denyMessage: gd.denyMessage,
         },
+        // 未配置时给 []（Form.List 的 value 不接受 null）
+        customModels: cms,
       });
       setBoundSkills(d.skillNames || []);
       setModels(presets || []);
@@ -558,7 +582,7 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, guard, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, guard, customModels: customRows, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
       channel?: Partial<AgentChannelConfig>;
@@ -571,6 +595,7 @@ export default function AgentDetailPage() {
       compactionEnabled?: boolean;
       a2ui?: Partial<AgentA2uiConfig>;
       guard?: Partial<AgentGuardConfig> & { acceptText?: string; rejectText?: string };
+      customModels?: CustomModelRow[];
     };
     const payload: Record<string, unknown> = { ...rest };
     // 压缩开关 ↔ 列值映射：关 = -1/-1；开且未填有效值时回落默认 30/10（SPEC §25）
@@ -723,6 +748,25 @@ export default function AgentDetailPage() {
           guardOut.denyMessage = guard.denyMessage.trim();
         }
         feature.guard = guardOut;
+      }
+    }
+    if (customRows !== undefined) {
+      // 自定义模型（SPEC §29）：apiKey 留空 = 不提交该键，服务端沿用上一版同 provider:model 的密文；
+      // hasApiKey 只是回显标记，不入库
+      const cleaned = customRows
+        .filter((m) => m?.provider && m?.modelName?.trim())
+        .map((m) => {
+          const out: Record<string, unknown> = { provider: m.provider, modelName: m.modelName!.trim() };
+          if (m.displayName?.trim()) out.displayName = m.displayName.trim();
+          if (m.baseUrl?.trim()) out.baseUrl = m.baseUrl.trim();
+          if (m.apiKey?.trim()) out.apiKey = m.apiKey.trim();
+          if (m.capabilities?.length) out.capabilities = m.capabilities.join(',');
+          return out;
+        });
+      if (cleaned.length) {
+        feature.customModels = cleaned;
+      } else {
+        delete feature.customModels;
       }
     }
     if (Object.keys(feature).length > 0) {
@@ -1081,7 +1125,106 @@ export default function AgentDetailPage() {
                     <Input.TextArea rows={10} style={{ fontFamily: 'Menlo, Consolas, monospace' }} placeholder="You are a helpful assistant..." />
                   </Form.Item>
                   <Form.Item name="modelId" label="Model" rules={[{ required: true }]}>
-                    <Select options={models.map((m) => ({ label: m, value: m }))} placeholder="e.g. qwen-max" />
+                    <Select options={modelOptions} placeholder="e.g. qwen-max" />
+                  </Form.Item>
+                  {/* 自定义模型（feature.customModels，SPEC §29）：自带 API Key 接入，
+                      与系统模型同组出现在本 Agent 的所有模型下拉里，不受空间授权限制 */}
+                  <Form.Item
+                    label="自定义模型"
+                    tooltip="用你自己的 API Key 接入模型：provider:model 会和系统模型一起出现在本 Agent 的模型下拉（含压缩/守卫/记忆/标题子模型）。密钥加密存储、不回显，留空即沿用已存密钥；改供应商或模型名需重新填写。"
+                  >
+                    <Form.List name="customModels">
+                      {(fields, { add, remove }) => (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          {fields.map(({ key, name, ...restField }) => (
+                            <div
+                              key={key}
+                              style={{
+                                border: '1px solid rgba(26, 26, 29, 0.12)',
+                                borderRadius: 12,
+                                padding: '10px 12px 0',
+                              }}
+                            >
+                              <Row gutter={8}>
+                                <Col xs={12} sm={6}>
+                                  <Form.Item
+                                    {...restField}
+                                    name={[name, 'provider']}
+                                    label="供应商"
+                                    rules={[{ required: true, message: '必选' }]}
+                                  >
+                                    <Select options={[{ value: 'dashscope' }, { value: 'openai' }]} />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={12} sm={6}>
+                                  <Form.Item
+                                    {...restField}
+                                    name={[name, 'modelName']}
+                                    label="模型名"
+                                    rules={[{ required: true, message: '必填' }]}
+                                  >
+                                    <Input placeholder="qwen3.8-flash" />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={8}>
+                                  <Form.Item {...restField} name={[name, 'displayName']} label="展示名（可选）">
+                                    <Input placeholder="下拉里显示的名称" />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={4} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                  <Button size="small" danger onClick={() => remove(name)}>删除</Button>
+                                </Col>
+                              </Row>
+                              <Row gutter={8}>
+                                <Col xs={24} sm={12}>
+                                  <Form.Item
+                                    {...restField}
+                                    name={[name, 'apiKey']}
+                                    label="API Key"
+                                    rules={[{
+                                      validator: (_, value: string | undefined) =>
+                                        value?.trim() || customModels?.[name]?.hasApiKey
+                                          ? Promise.resolve()
+                                          : Promise.reject(new Error('请填写 API Key')),
+                                    }]}
+                                  >
+                                    <Input.Password
+                                      placeholder={customModels?.[name]?.hasApiKey ? '已配置，留空不修改' : 'sk-...'}
+                                      autoComplete="new-password"
+                                    />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={12}>
+                                  <Form.Item {...restField} name={[name, 'baseUrl']} label="baseUrl（OpenAI 兼容网关，可选）">
+                                    <Input placeholder="https://api.example.com/v1" />
+                                  </Form.Item>
+                                </Col>
+                              </Row>
+                              <Form.Item
+                                {...restField}
+                                name={[name, 'capabilities']}
+                                label="多模态能力"
+                                tooltip="勾选后对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点"
+                              >
+                                <Select
+                                  mode="multiple"
+                                  options={[{ label: '图片（image）', value: 'image' }, { label: '视频（video）', value: 'video' }]}
+                                  placeholder="纯文本（默认）"
+                                />
+                              </Form.Item>
+                            </div>
+                          ))}
+                          {fields.length === 0 ? (
+                            <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
+                              未配置：本 Agent 只能选用系统开放给当前空间的模型。
+                            </div>
+                          ) : null}
+                          <Button icon={<SparkPlusLine />} onClick={() => add({ provider: 'dashscope' })}>
+                            添加自定义模型
+                          </Button>
+                        </div>
+                      )}
+                    </Form.List>
                   </Form.Item>
                   <Form.Item
                     name={['runtime', 'thinkingMode']}
@@ -1197,7 +1340,7 @@ export default function AgentDetailPage() {
                       <Select
                         allowClear
                         placeholder="跟随 Agent 主模型"
-                        options={models.map((m) => ({ label: m, value: m }))}
+                        options={modelOptions}
                       />
                     </Form.Item>
                     </>
@@ -1453,7 +1596,7 @@ export default function AgentDetailPage() {
                               <Select
                                 allowClear
                                 placeholder="跟随 Agent 主模型"
-                                options={models.map((m) => ({ label: m, value: m }))}
+                                options={modelOptions}
                               />
                             </Form.Item>
                           </Col>
@@ -1581,7 +1724,7 @@ export default function AgentDetailPage() {
                     <Select
                       allowClear
                       placeholder="跟随 Agent 主模型"
-                      options={models.map((m) => ({ label: m, value: m }))}
+                      options={modelOptions}
                     />
                   </Form.Item>
                   <Form.Item
@@ -1600,7 +1743,7 @@ export default function AgentDetailPage() {
                     <Select
                       allowClear
                       placeholder="跟随 Agent 主模型"
-                      options={models.map((m) => ({ label: m, value: m }))}
+                      options={modelOptions}
                     />
                   </Form.Item>
                   <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>

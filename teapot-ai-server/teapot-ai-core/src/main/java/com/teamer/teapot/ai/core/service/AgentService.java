@@ -5,6 +5,7 @@ import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.common.model.PageData;
 import com.teamer.teapot.ai.core.agui.TeapotAguiAgentRegistrar;
 import com.teamer.teapot.ai.core.channel.ChannelHub;
+import com.teamer.teapot.ai.core.crypto.ConfigCryptoService;
 import com.teamer.teapot.ai.core.sandbox.SandboxConnectivity;
 import com.teamer.teapot.ai.core.audit.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
@@ -33,8 +34,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Agent 管理（SPEC §7）：CRUD + Skill 绑定 + 同步调试对话。
@@ -64,6 +68,7 @@ public class AgentService {
     private final ChannelHub channelHub;
     private final WorkspaceService workspaceService;
     private final ModelService modelService;
+    private final ConfigCryptoService crypto;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
@@ -75,7 +80,8 @@ public class AgentService {
                         ChannelConfigService channelConfigService,
                         ChannelHub channelHub,
                         WorkspaceService workspaceService,
-                        ModelService modelService) {
+                        ModelService modelService,
+                        ConfigCryptoService crypto) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.agentRegistry = agentRegistry;
@@ -89,6 +95,7 @@ public class AgentService {
         this.channelHub = channelHub;
         this.workspaceService = workspaceService;
         this.modelService = modelService;
+        this.crypto = crypto;
     }
 
     public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled, Long workspaceId) {
@@ -106,11 +113,13 @@ public class AgentService {
         }
         long total = agentMapper.count(keyword, includeDisabled, scopeId);
         List<AgentDO> list = agentMapper.selectPage(keyword, includeDisabled, scopeId, offset, size);
+        list.forEach(this::redactSecrets);
         return PageData.of(total, list);
     }
 
     public AgentDetailVO detail(String agentKey) {
         AgentDO agent = requireAgent(agentKey);
+        redactSecrets(agent);
         List<String> skillNames = agentSkillMapper.selectByAgentKey(agentKey)
                 .stream().map(AgentSkillBind::getSkillName).toList();
         return AgentDetailVO.of(agent, skillNames);
@@ -133,16 +142,14 @@ public class AgentService {
                 ? DEFAULT_COMPACTION_TRIGGER : request.getCompactionTrigger());
         agent.setCompactionKeep(request.getCompactionKeep() == null
                 ? DEFAULT_COMPACTION_KEEP : request.getCompactionKeep());
-        agent.setFeature(validateFeature(request.getFeature()));
+        agent.setFeature(validateFeature(request.getFeature(), existed == null ? null : existed.getFeature()));
         agent.setStatus(1);
         agent.setCreatedBy(ContextUtil.currentUserId());
         // 归属空间：null → 个人空间（首个 Agent 触发懒创建）；非 null → 校验成员后归属（SPEC §28.4）
         agent.setWorkspaceId(workspaceService.resolveTargetWorkspace(request.getWorkspaceId()));
         // 模型开放校验（SPEC §28.11）：白名单放行；否则所选模型必须开放给目标空间桶
-        if (!workspaceService.isWhitelisted(ContextUtil.currentUserId())) {
-            long bucket = request.getWorkspaceId() == null ? 0L : request.getWorkspaceId();
-            modelService.assertOpenToWorkspace(request.getModelId(), bucket);
-        }
+        assertModelOpen(request.getModelId(), request.getWorkspaceId() == null ? 0L : request.getWorkspaceId(),
+                agent.getFeature());
         if (existed != null) {
             // 软删行复活（唯一键冲突规避，SPEC §10.1）：全字段覆盖更新
             agentMapper.update(agent);
@@ -156,7 +163,9 @@ public class AgentService {
         channelHub.sync(request.getAgentKey());
         auditService.log("agent.create", request.getAgentKey(),
                 "modelId=" + request.getModelId());
-        return agentMapper.selectByAgentKey(request.getAgentKey());
+        AgentDO created = agentMapper.selectByAgentKey(request.getAgentKey());
+        redactSecrets(created);
+        return created;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -176,10 +185,6 @@ public class AgentService {
             agent.setSysPrompt(request.getSysPrompt());
         }
         if (request.getModelId() != null) {
-            if (!workspaceService.isWhitelisted(ContextUtil.currentUserId())) {
-                long bucket = workspaceService.modelBucketForWorkspace(agent.getWorkspaceId());
-                modelService.assertOpenToWorkspace(request.getModelId(), bucket);
-            }
             agent.setModelId(request.getModelId());
         }
         // compaction 列为 NOT NULL：合并后仍为 null 时回填默认值
@@ -198,7 +203,13 @@ public class AgentService {
         validateCompaction(request.getCompactionTrigger(), request.getCompactionKeep());
         // feature 非 null 时整体替换（SPEC §16.6；空对象 {} = 清空）
         if (request.getFeature() != null) {
-            agent.setFeature(validateFeature(request.getFeature()));
+            String previousFeature = agent.getFeature();
+            agent.setFeature(validateFeature(request.getFeature(), previousFeature));
+        }
+        // 模型开放校验放在 feature 合并之后：本次保存可能同时带来新模型与它的自带凭证（SPEC §29）
+        if (request.getModelId() != null) {
+            assertModelOpen(request.getModelId(),
+                    workspaceService.modelBucketForWorkspace(agent.getWorkspaceId()), agent.getFeature());
         }
         agentMapper.update(agent);
         if (request.getSkillNames() != null) {
@@ -209,6 +220,7 @@ public class AgentService {
         // channel 改绑/停用即时生效（SPEC §24.7 验收 5）：sync 内部 restart 或 stop
         channelHub.sync(agentKey);
         auditService.log("agent.update", agentKey, null);
+        redactSecrets(agent);
         return agent;
     }
 
@@ -229,6 +241,7 @@ public class AgentService {
         agent.setAvatar(avatarUrl);
         agentMapper.update(agent);
         auditService.log("agent.avatar", agentKey, null);
+        redactSecrets(agent);
         return agent;
     }
 
@@ -247,6 +260,7 @@ public class AgentService {
         agentMapper.update(agent);
         agentRegistry.invalidate(agentKey);
         auditService.log("agent.moveWorkspace", agentKey, "workspaceId=" + agent.getWorkspaceId());
+        redactSecrets(agent);
         return agent;
     }
 
@@ -316,11 +330,15 @@ public class AgentService {
 
     /**
      * feature 保存前强校验（SPEC §16.6/§22）：枚举/范围/前缀/记录引用完整性，不合法直接拒绝；
-     * 返回入库 JSON（空命名空间返回 null）。
+     * 返回入库 JSON（空命名空间返回 null）。自定义模型的 apiKey 在此加密入库（SPEC §29）。
+     *
+     * @param previousFeatureJson 该 Agent 上一版入库 JSON（create 时为软删复活行的 feature，可为 null），
+     *                            用于「apiKey 留空 = 沿用原密钥」
      */
-    private String validateFeature(Map<String, Object> featureMap) {
+    private String validateFeature(Map<String, Object> featureMap, String previousFeatureJson) {
         try {
             AgentFeature feature = AgentFeature.parse(objectMapper.writeValueAsString(featureMap));
+            sealCustomModelKeys(feature, previousFeatureJson);
             feature.validate(sandboxConnectivity.anyConfigured());
             validateFeatureRecords(feature);
             return feature.toJson();
@@ -329,6 +347,79 @@ public class AgentService {
         } catch (Exception e) {
             throw new BizException("feature 序列化失败：" + e.getMessage());
         }
+    }
+
+    /**
+     * 自定义模型密钥入库（SPEC §29）：传了明文就加密替换；留空则沿用上一版同 modelId 的密文
+     * （与沙箱/OSS 记录的「留空=不改」同语义）。modelId 变了视为新模型，需重填密钥。
+     */
+    private void sealCustomModelKeys(AgentFeature feature, String previousFeatureJson) {
+        List<AgentFeature.CustomModel> models = feature.getCustomModels();
+        if (models.isEmpty()) {
+            return;
+        }
+        Map<String, String> previous = new HashMap<>();
+        for (AgentFeature.CustomModel old : AgentFeature.parse(previousFeatureJson).getCustomModels()) {
+            if (!isBlank(old.getApiKey())) {
+                previous.put(old.modelId(), old.getApiKey());
+            }
+        }
+        for (AgentFeature.CustomModel model : models) {
+            String apiKey = model.getApiKey();
+            if (isBlank(apiKey)) {
+                model.setApiKey(previous.get(model.modelId()));
+            } else {
+                if (!crypto.available()) {
+                    throw new BizException("服务器未配置 TEAPOT_SECRET_KEY，无法保存自定义模型密钥");
+                }
+                model.setApiKey(crypto.encrypt(apiKey.trim()));
+            }
+            // 回显标记是出参派生值，前端会原样带回来，不落库
+            model.setHasApiKey(null);
+        }
+        feature.setCustomModels(models);
+    }
+
+    /**
+     * 出参脱敏（SPEC §29）：自定义模型的 apiKey 是 AES-GCM 密文，一律不回前端，
+     * 只回 hasApiKey 标记供界面提示「已配置密钥，留空则不修改」。
+     */
+    private void redactSecrets(AgentDO agent) {
+        if (agent == null || isBlank(agent.getFeature())) {
+            return;
+        }
+        AgentFeature feature = AgentFeature.parse(agent.getFeature());
+        List<AgentFeature.CustomModel> models = feature.getCustomModels();
+        if (models.isEmpty()) {
+            return;
+        }
+        for (AgentFeature.CustomModel model : models) {
+            model.setHasApiKey(!isBlank(model.getApiKey()));
+            model.setApiKey(null);
+        }
+        feature.setCustomModels(models);
+        agent.setFeature(feature.toJson());
+    }
+
+    /** 该 Agent 自带模型的 modelId 集合（SPEC §29）：这些模型不走空间授权 */
+    private Set<String> customModelIds(String featureJson) {
+        Set<String> ids = new HashSet<>();
+        for (AgentFeature.CustomModel model : AgentFeature.parse(featureJson).getCustomModels()) {
+            ids.add(model.modelId());
+        }
+        return ids;
+    }
+
+    /**
+     * 模型对空间开放的校验闸门：白名单用户放行；Agent 自带模型（SPEC §29，凭证是用户自己的）
+     * 放行；其余必须已开放给目标空间桶（SPEC §28.11）。
+     */
+    private void assertModelOpen(String modelId, long bucket, String featureJson) {
+        if (workspaceService.isWhitelisted(ContextUtil.currentUserId())
+                || customModelIds(featureJson).contains(modelId)) {
+            return;
+        }
+        modelService.assertOpenToWorkspace(modelId, bucket);
     }
 
     /** 记录引用完整性（§22）：sandbox/storage 引用的记录必须存在且对应链路凭证齐备 */

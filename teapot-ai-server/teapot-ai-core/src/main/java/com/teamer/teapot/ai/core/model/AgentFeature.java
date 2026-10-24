@@ -6,6 +6,7 @@ import com.teamer.teapot.ai.common.exception.BizException;
 import lombok.Data;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,6 +39,8 @@ public class AgentFeature {
     public static final String NS_A2UI = "a2ui";
     /** 意图守卫（AgentScope jev 扩展）：JEV 判定用户请求意图，接受/拒绝规则可配置 */
     public static final String NS_GUARD = "guard";
+    /** Agent 自带模型（SPEC §29）：用户自配 provider/模型名/baseUrl 与自己的 API Key（密文入库） */
+    public static final String NS_CUSTOM_MODELS = "customModels";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
@@ -63,6 +66,12 @@ public class AgentFeature {
     /** 意图守卫拦截方式可选值：jev=JEV 决策模型 / llm=大模型判定 */
     private static final Set<String> GUARD_MODES = Set.of("jev", "llm");
     private static final int GUARD_MAX_RULE_LENGTH = 500;
+    /** 模型供应商可选值（与 ModelRegistry 实际支持的 provider 一致） */
+    private static final Set<String> MODEL_PROVIDERS = Set.of("dashscope", "openai");
+    /** 模型能力位可选值（与 t_model_entry.capabilities 同语义） */
+    private static final Set<String> MODEL_CAPABILITIES = Set.of("image", "video");
+    /** Agent 自带模型条数上限（防 feature 无限膨胀） */
+    private static final int CUSTOM_MODEL_MAX = 20;
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
@@ -317,6 +326,28 @@ public class AgentFeature {
         }
     }
 
+    /** customModels 命名空间（SPEC §29）；未配置返回空表 */
+    public List<CustomModel> getCustomModels() {
+        Object raw = namespaces.get(NS_CUSTOM_MODELS);
+        if (!(raw instanceof List)) {
+            return List.of();
+        }
+        List<CustomModel> list = MAPPER.convertValue(raw, new TypeReference<List<CustomModel>>() {
+        });
+        return list == null ? List.of() : list;
+    }
+
+    /** 写入/替换 customModels 命名空间（空列表 = 移除该命名空间） */
+    public void setCustomModels(List<CustomModel> customModels) {
+        if (customModels == null || customModels.isEmpty()) {
+            namespaces.remove(NS_CUSTOM_MODELS);
+        } else {
+            namespaces.put(NS_CUSTOM_MODELS, MAPPER.convertValue(customModels,
+                    new TypeReference<List<Map<String, Object>>>() {
+                    }));
+        }
+    }
+
     /**
      * 保存时强校验（SPEC §16.6/§22 校验表）：不合法直接抛 BizException 拒绝。
      * 记录存在性由 AgentService 补充校验（模型层不依赖 Service）。
@@ -331,6 +362,7 @@ public class AgentFeature {
         validateMemory();
         validateA2ui();
         validateGuard();
+        validateCustomModels();
         Sandbox sb = getSandbox();
         if (sb == null) {
             return;
@@ -530,6 +562,38 @@ public class AgentFeature {
         }
     }
 
+    /** customModels 命名空间校验（SPEC §29）：供应商/模型名/能力位枚举，modelId 不得重复 */
+    private void validateCustomModels() {
+        List<CustomModel> list = getCustomModels();
+        if (list.size() > CUSTOM_MODEL_MAX) {
+            throw new BizException("自定义模型最多 " + CUSTOM_MODEL_MAX + " 个");
+        }
+        if (list.stream().map(CustomModel::modelId).distinct().count() != list.size()) {
+            throw new BizException("自定义模型存在重复的 provider:modelName");
+        }
+        for (CustomModel cm : list) {
+            if (!MODEL_PROVIDERS.contains(cm.getProvider())) {
+                throw new BizException("自定义模型供应商非法，可选值：" + MODEL_PROVIDERS);
+            }
+            if (isBlank(cm.getModelName())) {
+                throw new BizException("自定义模型必须指定模型名");
+            }
+            // 校验发生在密钥入库之后，此处仍为空 = 用户从未填写且无历史密文可继承；
+            // 不放行，否则解析时会静默回落平台密钥，把用户自带模型的调用计费到系统账号
+            if (isBlank(cm.getApiKey())) {
+                throw new BizException("自定义模型 " + cm.modelId() + " 必须填写 API Key");
+            }
+            if (!isBlank(cm.getBaseUrl()) && !cm.getBaseUrl().startsWith("http")) {
+                throw new BizException("自定义模型 baseUrl 必须是 http(s) 地址");
+            }
+            for (String c : cm.capabilitySet()) {
+                if (!MODEL_CAPABILITIES.contains(c)) {
+                    throw new BizException("自定义模型能力位非法，可选值：" + MODEL_CAPABILITIES);
+                }
+            }
+        }
+    }
+
     /** storage 命名空间结构（SPEC §22.1：图片存储载体按 Agent 选择，非全局） */
     @Data
     public static class Storage {
@@ -583,6 +647,48 @@ public class AgentFeature {
     public static class Compaction {
         /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
         private String modelId;
+    }
+
+    /**
+     * Agent 自带模型（SPEC §29）：与 t_model_entry 同构，差别在凭证随 Agent 存——
+     * {@code apiKey} 入库为 ConfigCryptoService 密文，接口回显一律清空并置 {@code hasApiKey}，
+     * 密文不出服务端；保存时留空 = 沿用上一版该 modelId 的密文。
+     */
+    @Data
+    public static class CustomModel {
+        /** 供应商：dashscope / openai（openai 语义含任意 OpenAI 兼容网关） */
+        private String provider;
+        private String modelName;
+        /** 下拉展示名，留空 = 显示 provider:modelName */
+        private String displayName;
+        /** 网关地址；留空回落服务端 OPENAI_BASE_URL */
+        private String baseUrl;
+        /** 用户自带的 API Key（写入明文 → 入库密文 → 回显空） */
+        private String apiKey;
+        /** 回显标记：服务端已存有该模型密钥 */
+        private Boolean hasApiKey;
+        /** 能力位，逗号分隔（image/video），与 t_model_entry.capabilities 同语义 */
+        private String capabilities;
+
+        /** 模型标识，与 t_model_entry 的 modelId 同构 */
+        public String modelId() {
+            return provider + ":" + modelName;
+        }
+
+        /** 能力位集合（小写去重）：决定 DashScope 端点与媒体模态守卫放行范围 */
+        public Set<String> capabilitySet() {
+            if (isBlank(capabilities)) {
+                return Set.of();
+            }
+            Set<String> caps = new LinkedHashSet<>();
+            for (String cap : capabilities.split(",")) {
+                String c = cap.trim().toLowerCase(java.util.Locale.ROOT);
+                if (!c.isEmpty()) {
+                    caps.add(c);
+                }
+            }
+            return Set.copyOf(caps);
+        }
     }
 
     /**

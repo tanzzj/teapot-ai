@@ -21,6 +21,7 @@ import com.teamer.teapot.ai.core.sandbox.agentrun.AgentRunConnection;
 import com.teamer.teapot.ai.core.sandbox.e2b.E2bConnection;
 import com.teamer.teapot.ai.core.oss.OssConnection;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
+import com.teamer.teapot.ai.core.crypto.ConfigCryptoService;
 import com.teamer.teapot.ai.core.dao.AgentMapper;
 import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.dao.ChatSessionMapper;
@@ -119,6 +120,8 @@ public class AgentBuilder {
     private final OssConnection ossConnection;
     /** 按 Agent 生效的媒体存储载体（生成产物转存 OSS，SPEC-media-gen §4.9） */
     private final ImageStorageRouter imageStorageRouter;
+    /** Agent 自带模型密钥的解密入口（feature.customModels，SPEC §29） */
+    private final ConfigCryptoService crypto;
     /** 生图/生视频工具密钥（SPEC-media-gen §4.1：复用现有环境变量，不落库） */
     @Value("${DASHSCOPE_API_KEY:}")
     private String dashscopeApiKey;
@@ -142,7 +145,8 @@ public class AgentBuilder {
                           MCPConfigService mcpConfigService,
                           OssClientManager ossClientManager,
                           OssConnection ossConnection,
-                          ImageStorageRouter imageStorageRouter) {
+                          ImageStorageRouter imageStorageRouter,
+                          ConfigCryptoService crypto) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.chatSessionMapper = chatSessionMapper;
@@ -160,6 +164,7 @@ public class AgentBuilder {
         this.ossClientManager = ossClientManager;
         this.ossConnection = ossConnection;
         this.imageStorageRouter = imageStorageRouter;
+        this.crypto = crypto;
     }
 
     /** 按 t_agent 记录装配 HarnessAgent；extraMiddlewares 允许为空 */
@@ -189,6 +194,9 @@ public class AgentBuilder {
         AgentFeature.Runtime rt = feature.getRuntime();
 
         boolean thinking = rt != null && Boolean.TRUE.equals(rt.getThinkingMode());
+        // Agent 自带模型凭证（SPEC §29）：主模型与各界点子模型解析时按 modelId 取用，
+        // 取不到即回落系统入口与环境变量（存量 Agent 无该命名空间，行为不变）
+        Map<String, ModelRegistry.Credential> customCreds = customCredentials(feature);
 
         // skill 多来源（SPEC §15.7 扩展）：[mysql 只读, git?, oss?]，SkillFilter 按 name 跨来源过滤
         List<AgentSkillRepository> repos = new ArrayList<>();
@@ -208,7 +216,8 @@ public class AgentBuilder {
                 .name(agentKey)
                 .description(agentDO.getDescription() == null ? agentDO.getName() : agentDO.getDescription())
                 .sysPrompt(agentDO.getSysPrompt())
-                .model(modelRegistry.resolve(agentDO.getModelId(), thinking))
+                .model(modelRegistry.resolve(agentDO.getModelId(), thinking,
+                        credOf(customCreds, agentDO.getModelId())))
                 .workspace(workspace)
                 .stateStore(stateStore)
                 // 框架 2.1.0 起默认 EVENT_LOG，会把消息落本地 journal 而非 MySQL stateStore，
@@ -225,8 +234,10 @@ public class AgentBuilder {
                     .triggerMessages(trigger)
                     .keepMessages(keep);
             if (compactionCfg != null && compactionCfg.getModelId() != null && !compactionCfg.getModelId().isBlank()) {
-                ccBuilder.model(modelRegistry.resolve(compactionCfg.getModelId()));
-                log.info("压缩摘要使用独立模型 modelId={}", compactionCfg.getModelId());
+                String compactionModelId = compactionCfg.getModelId();
+                ccBuilder.model(modelRegistry.resolve(compactionModelId, false,
+                        credOf(customCreds, compactionModelId)));
+                log.info("压缩摘要使用独立模型 modelId={}", compactionModelId);
             }
             builder.compaction(ccBuilder.build());
         }
@@ -251,7 +262,7 @@ public class AgentBuilder {
             builder.disableDynamicSubagents();
         }
         // 记忆（SPEC §25）：请求级开关（chat 界面参数）优先于 Agent 配置
-        applyMemory(builder, feature.getMemory());
+        applyMemory(builder, feature.getMemory(), customCreds);
         // shell 门控：显式配置优先；未配置（存量）跟随沙箱启用，保证存量行为不回退
         boolean shellEnabled = rt != null && rt.getEnableShell() != null
                 ? rt.getEnableShell() : (sb != null && sb.isEnabled());
@@ -303,16 +314,17 @@ public class AgentBuilder {
         // A2UI 界面生成（feature.a2ui）：启用即挂 A2uiMiddleware，注册 a2ui_render + ask_user_question
         // （表单档，覆盖 Web 链路默认挂的纯文本澄清档；组件 DSL 在 SDK 渲染子 Agent 内）
         A2uiMiddleware a2uiMiddleware =
-                applyA2ui(builder, feature.getA2ui(), agentKey, agentDO.getModelId());
+                applyA2ui(builder, feature.getA2ui(), agentKey, agentDO.getModelId(), customCreds);
         if (a2uiMiddleware != null) {
             toolInstalling.add(a2uiMiddleware);
         }
         // 意图守卫（feature.guard）：启用且有规则 → 按 mode 挂 JEV 判定或大模型判定守卫
-        applyGuard(builder, feature.getGuard(), agentKey, agentDO.getModelId());
+        applyGuard(builder, feature.getGuard(), agentKey, agentDO.getModelId(), customCreds);
         // 媒体模态守卫（SPEC-media-gen §4.4）：模型能力位未声明的媒体块（如 qwen3.8-max 的 audio）
         // 在请求视图里降级为文本引用，避免产物块一旦进入历史就被每轮重放、被平台 400 钉死整个会话；
         // 不依赖生成开关，任何来源的媒体块（工具产物/用户上传）都走同一守卫
-        Set<String> modalities = modelRegistry.capabilities(agentDO.getModelId());
+        Set<String> modalities = modelRegistry.capabilities(agentDO.getModelId(),
+                credOf(customCreds, agentDO.getModelId()));
         builder.middleware(new MediaModalGuardMiddleware(modalities));
         log.info("媒体模态守卫已挂载 agentKey={} 模型可输入模态={}", agentKey, modalities);
         // 用户附件地址注入（SPEC-media-gen §4.5）：透传给视觉模型的附件只有像素、没有地址文本，
@@ -323,9 +335,12 @@ public class AgentBuilder {
         AgentFeature.SessionTitle stCfg = feature.getSessionTitle();
         boolean titleEnabled = stCfg == null || stCfg.getEnabled() == null || stCfg.getEnabled();
         if (titleEnabled) {
-            Model titleModel = (stCfg != null && stCfg.getModelId() != null && !stCfg.getModelId().isBlank())
-                    ? modelRegistry.resolve(stCfg.getModelId())
-                    : modelRegistry.resolve(agentDO.getModelId(), thinking);
+            boolean dedicatedTitleModel = stCfg != null && notBlank(stCfg.getModelId());
+            String titleModelId = dedicatedTitleModel ? stCfg.getModelId() : agentDO.getModelId();
+            ModelRegistry.Credential titleCred = credOf(customCreds, titleModelId);
+            Model titleModel = dedicatedTitleModel
+                    ? modelRegistry.resolve(titleModelId, false, titleCred)
+                    : modelRegistry.resolve(titleModelId, thinking, titleCred);
             builder.middleware(new SessionTitleGenMiddleware(
                     agentKey, agentDO.getName(), chatSessionMapper, titleModel));
         } else {
@@ -366,6 +381,41 @@ public class AgentBuilder {
         // MCP Server 注册（SPEC §MCP）：Agent 级配置，引用系统记录或内联完整配置
         applyMcp(agent, feature.getMcp());
         return agent;
+    }
+
+    /**
+     * feature.customModels → modelId 凭证表（SPEC §29）：入库为 AES-GCM 密文，装配时解密。
+     * 主密钥缺失或密文不可解时直接失败并点名模型——不能回落平台密钥冒用用户自带的模型，
+     * 否则请求会静默计费到系统账号上。
+     */
+    private Map<String, ModelRegistry.Credential> customCredentials(AgentFeature feature) {
+        List<AgentFeature.CustomModel> models = feature.getCustomModels();
+        if (models.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, ModelRegistry.Credential> creds = new HashMap<>();
+        for (AgentFeature.CustomModel model : models) {
+            String apiKey = model.getApiKey();
+            if (notBlank(apiKey)) {
+                if (!crypto.available()) {
+                    throw new BizException("服务器未配置 TEAPOT_SECRET_KEY，无法使用 Agent 自带模型 " + model.modelId());
+                }
+                try {
+                    apiKey = crypto.decrypt(apiKey);
+                } catch (BizException e) {
+                    throw new BizException("Agent 自带模型 " + model.modelId() + " 的密钥无法解密，请在配置页重新填写："
+                            + e.getMessage());
+                }
+            }
+            creds.put(model.modelId(), new ModelRegistry.Credential(
+                    apiKey, model.getBaseUrl(), model.capabilitySet()));
+        }
+        return creds;
+    }
+
+    /** 按 modelId 取 Agent 自带凭证（SPEC §29）；未自带时返回 null = 走系统入口与环境变量 */
+    private static ModelRegistry.Credential credOf(Map<String, ModelRegistry.Credential> creds, String modelId) {
+        return modelId == null ? null : creds.get(modelId);
     }
 
     /**
@@ -439,7 +489,8 @@ public class AgentBuilder {
      * @return 已挂载的中间件（供 build 后装工具）；未启用或挂载失败时为 {@code null}
      */
     private A2uiMiddleware applyA2ui(HarnessAgent.Builder builder, AgentFeature.A2ui cfg,
-                                     String agentKey, String defaultModelId) {
+                                     String agentKey, String defaultModelId,
+                                     Map<String, ModelRegistry.Credential> customCreds) {
         if (cfg == null || !Boolean.TRUE.equals(cfg.getEnabled())) {
             return null;
         }
@@ -467,7 +518,8 @@ public class AgentBuilder {
         try {
             A2uiMiddleware middleware = Boolean.TRUE.equals(cfg.getRenderNoThinking())
                     // 子模型输出结构化组件树，思考纯属拖慢渲染：显式关闭（同守卫判定同款链路）
-                    ? new A2uiMiddleware(config, modelRegistry.resolveNoThinking(defaultModelId))
+                    ? new A2uiMiddleware(config, modelRegistry.resolveNoThinking(
+                            defaultModelId, credOf(customCreds, defaultModelId)))
                     : new A2uiMiddleware(config);
             builder.middleware(middleware);
             a2ui = middleware;
@@ -491,7 +543,7 @@ public class AgentBuilder {
      * 门控：enabled + 至少一条规则。
      */
     private void applyGuard(HarnessAgent.Builder builder, AgentFeature.Guard cfg, String agentKey,
-                            String defaultModelId) {
+                            String defaultModelId, Map<String, ModelRegistry.Credential> customCreds) {
         if (cfg == null || !Boolean.TRUE.equals(cfg.getEnabled())) {
             return;
         }
@@ -512,8 +564,9 @@ public class AgentBuilder {
         if ("llm".equals(mode)) {
             // 判定输出只有 ACCEPT/REJECT，思考纯属拖慢守卫：统一显式关闭思考
             // （qwen3 混合思考模型不下发参数时服务端默认开启）
+            String judgeModelId = notBlank(cfg.getModelId()) ? cfg.getModelId().trim() : defaultModelId;
             Model judgeModel = modelRegistry.resolveNoThinking(
-                    notBlank(cfg.getModelId()) ? cfg.getModelId().trim() : defaultModelId);
+                    judgeModelId, credOf(customCreds, judgeModelId));
             builder.middleware(new LlmIntentGuardMiddleware(judgeModel, rules,
                     notBlank(cfg.getDenyMessage()) ? cfg.getDenyMessage().trim() : null));
             log.info("意图守卫已挂载(LLM 判定) agentKey={} 规则数={} 判定模型={}",
@@ -599,7 +652,8 @@ public class AgentBuilder {
      * 关闭 = disableMemoryHooks（flush+后台维护）+ disableMemoryTools（memory_search 等）；
      * 开启时按配置设 flush 触发策略（always / never / throttled，缺省 always = SDK 默认）。
      */
-    private void applyMemory(HarnessAgent.Builder builder, AgentFeature.Memory mem) {
+    private void applyMemory(HarnessAgent.Builder builder, AgentFeature.Memory mem,
+                             Map<String, ModelRegistry.Credential> customCreds) {
         Boolean hint = AgentRuntimeHints.getMemoryMode();
         AgentRuntimeHints.clear();
         boolean enabled = hint != null
@@ -620,16 +674,20 @@ public class AgentBuilder {
             };
             MemoryConfig.Builder mcBuilder = MemoryConfig.builder().flushTrigger(trigger);
             if (mem.getModelId() != null && !mem.getModelId().isBlank()) {
-                mcBuilder.model(modelRegistry.resolve(mem.getModelId()));
-                log.info("记忆摘要使用独立模型 modelId={}", mem.getModelId());
+                String memoryModelId = mem.getModelId();
+                mcBuilder.model(modelRegistry.resolve(memoryModelId, false,
+                        credOf(customCreds, memoryModelId)));
+                log.info("记忆摘要使用独立模型 modelId={}", memoryModelId);
             }
             builder.memory(mcBuilder.build());
         } else if (mem != null && mem.getModelId() != null && !mem.getModelId().isBlank()) {
             // flushTrigger 未配置但 modelId 配置了，仍需构建 MemoryConfig 传入模型
+            String memoryModelId = mem.getModelId();
             builder.memory(MemoryConfig.builder()
-                    .model(modelRegistry.resolve(mem.getModelId()))
+                    .model(modelRegistry.resolve(memoryModelId, false,
+                            credOf(customCreds, memoryModelId)))
                     .build());
-            log.info("记忆摘要使用独立模型 modelId={}", mem.getModelId());
+            log.info("记忆摘要使用独立模型 modelId={}", memoryModelId);
         }
     }
 
