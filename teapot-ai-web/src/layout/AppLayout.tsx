@@ -182,11 +182,28 @@ export default function AppLayout() {
                 <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0902b</span>
               </div>
 
-              {/* 分段标签导航（Barley Chat/Agent 切换样式） */}
+              {/* 分段标签导航（Barley Chat/Agent 切换样式）。label 自带 onClick：受控 value
+                  命中子路由（/agents/:key、/skills/:name）时点已选中项不触发 onChange，
+                  详情页就没有返回列表的入口了 */}
               <Segmented
                 value={selectedKey}
                 onChange={(v) => navigate(String(v))}
-                options={navItems.map((i) => ({ value: i.key, label: i.label, icon: i.icon }))}
+                options={navItems.map((i) => ({
+                  value: i.key,
+                  icon: i.icon,
+                  label: (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (location.pathname !== i.key) {
+                          navigate(i.key);
+                        }
+                      }}
+                    >
+                      {i.label}
+                    </span>
+                  ),
+                }))}
               />
             </>
           )}
