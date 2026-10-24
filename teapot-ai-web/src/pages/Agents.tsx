@@ -3,7 +3,6 @@ import { Col, Row, Spin } from 'antd';
 import {
   Button,
   Empty,
-  Form,
   Input,
   message,
   Pagination,
@@ -19,7 +18,8 @@ import {
   SparkSearchLine,
 } from '@agentscope-ai/icons';
 import { useNavigate } from 'react-router-dom';
-import { agentCreate, agentDelete, agentList, agentMoveWorkspace, modelPresets } from '../api/agent';
+import { agentDelete, agentList, agentMoveWorkspace } from '../api/agent';
+import { NEW_AGENT_KEY } from './AgentDetail';
 import type { Agent } from '../types';
 import { ResponsiveModal } from '../components/ResponsiveModal';
 import { useWorkspaceStore } from '../store/workspace';
@@ -37,11 +37,8 @@ export default function Agents() {
   const [keyword, setKeyword] = useState('');
   const [includeDisabled, setIncludeDisabled] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
   const [moveAgent, setMoveAgent] = useState<Agent | null>(null);
   const [moveTarget, setMoveTarget] = useState<string>('personal');
-  const [form] = Form.useForm();
 
   useEffect(() => {
     if (!loaded) {
@@ -89,22 +86,6 @@ export default function Agents() {
     load();
   };
 
-  const onCreate = async () => {
-    const values = await form.validateFields();
-    await agentCreate({
-      agentKey: values.agentKey,
-      name: values.name,
-      description: values.description,
-      sysPrompt: values.sysPrompt || '你是一个乐于助人的 AI 助手。',
-      modelId: values.modelId,
-      workspaceId: values.workspaceId && values.workspaceId !== 'personal' ? Number(values.workspaceId) : undefined,
-    });
-    message.success('创建成功');
-    setCreateOpen(false);
-    form.resetFields();
-    load();
-  };
-
   return (
     <div style={{ padding: '24px 28px', minHeight: '100%' }}>
       {/* 标题行（Barley：大标题 + 副标题 + 右侧黑色主按钮） */}
@@ -142,10 +123,7 @@ export default function Agents() {
         <Button
           type="primary"
           icon={<SparkPlusLine />}
-          onClick={() => {
-            modelPresets(activeId ?? 0).then(setModels).catch(() => undefined);
-            setCreateOpen(true);
-          }}
+          onClick={() => navigate(`/agents/${NEW_AGENT_KEY}`)}
         >
           New Agent
         </Button>
@@ -285,50 +263,6 @@ export default function Agents() {
       <div style={{ marginTop: 20, textAlign: 'right' }}>
         <Pagination current={page} pageSize={12} total={total} onChange={setPage} showSizeChanger={false} />
       </div>
-
-      <ResponsiveModal
-        title="新建 Agent"
-        open={createOpen}
-        onOk={onCreate}
-        onCancel={() => setCreateOpen(false)}
-        okText="创建"
-        cancelText="取消"
-        destroyOnClose
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          preserve={false}
-          initialValues={{ workspaceId: activeId === null ? 'personal' : String(activeId) }}
-        >
-          <Form.Item
-            name="agentKey"
-            label="Agent 标识"
-            rules={[
-              { required: true, message: '请输入标识' },
-              { pattern: /^[a-z][a-z0-9-]{1,63}$/, message: '小写字母开头，仅含小写字母/数字/短横线，2-64 位' },
-            ]}
-            extra="创建后不可修改，将作为 AG-UI 路由 key"
-          >
-            <Input placeholder="如 general-assistant" />
-          </Form.Item>
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="如 通用助手" />
-          </Form.Item>
-          <Form.Item name="workspaceId" label="所属空间" extra="个人空间在首个 Agent 创建时才落库">
-            <Select options={spaceOptions} />
-          </Form.Item>
-          <Form.Item name="description" label="描述">
-            <Input.TextArea rows={2} placeholder="一句话描述该 Agent 的用途" />
-          </Form.Item>
-          <Form.Item name="modelId" label="模型" rules={[{ required: true, message: '请选择模型' }]}>
-            <Select options={models.map((m) => ({ label: m, value: m }))} placeholder="选择模型" />
-          </Form.Item>
-          <Form.Item name="sysPrompt" label="系统提示词">
-            <Input.TextArea rows={4} placeholder="可留空使用默认提示词" />
-          </Form.Item>
-        </Form>
-      </ResponsiveModal>
 
       {/* 移动 Agent 到目标空间（SPEC §28.6 需求 5，卡片级） */}
       <ResponsiveModal

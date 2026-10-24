@@ -30,10 +30,12 @@ import {
   SparkApplicationToolLine,
   SparkGuardrailLine,
   SparkPlusLine,
+  SparkDeleteLine,
 } from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   agentBindSkill,
+  agentCreate,
   agentDetail,
   agentUnbindSkill,
   agentUpdate,
@@ -42,6 +44,7 @@ import {
   memoryItems,
   modelPresets,
 } from '../api/agent';
+import type { AgentCreatePayload } from '../api/agent';
 import { sandboxOptions, sandboxRecordNames, storageRecordNames } from '../api/config';
 import { channelRegistry } from '../api/channelConfig';
 import { mcpRegistry } from '../api/mcpConfig';
@@ -57,9 +60,11 @@ import {
 } from '../components/MCPConfigForm';
 import HistoryChatPanel from '../chat/HistoryChatPanel';
 import { uploadAgentAvatar } from '../api/avatar';
-import { skillList } from '../api/skill';
+import { skillDelete, skillList } from '../api/skill';
+import { AddSkillButton } from '../components/AddSkill';
 import { sessionStats } from '../api/session';
 import { useAuthStore } from '../store/auth';
+import { useWorkspaceStore } from '../store/workspace';
 import { useIsPhone } from '../hooks/useIsPhone';
 import { PHONE_BP } from '../theme/breakpoints';
 import type {
@@ -187,13 +192,23 @@ function Heatmap({ agentKey }: { agentKey: string }) {
 /**
  * Agent 详情（Barley 设计语言复刻：左侧胶囊菜单 + 分区内容）。
  * SPEC §12.2：sysPrompt/模型/压缩参数/Skill 绑定。
+ * 路由 /agents/new 复用本页作为「新建态」（SPEC §12.2）：只开放 Basic Info 分区，
+ * Save 走 create，成功后换成真实 agentKey 继续配置。
  */
+export const NEW_AGENT_KEY = 'new';
+
+/** 表单空间值 → 后端 workspaceId（'personal'/留空 = 个人空间懒创建，不下发该字段） */
+function toWorkspaceId(v: unknown): number | undefined {
+  return !v || v === 'personal' ? undefined : Number(v);
+}
+
 export default function AgentDetailPage() {
   const { agentKey = '' } = useParams();
+  const isNew = agentKey === NEW_AGENT_KEY;
   const navigate = useNavigate();
   const { token } = theme.useToken();
   const [form] = Form.useForm();
-  const [section, setSection] = useState<Section>('profile');
+  const [section, setSection] = useState<Section>(isNew ? 'basic' : 'profile');
   /** 手机段（<768）：菜单默认收起为图标条，展开时悬浮覆盖，不挤压配置区 */
   const isPhone = useIsPhone();
   /** 胶囊菜单收起为纯图标（手动按钮切换；移动端切分区、桌面端会话历史分区自动收起） */
@@ -217,6 +232,49 @@ export default function AgentDetailPage() {
   /** 已加载的原始 feature 命名空间：分区保存时合并，避免单分区覆盖另一分区（§22） */
   const [loadedFeature, setLoadedFeature] = useState<Record<string, unknown>>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
+  /** 新建态：所属空间下拉与空间作用域的模型清单（SPEC §28.11 与后端保存闸门同源） */
+  const { workspaces, activeId, loaded: wsLoaded, load: loadWorkspaces } = useWorkspaceStore();
+  const draftSpace = Form.useWatch('workspaceId', form) as string | undefined;
+  const draftSeeded = useRef(false);
+
+  useEffect(() => {
+    if (!isNew) {
+      return;
+    }
+    if (!wsLoaded) {
+      loadWorkspaces();
+      return;
+    }
+    if (draftSeeded.current) {
+      return;
+    }
+    draftSeeded.current = true;
+    form.setFieldsValue({
+      modelSource: 'system',
+      workspaceId: activeId == null ? 'personal' : String(activeId),
+    });
+  }, [isNew, wsLoaded, loadWorkspaces, activeId, form]);
+
+  useEffect(() => {
+    if (!isNew) {
+      return;
+    }
+    let cancelled = false;
+    modelPresets(toWorkspaceId(draftSpace) ?? 0)
+      .then((presets) => {
+        if (!cancelled) {
+          setModels(presets || []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setModels([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isNew, draftSpace]);
   const sbEnabled = Form.useWatch(['sandbox', 'enabled'], form);
   const sbPersistence = Form.useWatch(['sandbox', 'persistence'], form);
   const chEnabled = Form.useWatch(['channel', 'enabled'], form);
@@ -345,6 +403,11 @@ export default function AgentDetailPage() {
   );
 
   const load = useCallback(async () => {
+    if (isNew) {
+      // 新建态没有 Agent 可读：模型清单由 draftSpace 的副作用负责，这里不发任何详情请求
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog] = await Promise.all([
@@ -541,7 +604,7 @@ export default function AgentDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [agentKey, form]);
+  }, [agentKey, isNew, form]);
 
   useEffect(() => {
     load();
@@ -805,6 +868,23 @@ export default function AgentDetailPage() {
     }
     setSaving(true);
     try {
+      if (isNew) {
+        const draft = payload as Record<string, unknown> & {
+          agentKey?: string;
+          workspaceId?: string;
+          sysPrompt?: string;
+        };
+        const key = (draft.agentKey ?? '').trim();
+        await agentCreate({
+          ...draft,
+          agentKey: key,
+          sysPrompt: draft.sysPrompt?.trim() ? draft.sysPrompt : '你是一个乐于助人的 AI 助手。',
+          workspaceId: toWorkspaceId(draft.workspaceId),
+        } as unknown as AgentCreatePayload);
+        message.success('创建成功');
+        navigate(`/agents/${key}`, { replace: true });
+        return;
+      }
       await agentUpdate(agentKey, payload);
       message.success('保存成功');
       load();
@@ -813,7 +893,7 @@ export default function AgentDetailPage() {
     }
   };
 
-  const menuItems: { key: Section; label: string; icon: React.ReactNode }[] = [
+  const allMenuItems: { key: Section; label: string; icon: React.ReactNode }[] = [
     { key: 'profile', label: 'Profile', icon: <SparkIdLine /> },
     { key: 'basic', label: 'Basic Info', icon: <SparkDocumentLine /> },
     { key: 'tools', label: 'Tool & Advanced', icon: <SparkSettingLine /> },
@@ -826,6 +906,15 @@ export default function AgentDetailPage() {
     { key: 'mcp', label: 'MCP', icon: <SparkMagicWandLine /> },
     { key: 'skills', label: 'Skills', icon: <SparkMagicWandLine /> },
     ...(isAdmin ? [{ key: 'history' as Section, label: '会话历史', icon: <SparkHistoryLine /> }] : []),
+  ];
+  /** 新建态只开放 Basic Info：其余分区依赖已存在的 Agent 记录（头像上传、Skill 绑定、连接记录…） */
+  const menuItems = isNew ? allMenuItems.filter((m) => m.key === 'basic') : allMenuItems;
+  /** 所属空间下拉（与 Agents 列表同一份口径）：'personal' = 个人空间，首个 Agent 创建时才落库 */
+  const spaceOptions = [
+    { value: 'personal', label: '个人空间' },
+    ...workspaces
+      .filter((w) => w.id !== null && w.id !== undefined)
+      .map((w) => ({ value: String(w.id), label: w.workspaceName })),
   ];
 
   return (
@@ -881,7 +970,7 @@ export default function AgentDetailPage() {
               fontWeight: 700,
             }}
           >
-            {(detail?.name || agentKey).charAt(0).toUpperCase()}
+            {(isNew ? '新建' : detail?.name || agentKey).charAt(0).toUpperCase()}
           </span>
         )}
         <div>
@@ -892,7 +981,7 @@ export default function AgentDetailPage() {
               color: 'rgba(26, 26, 29, 0.92)',
             }}
           >
-            {detail?.name || agentKey}
+            {isNew ? '新建 Agent' : detail?.name || agentKey}
           </div>
           <div
             style={{
@@ -901,13 +990,13 @@ export default function AgentDetailPage() {
               color: 'rgba(26, 26, 29, 0.45)',
             }}
           >
-            {agentKey}
+            {isNew ? '尚未创建' : agentKey}
           </div>
         </div>
         <div style={{ flex: 1 }} />
         {(section === 'basic' || section === 'tools' || section === 'a2ui' || section === 'guard' || section === 'multiagent' || section === 'memory' || section === 'sandbox' || section === 'channel') && (
           <Button type="primary" onClick={onSave} loading={saving}>
-            Save
+            {isNew ? '创建' : 'Save'}
           </Button>
         )}
       </div>
@@ -1143,9 +1232,31 @@ export default function AgentDetailPage() {
             {section === 'basic' && (
               <div className="glass-card" style={{ padding: 24 }}>
                 <Form form={form} layout="vertical">
-                  <Form.Item label="Agent ID">
-                    <Input value={agentKey} disabled />
-                  </Form.Item>
+                  {isNew ? (
+                    <>
+                      <Form.Item
+                        name="agentKey"
+                        label="Agent 标识"
+                        rules={[
+                          { required: true, message: '请输入标识' },
+                          {
+                            pattern: /^[a-z][a-z0-9-]{1,63}$/,
+                            message: '小写字母开头，仅含小写字母/数字/短横线，2-64 位',
+                          },
+                        ]}
+                        extra="创建后不可修改，将作为 AG-UI 路由 key"
+                      >
+                        <Input placeholder="如 general-assistant" />
+                      </Form.Item>
+                      <Form.Item name="workspaceId" label="所属空间" extra="个人空间在首个 Agent 创建时才落库">
+                        <Select options={spaceOptions} />
+                      </Form.Item>
+                    </>
+                  ) : (
+                    <Form.Item label="Agent ID">
+                      <Input value={agentKey} disabled />
+                    </Form.Item>
+                  )}
                   <Form.Item name="name" label="Name" rules={[{ required: true }]}>
                     <Input placeholder="Agent 显示名称" />
                   </Form.Item>
@@ -2170,16 +2281,16 @@ export default function AgentDetailPage() {
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                   <div style={{ fontSize: 20, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>Skills</div>
-                  <span style={{ color: 'rgba(26, 26, 29, 0.45)', fontSize: 13 }}>管理与配置技能集成</span>
+                  <span style={{ color: 'rgba(26, 26, 29, 0.45)', fontSize: 13 }}>
+                    本平台不再有「全局 skill」：这里列出的都要显式打开开关才装配
+                  </span>
                   <div style={{ flex: 1 }} />
-                  <Button type="primary" icon={<SparkMagicWandLine />} onClick={() => navigate('/skills')}>
-                    Create Skill
-                  </Button>
+                  <AddSkillButton agentKey={agentKey} onAdded={load} />
                 </div>
 
                 {allSkills.length === 0 ? (
                   <div className="glass-card" style={{ padding: 32, textAlign: 'center', color: token.colorTextTertiary, fontSize: 13 }}>
-                    暂无可用 Skill，去 Skill 工坊创建
+                    还没有可绑定的 Skill，用右上角 Add Skill 导入（zip 上传或 Git 仓库）
                   </div>
                 ) : (
                   <Row gutter={[16, 16]}>
@@ -2246,6 +2357,29 @@ export default function AgentDetailPage() {
                               }}
                             >
                               {s.description || '（无描述）'}
+                            </div>
+                            {/* 本体是跨 Agent 共享资产（SPEC §29.10）：开关只解绑，
+                                删本体要等没有任何 Agent 绑定时才允许（git 来源后端禁删，不给入口） */}
+                            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+                              <span style={{ fontSize: 11, color: 'rgba(26, 26, 29, 0.4)' }}>
+                                {(s.boundAgents?.length ?? 0) > 0
+                                  ? `${s.boundAgents!.length} 个 Agent 在用`
+                                  : '未被任何 Agent 使用'}
+                              </span>
+                              {isAdmin && (s.boundAgents?.length ?? 0) === 0 && s.source !== 'git' && (
+                                <Popconfirm
+                                  title={`删除 Skill 本体「${s.name}」？删除后不可恢复。`}
+                                  onConfirm={async () => {
+                                    await skillDelete(s.name);
+                                    message.success(`已删除 ${s.name}`);
+                                    load();
+                                  }}
+                                >
+                                  <Button size="small" danger icon={<SparkDeleteLine />}>
+                                    删除本体
+                                  </Button>
+                                </Popconfirm>
+                              )}
                             </div>
                           </div>
                         </Col>
