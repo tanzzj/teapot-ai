@@ -352,3 +352,20 @@ button[class*='btn-primary'] {
   line-height: 1.5 !important;
   padding: 10px 12px !important;
 }
+
+/* ── 弹窗关闭按钮钉在卡片右上角（SPEC §29.9）──
+   设计库把 ✕ 作为标题行的一个 flex 子项（两端对齐），位置随标题宽度/换行漂移；
+   改成绝对定位到弹窗右上角后，桌面与移动两条链路都固定在同一个位置。 */
+.ant-modal .ant-modal-content {
+  position: relative;
+}
+.ant-modal .spark-modal-title-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+}
+/* 标题给右上角的 ✕ 让出点击区，长标题不会压在图标下面 */
+.ant-modal .spark-modal-title {
+  padding-right: 28px;
+}

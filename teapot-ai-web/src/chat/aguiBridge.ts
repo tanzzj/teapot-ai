@@ -46,7 +46,9 @@ interface RunState {
   /** 块序号：本地生成唯一消息 id（不复用后端 messageId，避免同 msg 多块冲突） */
   reasoningSeq: number;
   tools: Map<string, ToolState>;
-  toolOrder: string[];
+  /** thinking / tool_call / 正文各自出现的先后顺序（SPEC §29.11）：轮末回传全量 output 时按它排，
+   *  否则模板按「reasoning 组 → tool 组 → 正文」重排，交错出现的工具调用会被挪到答案后面 */
+  timeline: string[];
   usage?: Record<string, unknown>;
 }
 
@@ -84,9 +86,16 @@ function createRunParser() {
     reasoningActive: null,
     reasoningSeq: 0,
     tools: new Map(),
-    toolOrder: [],
+    timeline: [],
     usage: undefined,
   };
+
+  /** 登记一个 UI 槽位的首次出现顺序（同一 id 只记一次） */
+  function mark(id: string) {
+    if (!state.timeline.includes(id)) {
+      state.timeline.push(id);
+    }
+  }
 
   /** 关闭当前活跃 thinking block：返回全量 completed 内容更新（无活跃块返回 null） */
   function closeActiveReasoning(): RuntimeChunk | null {
@@ -101,6 +110,7 @@ function createRunParser() {
     const block: ReasoningBlock = { id: `asst-reasoning-${state.reasoningSeq++}`, text: '' };
     state.reasoningBlocks.push(block);
     state.reasoningActive = block;
+    mark(block.id);
     return block;
   }
 
@@ -126,6 +136,7 @@ function createRunParser() {
         state.answerText += delta;
         if (!state.answerStarted) {
           state.answerStarted = true;
+          mark(ANSWER_MSG_ID);
           // 首段：必须先建立消息本体，后续 content 增量才能按 msg_id 寻址
           return {
             object: 'message',
@@ -172,7 +183,7 @@ function createRunParser() {
         const callId = String(ev.toolCallId ?? `tool-${Date.now()}`);
         const name = String(ev.toolCallName ?? 'tool');
         state.tools.set(callId, { name, args: '' });
-        state.toolOrder.push(callId);
+        mark(callId);
         return {
           object: 'message',
           id: callId,
@@ -243,60 +254,71 @@ function createRunParser() {
       }
 
       case 'RUN_FINISHED': {
-        // 收尾：回传完整 output（全部置 completed），按 id 合并修正所有中间态
+        // 收尾：回传完整 output（全部置 completed）。模板按 id 合并这批全量块，
+        // 数组顺序就是最终展示顺序，所以必须按 timeline 走（SPEC §29.11）——
+        // 早先是「全部 reasoning → 全部 tool_call → 正文」三段分组，
+        // 交错发生的工具调用会被挪到答案后面，读起来像"先给结论再查资料"
         const output: RuntimeChunk[] = [];
-        for (const block of state.reasoningBlocks) {
+        for (const id of state.timeline) {
+          if (id === ANSWER_MSG_ID) {
+            if (state.answerStarted) {
+              output.push({
+                object: 'message',
+                id: ANSWER_MSG_ID,
+                role: 'assistant',
+                type: 'message',
+                status: 'completed',
+                content: [textContent(ANSWER_MSG_ID, state.answerText, true)],
+              });
+            }
+            continue;
+          }
+          const block = state.reasoningBlocks.find((b) => b.id === id);
+          if (block) {
+            output.push({
+              object: 'message',
+              id: block.id,
+              role: 'assistant',
+              type: 'reasoning',
+              status: 'completed',
+              content: [textContent(block.id, block.text, true)],
+            });
+            continue;
+          }
+          const tool = state.tools.get(id);
+          if (!tool) {
+            continue;
+          }
           output.push({
             object: 'message',
-            id: block.id,
-            role: 'assistant',
-            type: 'reasoning',
-            status: 'completed',
-            content: [textContent(block.id, block.text, true)],
-          });
-        }
-        for (const callId of state.toolOrder) {
-          const tool = state.tools.get(callId)!;
-          output.push({
-            object: 'message',
-            id: callId,
+            id,
             role: 'assistant',
             type: 'tool_call',
             status: 'completed',
             content: [{
               object: 'content',
               type: 'data',
-              msg_id: callId,
+              msg_id: id,
               status: 'completed',
-              data: { name: tool.name, call_id: callId, arguments: tool.args },
+              data: { name: tool.name, call_id: id, arguments: tool.args },
             }],
           });
           if (tool.result !== undefined) {
             output.push({
               object: 'message',
-              id: `${callId}-output`,
+              id: `${id}-output`,
               role: 'assistant',
               type: 'tool_call_output',
               status: 'completed',
               content: [{
                 object: 'content',
                 type: 'data',
-                msg_id: `${callId}-output`,
+                msg_id: `${id}-output`,
                 status: 'completed',
-                data: { name: tool.name, call_id: callId, output: tool.result },
+                data: { name: tool.name, call_id: id, output: tool.result },
               }],
             });
           }
-        }
-        if (state.answerStarted) {
-          output.push({
-            object: 'message',
-            id: ANSWER_MSG_ID,
-            role: 'assistant',
-            type: 'message',
-            status: 'completed',
-            content: [textContent(ANSWER_MSG_ID, state.answerText, true)],
-          });
         }
         // 中断登记（ask_user_question 等工具挂起）：outcome={type:'interrupt', interrupts:[...]}；
         // 全量登记——AguiResumeCoordinator 要求下一次请求的 resume[] 精确覆盖所有未决中断
