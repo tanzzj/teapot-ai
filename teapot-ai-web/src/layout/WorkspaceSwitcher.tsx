@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Dropdown, theme } from 'antd';
-import { Button, Form, Input, message, Select } from '@agentscope-ai/design';
+import { Divider, Menu, theme } from 'antd';
+import { SparkEditLine, SparkMoveLine, SparkPlusLine } from '@agentscope-ai/icons';
+import { Form, Input, message, Select } from '@agentscope-ai/design';
 import { ResponsiveModal } from '../components/ResponsiveModal';
 import UserPicker from '../components/UserPicker';
 import { useWorkspaceStore } from '../store/workspace';
@@ -14,12 +15,13 @@ const memberLabel = (m: WorkspaceMember) =>
   m.realName ? `${m.realName}（${m.username}）` : m.username || m.userId;
 
 /**
- * 顶栏业务空间簇（SPEC §28.6，图二红框）：空间下拉 + 「＋」新建空间 + 「…」移动空间/编辑空间。
+ * 顶栏业务空间下拉（SPEC §28.6 / §28.14）：空间列表 + 弹层底部的「新建空间 / 编辑当前空间 / 移动 Agent」。
  * 默认「个人空间」= activeId null（合成项，首个 Agent 创建时才落库）。
  */
 export default function WorkspaceSwitcher() {
   const { token } = theme.useToken();
   const { workspaces, activeId, loaded, load, setActive } = useWorkspaceStore();
+  const [wsOpen, setWsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveTarget, setMoveTarget] = useState<string>(PERSONAL);
@@ -101,12 +103,24 @@ export default function WorkspaceSwitcher() {
     await load();
   };
 
-  const menuItems = [
-    { key: 'move', label: '移动空间', onClick: () => setMoveOpen(true) },
+  const actionItems = [
+    { key: 'create', label: '新建空间', icon: <SparkPlusLine /> },
     ...(canEdit
-      ? [{ key: 'edit', label: '编辑空间', onClick: () => openEdit(activeWorkspace as Workspace) }]
+      ? [{ key: 'edit', label: '编辑当前空间', icon: <SparkEditLine /> }]
       : []),
+    { key: 'move', label: '移动 Agent 到空间', icon: <SparkMoveLine /> },
   ];
+
+  const runAction = (key: string) => {
+    setWsOpen(false);
+    if (key === 'create') {
+      setCreateOpen(true);
+    } else if (key === 'edit') {
+      openEdit(activeWorkspace as Workspace);
+    } else if (key === 'move') {
+      setMoveOpen(true);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -116,15 +130,25 @@ export default function WorkspaceSwitcher() {
         onChange={(v) => setActive(v === PERSONAL ? null : Number(v))}
         style={{ width: 140 }}
         size="small"
+        open={wsOpen}
+        onOpenChange={setWsOpen}
+        popupMatchSelectWidth={false}
+        popupRender={(menu) => (
+          <>
+            {menu}
+            <Divider style={{ margin: '4px 0' }} />
+            {/* 动作区挂在弹层里：不 preventDefault 的话 mousedown 会让 Select 先失焦收起，click 就丢了 */}
+            <div onMouseDown={(e) => e.preventDefault()}>
+              <Menu
+                selectable={false}
+                items={actionItems}
+                onClick={({ key }) => runAction(key)}
+                style={{ border: 'none', background: 'transparent' }}
+              />
+            </div>
+          </>
+        )}
       />
-      <Button type="text" size="small" onClick={() => setCreateOpen(true)} title="新建空间">
-        ＋
-      </Button>
-      <Dropdown menu={{ items: menuItems }} trigger={['click']}>
-        <Button type="text" size="small" style={{ color: token.colorText }} title="空间操作">
-          ⋯
-        </Button>
-      </Dropdown>
 
       {/* 新建空间（必填字段 + 拉用户查询组件加成员，SPEC §28.6） */}
       <ResponsiveModal

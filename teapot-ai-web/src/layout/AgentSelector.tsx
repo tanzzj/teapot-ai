@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { Select } from '@agentscope-ai/design';
 import { agentList } from '../api/agent';
+import { useWorkspaceStore } from '../store/workspace';
 import type { Agent } from '../types';
 import { PHONE_BP } from '../theme/breakpoints';
 
@@ -10,12 +11,14 @@ const LS_KEY = 'teapot:lastAgent';
 /**
  * 顶栏 Agent 选择器：仅在 /chat 路由显示。
  * 选中值与对话页共用 URL 参数 ?agent=，切换后对话页按 key 重建。
+ * - 列表按当前业务空间作用域（SPEC §28.6），与对话页同源
  * - 下拉选项显示 Agent 头像
  * - 选择后存入 localStorage，下次优先选中
  */
 export default function AgentSelector() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { activeId, loaded, load } = useWorkspaceStore();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isMobile, setIsMobile] = useState(window.innerWidth < PHONE_BP);
 
@@ -26,15 +29,28 @@ export default function AgentSelector() {
   }, []);
 
   useEffect(() => {
+    if (!loaded) {
+      load();
+    }
+  }, [loaded, load]);
+
+  useEffect(() => {
+    if (!loaded) {
+      return;
+    }
     (async () => {
       try {
-        const page = await agentList({ page: 1, size: 100 });
+        const page = await agentList({
+          page: 1,
+          size: 100,
+          workspaceId: activeId ?? undefined,
+        });
         setAgents(page.list || []);
       } catch {
         setAgents([]);
       }
     })();
-  }, []);
+  }, [loaded, activeId]);
 
   if (!location.pathname.startsWith('/chat') || agents.length === 0) {
     return null;

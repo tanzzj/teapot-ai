@@ -27,6 +27,7 @@ import AgentConfigPanel from '../chat/AgentConfigPanel';
 import UserFooter from '../layout/UserFooter';
 import { newChatCoordinator } from '../chat/newChatCoordinator';
 import { useMobileUIStore } from '../store/mobileUI';
+import { useWorkspaceStore } from '../store/workspace';
 import { PHONE_BP, NARROW_BP } from '../theme/breakpoints';
 import {
   ACCEPTED_IMAGE_MIME,
@@ -211,6 +212,14 @@ export default function Chat() {
   );
   /** 手机双态：首页（全屏会话面板）↔ 聊天（chat pane 全屏）——同步到全局 store 供 AppLayout 顶栏使用 */
   const { mobileView, setMobileView } = useMobileUIStore();
+  /** 当前业务空间（SPEC §28.6）：对话页 Agent 列表按它作用域，与 Agents 页一致 */
+  const { activeId: workspaceId, loaded: workspaceLoaded, load: loadWorkspaces } = useWorkspaceStore();
+
+  useEffect(() => {
+    if (!workspaceLoaded) {
+      loadWorkspaces();
+    }
+  }, [workspaceLoaded, loadWorkspaces]);
   /** 手机首页容器（SessionPanel Portal 挂载点，由 ChatBridge 填充） */
   const [homeSlot, setHomeSlot] = useState<HTMLElement | null>(null);
   /** 平板 / 手机桌面模式（768–991）自渲染左栏槽位（模板窄屏无左栏，补位双栏） */
@@ -268,14 +277,25 @@ export default function Chat() {
     setHistorySlot(document.getElementById(slotId));
   }, [isPhone, mobileView]);
 
-  // 加载可用 Agent 列表；未指定时优先 localStorage 上次选择，否则选第一个
+  // 加载当前空间可用 Agent；未指定/指定项已不在本空间时，优先 localStorage 上次选择，否则选第一个
   useEffect(() => {
+    if (!workspaceLoaded) {
+      return;
+    }
+    setLoadingAgents(true);
     (async () => {
       try {
-        const page = await agentList({ page: 1, size: 100 });
+        const page = await agentList({
+          page: 1,
+          size: 100,
+          workspaceId: workspaceId ?? undefined,
+        });
         const list = page.list || [];
         setAgents(list);
-        if (!currentAgent && list.length > 0) {
+        if (list.length === 0) {
+          return;
+        }
+        if (!currentAgent || !list.some((a) => a.agentKey === currentAgent)) {
           const lastAgent = localStorage.getItem('teapot:lastAgent') || '';
           const defaultKey =
             lastAgent && list.some((a) => a.agentKey === lastAgent) ? lastAgent : list[0].agentKey;
@@ -286,7 +306,7 @@ export default function Chat() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [workspaceLoaded, workspaceId]);
 
   const activeAgent = useMemo(
     () => agents.find((a) => a.agentKey === currentAgent),
@@ -644,7 +664,13 @@ export default function Chat() {
           justifyContent: 'center',
         }}
       >
-        <Empty description="暂无可用 Agent，请先在「Agent 管理」中创建" />
+        <Empty
+          description={
+            workspaceId === null
+              ? '个人空间还没有 Agent：可在顶栏切换到业务空间，或先在「Agent 管理」中创建'
+              : '当前空间暂无可用 Agent，请先在「Agent 管理」中创建'
+          }
+        />
       </div>
     );
   }
