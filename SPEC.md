@@ -2438,6 +2438,26 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 
 **后续项（未做）**：运行期 `ModelRegistry.resolve` 按空间硬拦截（需给缓存加空间维度）；`capabilities` 端点按空间过滤；`AgentDetail` 模型下拉按 Agent 归属空间过滤；移动 Agent 时联动校验其模型是否开放给目标空间。
 
+### §28.12 空间编辑：改名 + 成员维护（2026-10-24 追加实现）
+
+**需求**：顶栏空间簇的「⋯」菜单增加编辑当前空间的能力，支持改名称与维护成员。
+
+**接口**：`PUT /api/workspace/{id}`（`WorkspaceUpdateRequest{workspaceName?, description?, memberUserIds?}`）→ `WorkspaceService.update`。
+- 权限：`requireManager`（owner 或 §28.7 白名单）；**个人空间拒绝编辑**（名称由系统固定、成员只有本人，没有可编辑语义）。
+- 语义：字段 `null` = 不修改；`memberUserIds` 非 null 时按**集合整体同步**——期望集里没有的成员删除，新增的按 `member` 落库，**owner 行永不删**（创建人始终保留）。空间编码与类型不可改（编码是 `personal:{userId}` 等约定的锚）。
+- 复用既有全字段 `workspaceMapper.update`（DO 先由 `requireMember` 从库里载入，故 `feature/status` 不会被这次编辑覆盖）。
+
+**前端**：`WorkspaceSwitcher` 的 ⋯ 菜单按 `canEdit`（当前空间是团队空间且 `myRole==='owner'`）追加「编辑空间」；弹窗字段=名称/描述/成员（`UserPicker` 预填现有成员）。
+- `UserPicker` 新增 `initialOptions`：多选框的回填值若不在搜索结果里会显示裸 userId，故把现有成员作为展示项并入选项（搜索结果按 userId 覆盖同名项）。
+- 编辑弹窗用 `forceRender`：`useForm` 实例未连接到 Form 元素时 `setFieldsValue` 会丢值，弹窗常驻渲染才能让「先取成员再回填」稳定生效。
+- 数据源：`api/workspace.ts` 增 `workspaceUpdate`；成员回填走既有 `GET /api/workspace/{id}/members`。
+
+**⚠️ 上线时踩到的迁移字符集坑**：部署脚本 `docker exec … mysql` 的客户端默认 `character_set_client=latin1`，于是 V13/V14/V15 里的**中文字面量被按 latin1 解释再转 utf8mb4 双重编码**入库——线上 `legacy-default` 的 `workspace_name` 变成「å›¢é˜Ÿå°—…」，顶栏下拉直接显示乱码（应用侧经 JDBC 的写入路径不受影响）。修法=执行 SQL 必须带 `--default-character-set=utf8mb4`（v64 脚本的 `mysql_q` 已加），存量乱码用 `deploy/tmp-fix-v64-utf8.sql` 一次性纠正（行数据 + 表/列注释，末尾自带 hex 自检）。附带发现：`mysql -e` **忽略 stdin**，跑 SQL 文件必须走无 `-e` 的 stdin 分支，否则一条语句都不执行却返回 0。
+
+**验证**：`mvn -f teapot-ai-server/pom.xml package -DskipTests` 通过；前端 `tsc -b && vite build` 通过；线上顶栏下拉显示「存量空间」且 ⋯ 菜单出现「编辑空间」。
+
+**后续项（未做）**：转让 owner、把「成员管理」独立成抽屉（当前与改名同弹窗）；被移出空间的成员其名下 Agent 仍留在该空间（只影响可见性，不做归属回收）。
+
 ---
 
 ## 附录 A：术语

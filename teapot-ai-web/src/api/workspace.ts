@@ -23,6 +23,17 @@ export function workspaceCreate(payload: WorkspaceCreatePayload) {
   return unwrap<Workspace>(http.post<Result<Workspace>>('/api/workspace/create', payload));
 }
 
+/** 编辑空间（改名/描述；memberUserIds 非空数组时整体同步成员，SPEC §28.12） */
+export interface WorkspaceUpdatePayload {
+  workspaceName?: string;
+  description?: string;
+  memberUserIds?: string[];
+}
+
+export function workspaceUpdate(id: number, payload: WorkspaceUpdatePayload) {
+  return unwrap<Workspace>(http.put<Result<Workspace>>(`/api/workspace/${id}`, payload));
+}
+
 /** 空间成员列表（跨空间隔离：非成员 403，SPEC §28.3） */
 export function workspaceMembers(id: number) {
   return unwrap<WorkspaceMember[]>(http.get<Result<WorkspaceMember[]>>(`/api/workspace/${id}/members`));

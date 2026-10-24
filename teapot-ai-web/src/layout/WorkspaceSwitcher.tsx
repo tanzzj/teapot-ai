@@ -4,13 +4,17 @@ import { Button, Form, Input, message, Select } from '@agentscope-ai/design';
 import { ResponsiveModal } from '../components/ResponsiveModal';
 import UserPicker from '../components/UserPicker';
 import { useWorkspaceStore } from '../store/workspace';
-import { workspaceCreate } from '../api/workspace';
+import { workspaceCreate, workspaceMembers, workspaceUpdate } from '../api/workspace';
 import { agentMoveWorkspace } from '../api/agent';
+import type { Workspace, WorkspaceMember } from '../types';
 
 const PERSONAL = 'personal';
 
+const memberLabel = (m: WorkspaceMember) =>
+  m.realName ? `${m.realName}（${m.username}）` : m.username || m.userId;
+
 /**
- * 顶栏业务空间簇（SPEC §28.6，图二红框）：空间下拉 + 「＋」新建空间 + 「…」移动空间。
+ * 顶栏业务空间簇（SPEC §28.6，图二红框）：空间下拉 + 「＋」新建空间 + 「…」移动空间/编辑空间。
  * 默认「个人空间」= activeId null（合成项，首个 Agent 创建时才落库）。
  */
 export default function WorkspaceSwitcher() {
@@ -19,7 +23,10 @@ export default function WorkspaceSwitcher() {
   const [createOpen, setCreateOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveTarget, setMoveTarget] = useState<string>(PERSONAL);
+  const [editTarget, setEditTarget] = useState<Workspace | null>(null);
+  const [memberOptions, setMemberOptions] = useState<{ label: string; value: string }[]>([]);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
 
   useEffect(() => {
     if (!loaded) {
@@ -28,6 +35,11 @@ export default function WorkspaceSwitcher() {
   }, [loaded, load]);
 
   const activeValue = activeId === null ? PERSONAL : String(activeId);
+  const activeWorkspace = workspaces.find((w) =>
+    (w.id === null || w.id === undefined ? PERSONAL : String(w.id)) === activeValue);
+  // 个人空间名称由系统固定、成员只有自己，编辑入口只对「自己是 owner 的团队空间」开放
+  const canEdit = !!activeWorkspace && activeWorkspace.id != null
+    && activeWorkspace.workspaceType !== 'personal' && activeWorkspace.myRole === 'owner';
   const options = workspaces.map((w) => ({
     value: w.id === null || w.id === undefined ? PERSONAL : String(w.id),
     label: w.workspaceName,
@@ -62,8 +74,38 @@ export default function WorkspaceSwitcher() {
     setMoveOpen(false);
   };
 
+  const openEdit = async (ws: Workspace) => {
+    setEditTarget(ws);
+    const members = await workspaceMembers(ws.id as number);
+    setMemberOptions(members.map((m) => ({ label: memberLabel(m), value: m.userId })));
+    editForm.setFieldsValue({
+      workspaceName: ws.workspaceName,
+      description: ws.description || '',
+      memberUserIds: members.map((m) => m.userId),
+    });
+  };
+
+  const onEdit = async () => {
+    if (!editTarget?.id) {
+      return;
+    }
+    const values = await editForm.validateFields();
+    await workspaceUpdate(editTarget.id, {
+      workspaceName: values.workspaceName,
+      description: values.description,
+      memberUserIds: values.memberUserIds || [],
+    });
+    message.success('空间已更新');
+    setEditTarget(null);
+    editForm.resetFields();
+    await load();
+  };
+
   const menuItems = [
     { key: 'move', label: '移动空间', onClick: () => setMoveOpen(true) },
+    ...(canEdit
+      ? [{ key: 'edit', label: '编辑空间', onClick: () => openEdit(activeWorkspace as Workspace) }]
+      : []),
   ];
 
   return (
@@ -141,6 +183,33 @@ export default function WorkspaceSwitcher() {
               .map((w) => ({ value: String(w.id), label: w.workspaceName })),
           ]}
         />
+      </ResponsiveModal>
+
+      {/* 编辑当前空间（SPEC §28.12）：改名/描述 + 成员集合整体提交；forceRender 让表单先连接，回填才不丢值 */}
+      <ResponsiveModal
+        title="编辑业务空间"
+        open={!!editTarget}
+        onOk={onEdit}
+        onCancel={() => setEditTarget(null)}
+        okText="保存"
+        cancelText="取消"
+        forceRender
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item name="workspaceName" label="空间名称" rules={[{ required: true, message: '请输入名称' }]}>
+            <Input maxLength={64} />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={2} placeholder="可选" maxLength={512} />
+          </Form.Item>
+          <Form.Item
+            name="memberUserIds"
+            label="成员"
+            extra="空间编码不可修改；创建人始终保留在成员中"
+          >
+            <UserPicker initialOptions={memberOptions} />
+          </Form.Item>
+        </Form>
       </ResponsiveModal>
     </div>
   );

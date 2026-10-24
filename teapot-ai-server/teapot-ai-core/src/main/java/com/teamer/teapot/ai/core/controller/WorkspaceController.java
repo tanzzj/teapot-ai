@@ -4,6 +4,7 @@ import com.teamer.teapot.ai.common.model.Result;
 import com.teamer.teapot.ai.core.model.WorkspaceDO;
 import com.teamer.teapot.ai.core.model.dto.WorkspaceCreateRequest;
 import com.teamer.teapot.ai.core.model.dto.WorkspaceMemberRequest;
+import com.teamer.teapot.ai.core.model.dto.WorkspaceUpdateRequest;
 import com.teamer.teapot.ai.core.model.vo.WorkspaceMemberVO;
 import com.teamer.teapot.ai.core.model.vo.WorkspaceVO;
 import com.teamer.teapot.ai.core.service.WorkspaceService;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -48,6 +50,12 @@ public class WorkspaceController {
     @PostMapping("/create")
     public Result<WorkspaceDO> create(@Valid @RequestBody WorkspaceCreateRequest request) {
         return Result.ok(workspaceService.create(request));
+    }
+
+    /** 编辑空间（SPEC §28.12）：改名/描述，memberUserIds 非 null 时整体同步成员 */
+    @PutMapping("/{id}")
+    public Result<WorkspaceDO> update(@PathVariable Long id, @Valid @RequestBody WorkspaceUpdateRequest request) {
+        return Result.ok(workspaceService.update(id, request));
     }
 
     /** 空间成员列表（跨空间隔离：非成员 403，SPEC §28.3） */

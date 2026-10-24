@@ -8,6 +8,7 @@ import com.teamer.teapot.ai.core.dao.WorkspaceMapper;
 import com.teamer.teapot.ai.core.model.WorkspaceDO;
 import com.teamer.teapot.ai.core.model.WorkspaceMemberDO;
 import com.teamer.teapot.ai.core.model.dto.WorkspaceCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.WorkspaceUpdateRequest;
 import com.teamer.teapot.ai.core.model.vo.WorkspaceMemberVO;
 import com.teamer.teapot.ai.core.model.vo.WorkspaceVO;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
@@ -133,6 +134,53 @@ public class WorkspaceService {
         }
         auditService.log("workspace.create", code, "id=" + w.getId());
         return w;
+    }
+
+    /**
+     * 编辑空间（SPEC §28.12）：改名/描述 + 成员集合整体同步，仅 owner 或白名单可操作；
+     * 空间编码与类型不可改，个人空间不进本入口（名称由系统固定）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public WorkspaceDO update(Long workspaceId, WorkspaceUpdateRequest request) {
+        WorkspaceDO w = requireManager(workspaceId);
+        if (TYPE_PERSONAL.equals(w.getWorkspaceType())) {
+            throw new BizException("个人空间不可编辑");
+        }
+        if (request.getWorkspaceName() != null && !request.getWorkspaceName().isBlank()) {
+            w.setWorkspaceName(request.getWorkspaceName().trim());
+        }
+        if (request.getDescription() != null) {
+            w.setDescription(request.getDescription());
+        }
+        workspaceMapper.update(w);
+        if (request.getMemberUserIds() != null) {
+            syncMembers(w.getId(), request.getMemberUserIds());
+        }
+        auditService.log("workspace.update", String.valueOf(workspaceId), null);
+        return workspaceMapper.selectById(workspaceId);
+    }
+
+    /** 成员集合与期望全集对齐：期望里没有的成员删掉（owner 行永不删），新增的按 member 落库 */
+    private void syncMembers(Long workspaceId, List<String> memberUserIds) {
+        String operator = currentUserId();
+        Set<String> desired = new HashSet<>();
+        for (String uid : memberUserIds) {
+            if (uid == null || uid.isBlank()) {
+                continue;
+            }
+            requireUserExists(uid.trim());
+            desired.add(uid.trim());
+        }
+        for (WorkspaceMemberVO current : workspaceMapper.selectMembersByWorkspace(workspaceId)) {
+            String uid = current.getUserId();
+            if ("owner".equals(current.getMemberRole()) || desired.remove(uid)) {
+                continue;
+            }
+            workspaceMapper.deleteMember(workspaceId, uid);
+        }
+        for (String uid : desired) {
+            insertMemberIfAbsent(workspaceId, uid, "member", operator);
+        }
     }
 
     /** 个人空间 id（读路径用，SPEC §28.3）：未创建返回 null，绝不写库（读不触发懒建） */
