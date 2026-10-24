@@ -1,5 +1,6 @@
 package com.teamer.teapot.ai.core.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamer.teapot.ai.common.exception.BizException;
@@ -696,6 +697,7 @@ public class AgentFeature {
      * 字段全部可空（null = 回落 A2uiConfig SDK 默认）；enabled 缺省不启用，存量 Agent 零影响。
      */
     @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class A2ui {
         /** 是否启用（挂载 A2uiMiddleware，主 Agent 获得 a2ui_render / ask_user_question 表单档；组件目录与组件树由 SDK 内部渲染子 Agent 持有。未启用时 Web 链路仍有 ClarificationMiddleware 的纯文本 ask_user_question） */
         private Boolean enabled;
@@ -703,8 +705,6 @@ public class AgentFeature {
         private String catalogId;
         /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json（扩展 jar 内置基础目录） */
         private String catalogResource;
-        /** 渲染后中断：a2ui_render 成功后是否停止本轮 acting（等用户操作），留空 = true */
-        private Boolean stopAfterPresent;
         /** 单信封组件数上限 [1,500]，留空 = 50 */
         private Integer maxComponents;
         /** surface 状态跨轮持久化（AgentStateStore），留空 = true；关闭则 surface 仅存活于单轮 */

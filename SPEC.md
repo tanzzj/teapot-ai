@@ -2666,6 +2666,17 @@ v67 的形态是「Model 下拉里混进一个自定义组 + Basic Info 下面�
 **验证**（agentscope-java `a2ui` 分支）：新增回归测试 `ReActAgentMiddlewareIntegrationTest.actingStopStillPersistsExecutedToolResults`——中间件在 `onActing` 追加 `RequestStopEvent`，断言 context 里出现 `id=tool-call-1` 的 `ToolResultBlock`；改代码前实测 `expected: <1> but was: <0>`（钉死 bug），改后转绿。相关三类 `ReActAgentMiddlewareIntegrationTest`(10) + `ReActAgentHitlTest`(19) + `ReActAgentNewLoopE2ETest`(4) 全绿；core 全量 **2593 条，0 failures**，仅 `DangerousPathBypassTest` 2 条 error 是本机 Windows 无符号链接权限的既有环境噪声。
 **teapot 侧无代码改动**：`mvn -o install` 刷新本地 `agentscope-core-2.1.0-SNAPSHOT`（20:13）后重打 fat jar（20:19，嵌套 core 构件 1,019,710B 与 .m2 同尺寸）即生效。
 
+### §29.14 撤销「渲染后中断」：扩展不再依赖框架改动（2026-10-25 决策）
+
+§29.13 的 core 修复上线后改判：**不做停轮**，而不是把 core 修复留在分支里。理由是停轮是 a2ui 扩展唯一依赖框架行为的地方——留着它，上游 PR 就从"新增一个可选扩展"变成"新增扩展 + 改 `ReActAgent` 主循环语义"，评审面和合并耦合都不划算（且两者必须成对合并，否则功能带 bug）。
+
+- **SDK**：删 `A2uiRenderStopMiddleware`，使用约束的 system prompt 块搬进 `A2uiMiddleware.onSystemPrompt`，并补一条"渲染成功即收尾、不要用文字复述界面"承担原先由停轮保证的语义；`A2uiConfig.stopAfterPresent`（字段/getter/builder）删除；三条停轮测试删除，模块 29 条全绿。core 侧对应 revert（`27ea5c41` 撤销 `2753a601`）。
+- **teapot**：`AgentFeature.A2ui.stopAfterPresent`、`AgentBuilder` 的装配与日志字段、`types.ts` 类型、Agent 详情页「渲染后中断」开关、对话页配置摘要里的同名 KV 全部移除。
+- **兼容坑（必须留着）**：`AgentFeature` 的命名空间是用 `MAPPER.convertValue(raw, A2ui.class)` 绑定的，裸 `ObjectMapper` 默认 `FAIL_ON_UNKNOWN_PROPERTIES=true`；而 `t_agent.feature` 里存量行（digit-tim、teapot）已经写了 `"stopAfterPresent":true`。直接删字段会让这些 Agent 在装配时抛异常 → `A2ui` 类加 `@JsonIgnoreProperties(ignoreUnknown = true)`，旧键读时忽略、下次保存自然消失。
+- **代价**：渲染后多一次模型推理；"不复述 UI"从硬保证降级为提示词约束（实测模型仍会给一句简短结束语）。
+
+**验证**（v69，2026-10-25 00:31 上线；回滚点 `app.jar.bak-20261025-003104` / `ui.bak-20261025-003104`）：构件闸门 `CORE_REVERTED_OK 1019499`（core 回到未修复尺寸）、`STOP_MW_GONE_OK`、`TEAPOT_STOP_FIELD_REMOVED_OK`、前端 `STOP_SWITCH_GONE_OK`，`Started in 8.9s`。digit-tim（feature 里仍带旧键）连跑两轮：第 1 轮历史 9 条含信封 1 条、模型正常给出结束语；第 2 轮 12 条、信封仍 1 条且能复述卡片第二个概念 → **不修 core、不停轮，历史也正常累积**，同时证明存量 feature 解析未被打断。
+
 ---
 
 ## 附录 A：术语

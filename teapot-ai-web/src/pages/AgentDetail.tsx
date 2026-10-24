@@ -571,12 +571,11 @@ export default function AgentDetailPage() {
         compaction: {
           modelId: comp.modelId,
         },
-        // a2ui 缺省不启用；渲染后中断/持久化未配置时回显 SDK 默认 true（与后端回落一致）
+        // a2ui 缺省不启用；持久化未配置时回显 SDK 默认 true（与后端回落一致）
         a2ui: {
           enabled: !!a2ui.enabled,
           catalogId: a2ui.catalogId,
           catalogResource: a2ui.catalogResource,
-          stopAfterPresent: a2ui.stopAfterPresent !== false,
           maxComponents: a2ui.maxComponents,
           surfacePersistEnabled: a2ui.surfacePersistEnabled !== false,
           appendPreference: a2ui.appendPreference,
@@ -1631,16 +1630,6 @@ export default function AgentDetailPage() {
                       <Row gutter={16}>
                         <Col xs={24} sm={8}>
                           <Form.Item
-                            name={['a2ui', 'stopAfterPresent']}
-                            label="渲染后中断"
-                            valuePropName="checked"
-                            tooltip="a2ui_render 成功后停止本轮、等待用户在界面上操作后再继续；关闭则 Agent 渲染后自行推进"
-                          >
-                            <Switch />
-                          </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={8}>
-                          <Form.Item
                             name={['a2ui', 'surfacePersistEnabled']}
                             label="界面状态跨轮持久化"
                             valuePropName="checked"
@@ -1658,8 +1647,6 @@ export default function AgentDetailPage() {
                             <InputNumber min={1} max={500} style={{ width: '100%' }} placeholder="50" />
                           </Form.Item>
                         </Col>
-                      </Row>
-                      <Row gutter={16}>
                         <Col xs={24} sm={8}>
                           <Form.Item
                             name={['a2ui', 'renderNoThinking']}

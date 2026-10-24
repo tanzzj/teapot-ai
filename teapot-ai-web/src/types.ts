@@ -147,7 +147,7 @@ export interface AgentMediaModels {
 
 /**
  * feature.a2ui 结构：Agent 画 UI 能力（AgentScope a2ui 扩展，纯 middleware 装配）。
- * 字段缺省 = 回落 SDK 默认（内置 basic catalog、渲染后中断开启、组件数 50、surface 跨轮持久化）。
+ * 字段缺省 = 回落 SDK 默认（内置 basic catalog、组件数 50、surface 跨轮持久化）。
  */
 export interface AgentA2uiConfig {
   /** 是否启用（主 Agent 获得 a2ui_render / ask_user_question 表单档；组件目录与树由 SDK 渲染子 Agent 持有。未启用时仍有框架 ClarificationMiddleware 的纯文本 ask_user_question） */
@@ -156,8 +156,6 @@ export interface AgentA2uiConfig {
   catalogId?: string;
   /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json；自定义资源需放在服务端 */
   catalogResource?: string;
-  /** 渲染后中断：a2ui_render 成功后停止本轮、等待用户操作；留空 = 开启 */
-  stopAfterPresent?: boolean;
   /** 单信封组件数上限 1–500，留空 = 50 */
   maxComponents?: number;
   /** surface 状态跨轮持久化；关闭则界面状态仅存活于单轮 */

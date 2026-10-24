@@ -477,11 +477,11 @@ public class AgentBuilder {
     /**
      * a2ui 命名空间 → A2uiMiddleware 挂载（Agent 画 UI）：
      * enabled=true 时按配置构建 A2uiConfig（字段留空 = 回落 SDK 默认：内置 basic catalog、
-     * 渲染后中断开启、组件数 50、surface 跨轮持久化）；middleware 在 build 前挂载（onSystemPrompt
+     * 组件数 50、surface 跨轮持久化）；middleware 在 build 前挂载（onSystemPrompt
      * 注入需要），其 a2ui_render / ask_user_question（表单档）两工具由调用方在 build 后经
      * installTools 注册（SDK 已无 build 期自动装档回调；自然语言意图入参；组件 DSL 收进 SDK
      * 内部的渲染子 Agent——它只持有私有的 a2ui_present 提交工具，组件目录指南编进该子 Agent 的
-     * system prompt，主 Agent 不感知；渲染后停止本轮由 stopAfterPresent 控制）；
+     * system prompt，主 Agent 不感知；渲染成功后不再中断本轮 acting，由主模型依提示词自行收尾）；
      * 渲染子模型缺省回落本 Agent 模型；renderNoThinking=true 时显式注入本 Agent 模型的
      * 无思考实例（同守卫判定同款 resolveNoThinking 链路）。
      * catalog 在构造期加载，加载失败降级为不挂载并告警，不阻断对话。
@@ -500,9 +500,6 @@ public class AgentBuilder {
         }
         if (notBlank(cfg.getCatalogResource())) {
             cb.catalogResource(cfg.getCatalogResource().trim());
-        }
-        if (cfg.getStopAfterPresent() != null) {
-            cb.stopAfterPresent(cfg.getStopAfterPresent());
         }
         if (cfg.getMaxComponents() != null) {
             cb.maxComponents(cfg.getMaxComponents());
@@ -528,8 +525,8 @@ public class AgentBuilder {
                     agentKey, e.getMessage());
             return null;
         }
-        log.info("A2UI 界面生成已启用 agentKey={} catalog={} stopAfterPresent={} surfacePersist={} 渲染子模型={}",
-                agentKey, config.catalogResource(), config.stopAfterPresent(), config.surfacePersistEnabled(),
+        log.info("A2UI 界面生成已启用 agentKey={} catalog={} surfacePersist={} 渲染子模型={}",
+                agentKey, config.catalogResource(), config.surfacePersistEnabled(),
                 Boolean.TRUE.equals(cfg.getRenderNoThinking())
                         ? defaultModelId + "(关闭思考)" : "跟随主模型");
         return a2ui;

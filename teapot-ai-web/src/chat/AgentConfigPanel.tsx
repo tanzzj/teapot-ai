@@ -157,7 +157,6 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
             {a2ui?.enabled && (
               <>
                 <KV k="A2UI 界面" v={<EnabledTag on />} />
-                <KV k="渲染后中断" v={<EnabledTag on={a2ui.stopAfterPresent !== false} />} />
                 {a2ui.catalogResource && (
                   <KV k="A2UI Catalog" v={<span style={mono}>{a2ui.catalogResource}</span>} />
                 )}
