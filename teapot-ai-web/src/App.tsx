@@ -56,8 +56,7 @@ export default function App() {
           <Route path="/chat" element={<Chat />} />
           <Route element={<RequireRole roles={['admin', 'developer']} />}>
             <Route path="/agents" element={<Agents />} />
-            {/* /agents/new = 详情页新建态（agentKey 字面量 new，详情页按此切草稿模式） */}
-            <Route path="/agents/new" element={<AgentDetailPage />} />
+            {/* /agents/new 由这条动态路由承接：详情页按 agentKey === 'new' 切草稿态（SPEC §29.12） */}
             <Route path="/agents/:agentKey" element={<AgentDetailPage />} />
             {/* Skill 工坊整页下线（SPEC §29.10）：本体只能在 Agent 里 Add Skill；书签兼容重定向 */}
             <Route path="/skills" element={<Navigate to="/agents" replace />} />

@@ -2646,7 +2646,14 @@ v67 的形态是「Model 下拉里混进一个自定义组 + Basic Info 下面�
 - Save 按钮在草稿态显示「创建」，`onSave` 走 `agentCreate`（`sysPrompt` 留空仍回落默认提示词），成功后 `navigate('/agents/{key}', { replace: true })` 无缝转成正常编辑态。
 - `Agents.tsx` 删掉整个创建弹窗与 `onCreate`/`createOpen`/`models`/`form` 及随之无用的 `Form`/`agentCreate`/`modelPresets` 导入，按钮改为 `navigate('/agents/new')`；「移动到空间」弹窗不受影响。
 
-**验证**：`npm run build`（`tsc -b && vite build`）通过，入口 `index-BuOituWw.js`。**未做**：真机走一遍创建→编辑态切换。
+**验证**（2026-10-24 v68/v68b 上线后实测）：
+- 浏览器实开 `/agents/new`：菜单只剩 Basic Info 一项、页头「新建 Agent / 尚未创建」、按钮「创建」、Agent 标识可编辑且带原校验文案、所属空间默认个人空间。
+- 草稿字段契约对后端往返验证：按页面同形状 `POST /api/agent/create`（带 `feature.runtime.topP/temperature` + `feature.storage`）→ `GET /api/agent/detail` 回显 `featureKeys=runtime,storage, topP=0.9, temp=0.3` → `DELETE` 清理。`AgentService.create` 确实走 `validateFeature(request.getFeature())`，草稿里的运行参数不会静默丢。
+- 入口按钮 `navigate('/agents/new')` 与详情页草稿态为同一路径，列表页不再有任何创建表单状态。
+
+**踩坑修正（v68b）**：首版在 `App.tsx` 里显式写了 `<Route path="/agents/new">` 静态路由，结果 `useParams()` 拿不到 `agentKey`（静态段不产参数）→ `isNew` 恒 false，页面退回 Profile 并去打 `/api/agent/detail/new`，弹「系统异常」。修法是删掉那条静态路由，由 `/agents/:agentKey` 承接字面量 `new` —— 草稿态判定本来就建立在 `agentKey === 'new'` 上。**教训**：路由与"参数即状态"的判定不要各写一半。
+
+**遗留（非本次引入，待产品定）**：个人空间当前**建不出 Agent** —— `GET /api/model/presets?workspaceId=0` 返回空数组（`?workspaceId=1` 返回全量），而 `AgentService.create` 的模型闸门按 `workspaceId == null ? 0L : workspaceId` 判定，于是个人空间任何模型都判「未开放给当前空间」（实测报错：`模型 dashscope:qwen3.7-flash 未开放给当前空间`）。旧的新建弹窗同样是 `modelPresets(activeId ?? 0)`，所以这不是 §29.12 引入的回归，但它现在是创建的唯一入口，缺口更明显。可选修法：给桶 0 播种 `teapot_workspace_model`、把草稿默认空间改成第一个团队空间，或让个人空间不受桶 0 过滤。
 
 ### §29.13 a2ui 渲染后对话历史不再累积：框架侧 acting 停止路径漏写 tool_result（2026-10-24）
 
