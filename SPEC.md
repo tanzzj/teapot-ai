@@ -2592,6 +2592,73 @@ v67 的形态是「Model 下拉里混进一个自定义组 + Basic Info 下面�
 
 **验证**：`mvn -o -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build`（`tsc -b` + vite）通过，入口 `index-CSOFXUMQ.js`。中途一次类型失败值得记：主模型 `options` 写成"自定义时给扁平单项、系统时给分组项"的三元，antd 推断成两个不兼容的数组联合 → TS2322；改成两种情况都用同一份分组 `modelOptions`（自定义时靠 `disabled` 锁住）后消失。**未做**：真机目视（尚未发布）。
 
+### §29.9 弹窗关闭按钮钉在卡片右上角（2026-10-24 用户截图反馈）
+
+用户拿「新建业务空间」弹窗的截图指出 ✕ 出现在标题下方左侧，要求放右上角。
+
+先做根因探针（`scratch/modal-preview.tsx` 同时挂设计库的 `Modal` 与 `MobileModal`，导入 `src/index.css` 以带上 tailwind，用内置浏览器 `evaluate_script` 量 `getBoundingClientRect`）：**在当前依赖版本下两个分支的 ✕ 都在标题行右侧**（`.spark-modal-title-wrapper` 是 `display:flex; justify-content:space-between`，✕ 的 x 坐标在标题盒子右边之外），也就是说截图那个"掉到标题下方"没能在探针里复现。能确定的是它的成因类别：库把 ✕ 当作**标题行的 flex 子项**（`closeIcon: null` + 自己渲染 `.spark-modal-title-close`），所以它的位置跟着标题的宽度/换行漂移，而不是钉在弹窗上——标题变长、字体变大或宽度受限时都可能被挤下去。
+
+因此修法取"让位置与标题无关"这条：`src/index.css` 末尾加三条规则——`.ant-modal-content` 设 `position: relative`，`.spark-modal-title-close` 绝对定位 `top/right: 16px`（与库给 `.ant-modal-close` 的默认偏移一致），`.spark-modal-title` 补 `padding-right: 28px` 让长标题不压在图标下。全站弹窗共用这一处，桌面/移动两条链路结果同一个位置。
+
+**验证**（同一探针页，量相对 `.ant-modal-content` 的偏移）：两个分支均 `position: absolute`、`rightGap=17`、`topGap=17`（16px + 1px 边框），且与标题行顶边对齐（`inRowWithHeader=true`）、标题 `padding-right: 28px` 生效。探针页与 5199 端口的 vite 已删除。**未做**：真机目视（未发布）；也没拿到用户那台设备上的 DOM，若发布后位置仍不对，需要在用户浏览器里现场量一次。
+
+### §29.10 Skill 工坊下线：skill 只能从 Agent 里 Add Skill（2026-10-24）
+
+§28.1 摘掉的是运行期「未绑定=全给」的兜底，但顶栏仍留着一个 Skill 工坊页（列表 + 新建/编辑 SKILL.md 的表单 + zip/git 导入 + 删除 + 立即同步）。用户判定这个入口不该存在：**Teapot 里不造 skill，平台上的 skill 完全通过 Agent 模式绑定**。三条已拍板的规则：
+
+1. **工坊整页下线**：删 `pages/Skills.tsx`、`pages/SkillDetail.tsx`、顶栏 `/skills` 导航项与 `/skills`、`/skills/new`、`/skills/:name` 三条路由；旧书签 `/skills*` 重定向到 `/agents`（沿用 `/users → /system/users` 的兼容写法）。SKILL.md 的作者能力（`/api/skill/save`、`/preview`、`/detail`）就此没有前端调用方——**后端接口保留不动**（仍可用，只是不再有 UI），前端的 `skillSave/skillPreview/skillDetail` 与 `SkillDetail/SkillSaveRequest/SkillResourceItem` 类型作为孤儿删除。
+2. **git 来源一起收进 Agent**：`components/AddSkill.tsx` 的 Add Skill 下拉给两项——「上传 Skill zip」（落点二选一：OSS 同名覆盖 / 平台库同名更新）与「从 Git 仓库导入」（临时 clone → 入平台库）。原工坊的「立即同步」（全局管控仓库 `skillGitSync`）挂在 git 导入弹窗内，仅当 `git/status.enabled` 时出现。权限沿用工坊判定：zip 要 `admin/developer` 且 OSS 未关，git 要 `admin/developer`；两者都不可用时整个按钮不渲染。
+3. **解绑与删本体分开**：卡片上的开关只做 `bindSkill/unbindSkill`。删本体要等**没有任何 Agent 绑定**才给按钮（`SkillListVO.boundAgents` 为空，git 来源后端本就禁删故不给入口），且收紧为仅 admin（工坊原先任何能看到页面的人都能删）。后端 `SkillService.delete` 同点设闸：查到绑定行就 `BizException` 点名占用者，文案直接说"请先在对应 Agent 解绑再删除本体"。
+
+**导入即绑定**：`AddSkillButton` 在 import 成功后逐个 `agentBindSkill(agentKey, name)`，全部成功提示"已导入并绑定"，有失败则 `message.warning` 点名哪些没绑上（不吞错），最后回调刷新列表。绑定失败不回滚导入——skill 已在库里，用户可以在列表里手动打开开关。
+
+**验证**：`mvn -o -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build` 通过，入口 `index-C6ngpBit.js`（4,526.96 kB，比上一版小约 22 kB，即两个页面下线的体积）。Add Skill 的链路用 `scratch/addskill-preview.{html,tsx}` 探针 + 假 axios adapter（`http.defaults.adapter`）实测请求序列：
+- git 导入：`post /api/skill/import/git {url,branch:"",target:"mysql"}` → `post /api/agent/bindSkill/probe-agent {"skillName":"alpha"}` → 同 `beta` → `onAdded` 回调计数 +1（导入两个就绑两个）。
+- 「同步全局 Git 仓库」按钮在 `git/status.enabled` 时出现在 git 弹窗内，点击发 `post /api/skill/git/sync`。
+- zip 弹窗打开即渲染 `Upload.Dragger`，确认按钮文案「导入并绑定」；标题行的 ✕ 点击可关（顺带覆盖 §29.9 那颗按钮）。
+
+探针页与 5199 端口的 vite 已删除。**未做**：`SkillListVO.boundAgents` 的真实数据面（需登录态，admin 默认口令已失效，见 §29.7）与 AgentDetail 技能分区的真机目视。
+
+**风险 / 后续项**：
+- **孤儿 skill 无人盘点**：工坊下线后没有"看全库/批量删"的地方，未被任何 Agent 绑定的 skill 只能从某个 Agent 的卡片上逐个删（正好落在"无绑定才可删"这条规则里）。日后要盘点就得补一个只读列表（本次讨论里被否掉的方案 B）。
+- skill 本体仍是**跨空间共享**的全局资产（没有 `workspace_id`）：A 空间的人导入并绑定后，B 空间的用户在自己的 Agent 里也能看到并勾选它。§28 的空间隔离目前覆盖 Agent/模型，不覆盖 skill。
+- 导入与绑定非原子：导入成功但绑定失败时 skill 会留在库里未绑定（有 warning 提示，不静默）。
+
+### §29.11 工具调用与正文按发生顺序展示（2026-10-24 用户截图反馈）
+
+用户截图：一轮里模型是「thinking → 调 `load_skill_through_path` → thinking → 调 `execute` → 出答案」交错发生的，但界面上答案文本先出现，红框里 `load_skill_through_path` / Thinking / `execute` 被挤成一坨排在后面，读起来像"先给结论再查资料"。
+
+根因在前端桥接层 `chat/aguiBridge.ts` 的 `RUN_FINISHED` 收尾：它要把整轮的全量 output 回传给模板做最终合并，早先是**三段分组循环**（全部 reasoning → 全部 tool_call(+output) → 正文）。流式过程中顺序是对的，轮末这一次全量回传把顺序重排成了按类型分组。历史回放不受影响——`ChatSessionService.messages()` → `SessionMessageConverter` 是按存储的 `context` 消息与其内容块顺序逐条转的。
+
+修法：解析器状态加 `timeline: string[]`，在三处"槽位首次出现"登记 id（`openReasoningBlock()` 的块 id、`TOOL_CALL_START` 的 callId、正文首段的 `ANSWER_MSG_ID`），`RUN_FINISHED` 改为**遍历 timeline** 输出对应块（tool 的 output 紧跟其 call 之后）。顺带删掉因此变成只写不读的 `state.toolOrder`。
+
+**验证**：`scratch/order-preview.{html,tsx}` 探针直接喂 12 条合成事件（thinking×2、两次 tool_call 各带 result、正文），读回传的 `output` 数组顺序，实测为
+`reasoning:asst-reasoning-0 → tool_call:callA → tool_call_output:callA-output → reasoning:asst-reasoning-1 → tool_call:callB → tool_call_output:callB-output → message:asst-answer`
+与事件发生顺序一致（旧代码这段会是"两个 reasoning → 四个 tool 块 → answer"，由分组循环直接读出）。`npm run build` 通过，入口 `index-ZayGHZyr.js`。探针页与 vite 已删除。**未做**：真机看一轮真实的交错回复。
+
+### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
+
+移动端「新建 Agent」弹窗（6 个字段 + 键盘弹起）几乎占满视口，且建完还得再进详情页配模型/提示词，等于同一批字段填两遍。改为**复用详情页当草稿**：
+
+- 路由新增 `/agents/new`（`App.tsx`，显式列在 `/agents/:agentKey` 之前）；`AgentDetail.tsx` 导出 `NEW_AGENT_KEY='new'`，`isNew = agentKey === NEW_AGENT_KEY`。
+- 草稿态：默认落在 `basic` 分区，胶囊菜单只留 Basic Info（其余分区依赖已存在的记录：头像上传、Skill 绑定、沙箱/渠道连接）；`load()` 直接短路，不发 `agentDetail` 与任何连接记录注册表请求。
+- Basic Info 分区在草稿态把只读的 `Agent ID` 换成可编辑的 `Agent 标识`（沿用原弹窗的 `^[a-z][a-z0-9-]{1,63}$` 规则）并补一个「所属空间」下拉；空间值经 `toWorkspaceId()` 映射（`'personal'`/留空 = 不下发 `workspaceId`，个人空间仍是首个 Agent 创建时懒落库）。模型清单按所选空间取 `modelPresets`（与 §28.11 后端保存闸门同源），换空间即重取。
+- Save 按钮在草稿态显示「创建」，`onSave` 走 `agentCreate`（`sysPrompt` 留空仍回落默认提示词），成功后 `navigate('/agents/{key}', { replace: true })` 无缝转成正常编辑态。
+- `Agents.tsx` 删掉整个创建弹窗与 `onCreate`/`createOpen`/`models`/`form` 及随之无用的 `Form`/`agentCreate`/`modelPresets` 导入，按钮改为 `navigate('/agents/new')`；「移动到空间」弹窗不受影响。
+
+**验证**：`npm run build`（`tsc -b && vite build`）通过，入口 `index-BuOituWw.js`。**未做**：真机走一遍创建→编辑态切换。
+
+### §29.13 a2ui 渲染后对话历史不再累积：框架侧 acting 停止路径漏写 tool_result（2026-10-24）
+
+线上表现（用户手机截图）：一轮里 `a2ui_render` 成功后，该轮内容不进历史，后续对话也读不到。根因不在 teapot，也不在 a2ui 扩展，而在 **agentscope-core 主循环**：
+
+- `ReActAgent` 的 acting 阶段若中间件发了 `RequestStopEvent`（a2ui 的 `A2uiRenderStopMiddleware` 在渲染成功后正是这么停本轮的，SPEC §29 系），旧代码直接 `return Mono.just(buildStopMsg(results, reason))`，**跳过了 `notifyPostActingHook`**；而 `state.contextMutable().add(resultMsg)` 只发生在该 hook 里（`ReActAgent.java:4194`）。
+- 后果：持久化的 assistant 轮留下悬空 `tool_use`（无配对 `tool_result`），`saveAgentState` 回写 MySQL 后 `ChatSessionService.mergeSlotContexts` 读到的就是残缺轮 —— 与 §28.13 那次"历史空白"同源不同触发点。
+- 修法：停止分支先按正常路径的口径把**已执行且非挂起**的结果逐条过 `notifyPostActingHook`（`returnDirect` 传 false），再执行原有的 `PERMISSION_ASKING` / `buildStopMsg` 逻辑。`buildStopMsg` 的返回内容不变，只补上下文写入。
+
+**验证**（agentscope-java `a2ui` 分支）：新增回归测试 `ReActAgentMiddlewareIntegrationTest.actingStopStillPersistsExecutedToolResults`——中间件在 `onActing` 追加 `RequestStopEvent`，断言 context 里出现 `id=tool-call-1` 的 `ToolResultBlock`；改代码前实测 `expected: <1> but was: <0>`（钉死 bug），改后转绿。相关三类 `ReActAgentMiddlewareIntegrationTest`(10) + `ReActAgentHitlTest`(19) + `ReActAgentNewLoopE2ETest`(4) 全绿；core 全量 **2593 条，0 failures**，仅 `DangerousPathBypassTest` 2 条 error 是本机 Windows 无符号链接权限的既有环境噪声。
+**teapot 侧无代码改动**：`mvn -o install` 刷新本地 `agentscope-core-2.1.0-SNAPSHOT`（20:13）后重打 fat jar（20:19，嵌套 core 构件 1,019,710B 与 .m2 同尺寸）即生效。
+
 ---
 
 ## 附录 A：术语
