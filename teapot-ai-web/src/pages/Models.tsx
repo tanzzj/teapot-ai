@@ -10,8 +10,13 @@ import {
   modelVendorModels,
   type ModelEntry,
 } from '../api/model';
+import { workspaceAll } from '../api/workspace';
+import type { Workspace } from '../types';
 import { useIsPhone } from '../hooks/useIsPhone';
 import { ResponsiveModal } from '../components/ResponsiveModal';
+
+/** 全局空间桶（SPEC §28.11）：模型开放到 0 = 全部空间（含个人空间）可用 */
+const GLOBAL_WS = 0;
 
 const PROVIDER_OPTIONS = [
   { label: 'DashScope（通义千问系）', value: 'dashscope' },
@@ -35,7 +40,18 @@ export default function Models() {
   /** DashScope 在售模型清单（模型名下拉数据源；拉取失败降级为手输） */
   const [vendorModels, setVendorModels] = useState<string[]>([]);
   const [vendorLoading, setVendorLoading] = useState(false);
+  /** 团队空间清单（模型开放范围数据源，SPEC §28.11） */
+  const [teamSpaces, setTeamSpaces] = useState<Workspace[]>([]);
   const isPhone = useIsPhone();
+
+  const wsOptions = [
+    { label: '全部空间（含个人）', value: GLOBAL_WS },
+    ...teamSpaces
+      .filter((w): w is Workspace & { id: number } => typeof w.id === 'number')
+      .map((w) => ({ label: w.workspaceName, value: w.id })),
+  ];
+  const wsNameById = (id: number) =>
+    id === GLOBAL_WS ? '全部空间' : teamSpaces.find((w) => w.id === id)?.workspaceName ?? `#${id}`;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +72,10 @@ export default function Models() {
       .then(setVendorModels)
       .catch(() => setVendorModels([]))
       .finally(() => setVendorLoading(false));
+    // 团队空间清单（模型开放范围）；失败静默为空
+    workspaceAll()
+      .then(setTeamSpaces)
+      .catch(() => setTeamSpaces([]));
   }, [load]);
 
   const onCreate = async () => {
@@ -67,6 +87,7 @@ export default function Models() {
       baseUrl: values.baseUrl?.trim() || null,
       capabilities: values.capabilities?.length ? values.capabilities.join(',') : null,
       status: 1,
+      workspaceIds: values.workspaceIds || [],
     });
     message.success('创建成功');
     setCreateOpen(false);
@@ -83,6 +104,7 @@ export default function Models() {
       displayName: values.displayName || null,
       baseUrl: values.baseUrl?.trim() || null,
       capabilities: values.capabilities?.length ? values.capabilities.join(',') : null,
+      workspaceIds: values.workspaceIds || [],
     });
     message.success('保存成功');
     setEditTarget(null);
@@ -151,6 +173,25 @@ export default function Models() {
                 : '-',
           },
           {
+            title: '开放空间',
+            dataIndex: 'workspaceIds',
+            width: 160,
+            render: (ids: number[] | undefined) => {
+              const list = ids || [];
+              if (list.includes(GLOBAL_WS)) {
+                return <Tag color="green">全部空间</Tag>;
+              }
+              if (list.length === 0) {
+                return <span style={{ color: 'rgba(26,26,29,0.35)' }}>未开放</span>;
+              }
+              return list.map((id) => (
+                <Tag key={id} color="blue">
+                  {wsNameById(id)}
+                </Tag>
+              ));
+            },
+          },
+          {
             title: '状态',
             dataIndex: 'status',
             width: 90,
@@ -173,6 +214,7 @@ export default function Models() {
                       displayName: record.displayName || '',
                       baseUrl: record.baseUrl || '',
                       capabilities: record.capabilities ? record.capabilities.split(',') : [],
+                      workspaceIds: record.workspaceIds || [],
                     });
                     setEditTarget(record);
                   }}
@@ -208,7 +250,7 @@ export default function Models() {
         cancelText="取消"
         destroyOnClose
       >
-        <Form form={createForm} layout="vertical" preserve={false} initialValues={{ provider: 'dashscope' }}>
+        <Form form={createForm} layout="vertical" preserve={false} initialValues={{ provider: 'dashscope', workspaceIds: [GLOBAL_WS] }}>
           <Form.Item name="provider" label="供应商" rules={[{ required: true }]}>
             <Select options={PROVIDER_OPTIONS} />
           </Form.Item>
@@ -249,6 +291,13 @@ export default function Models() {
           </Form.Item>
           <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点">
             <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
+          </Form.Item>
+          <Form.Item
+            name="workspaceIds"
+            label="开放空间"
+            tooltip="模型仅对开放的空间可见可用；「全部空间（含个人）」对所有空间开放，留空则该模型不可被任何空间选用"
+          >
+            <Select mode="multiple" options={wsOptions} placeholder="选择开放的空间" />
           </Form.Item>
           <Form.Item
             noStyle
@@ -315,6 +364,13 @@ export default function Models() {
           </Form.Item>
           <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点">
             <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
+          </Form.Item>
+          <Form.Item
+            name="workspaceIds"
+            label="开放空间"
+            tooltip="模型仅对开放的空间可见可用；「全部空间（含个人）」对所有空间开放，留空则该模型不可被任何空间选用"
+          >
+            <Select mode="multiple" options={wsOptions} placeholder="选择开放的空间" />
           </Form.Item>
           <Form.Item name="baseUrl" label="baseUrl（仅 OpenAI 生效，可选）">
             <Input placeholder="留空使用环境变量 OPENAI_BASE_URL" />

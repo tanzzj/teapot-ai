@@ -41,4 +41,7 @@ public class AgentCreateRequest {
 
     /** 扩展功能配置（一期仅 sandbox 命名空间，SPEC §16.6；保存时强校验） */
     private Map<String, Object> feature;
+
+    /** 归属业务空间 id（SPEC §28.4）；null = 当前用户个人空间（懒创建） */
+    private Long workspaceId;
 }

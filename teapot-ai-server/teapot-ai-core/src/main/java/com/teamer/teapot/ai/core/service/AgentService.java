@@ -62,6 +62,8 @@ public class AgentService {
     private final StorageConfigService storageConfigService;
     private final ChannelConfigService channelConfigService;
     private final ChannelHub channelHub;
+    private final WorkspaceService workspaceService;
+    private final ModelService modelService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
@@ -71,7 +73,9 @@ public class AgentService {
                         SandboxConfigService sandboxConfigService,
                         StorageConfigService storageConfigService,
                         ChannelConfigService channelConfigService,
-                        ChannelHub channelHub) {
+                        ChannelHub channelHub,
+                        WorkspaceService workspaceService,
+                        ModelService modelService) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.agentRegistry = agentRegistry;
@@ -83,12 +87,25 @@ public class AgentService {
         this.storageConfigService = storageConfigService;
         this.channelConfigService = channelConfigService;
         this.channelHub = channelHub;
+        this.workspaceService = workspaceService;
+        this.modelService = modelService;
     }
 
-    public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled) {
+    public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled, Long workspaceId) {
         int offset = Math.max(page - 1, 0) * size;
-        long total = agentMapper.count(keyword, includeDisabled);
-        List<AgentDO> list = agentMapper.selectPage(keyword, includeDisabled, offset, size);
+        // 空间作用域（SPEC §28.4）：null = 个人空间默认视图（读不懒建，无空间即空列表）；非空先过跨空间隔离
+        Long scopeId;
+        if (workspaceId == null) {
+            scopeId = workspaceService.personalWorkspaceIdOrNull(ContextUtil.currentUserId());
+            if (scopeId == null) {
+                return PageData.of(0, List.of());
+            }
+        } else {
+            workspaceService.requireMember(workspaceId);
+            scopeId = workspaceId;
+        }
+        long total = agentMapper.count(keyword, includeDisabled, scopeId);
+        List<AgentDO> list = agentMapper.selectPage(keyword, includeDisabled, scopeId, offset, size);
         return PageData.of(total, list);
     }
 
@@ -119,6 +136,13 @@ public class AgentService {
         agent.setFeature(validateFeature(request.getFeature()));
         agent.setStatus(1);
         agent.setCreatedBy(ContextUtil.currentUserId());
+        // 归属空间：null → 个人空间（首个 Agent 触发懒创建）；非 null → 校验成员后归属（SPEC §28.4）
+        agent.setWorkspaceId(workspaceService.resolveTargetWorkspace(request.getWorkspaceId()));
+        // 模型开放校验（SPEC §28.11）：白名单放行；否则所选模型必须开放给目标空间桶
+        if (!workspaceService.isWhitelisted(ContextUtil.currentUserId())) {
+            long bucket = request.getWorkspaceId() == null ? 0L : request.getWorkspaceId();
+            modelService.assertOpenToWorkspace(request.getModelId(), bucket);
+        }
         if (existed != null) {
             // 软删行复活（唯一键冲突规避，SPEC §10.1）：全字段覆盖更新
             agentMapper.update(agent);
@@ -152,6 +176,10 @@ public class AgentService {
             agent.setSysPrompt(request.getSysPrompt());
         }
         if (request.getModelId() != null) {
+            if (!workspaceService.isWhitelisted(ContextUtil.currentUserId())) {
+                long bucket = workspaceService.modelBucketForWorkspace(agent.getWorkspaceId());
+                modelService.assertOpenToWorkspace(request.getModelId(), bucket);
+            }
             agent.setModelId(request.getModelId());
         }
         // compaction 列为 NOT NULL：合并后仍为 null 时回填默认值
@@ -201,6 +229,24 @@ public class AgentService {
         agent.setAvatar(avatarUrl);
         agentMapper.update(agent);
         auditService.log("agent.avatar", agentKey, null);
+        return agent;
+    }
+
+    /** 移动 Agent 到别的空间（SPEC §28.4 需求 5）；targetWorkspaceId=null = 移回个人空间 */
+    @Transactional(rollbackFor = Exception.class)
+    public AgentDO moveWorkspace(String agentKey, Long targetWorkspaceId) {
+        AgentDO agent = requireAgent(agentKey);
+        if (!Integer.valueOf(1).equals(agent.getStatus())) {
+            throw new BizException("Agent 已停用，不可移动：" + agentKey);
+        }
+        // 对源空间要有访问权（存量未归属 agent 的 workspaceId 为 null，跳过源校验）
+        if (agent.getWorkspaceId() != null) {
+            workspaceService.requireMember(agent.getWorkspaceId());
+        }
+        agent.setWorkspaceId(workspaceService.resolveTargetWorkspace(targetWorkspaceId));
+        agentMapper.update(agent);
+        agentRegistry.invalidate(agentKey);
+        auditService.log("agent.moveWorkspace", agentKey, "workspaceId=" + agent.getWorkspaceId());
         return agent;
     }
 

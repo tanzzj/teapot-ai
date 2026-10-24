@@ -10,7 +10,13 @@ import type {
   SessionMessageItem,
 } from '../types';
 
-export function agentList(params: { page?: number; size?: number; keyword?: string; includeDisabled?: boolean }) {
+export function agentList(params: {
+  page?: number;
+  size?: number;
+  keyword?: string;
+  includeDisabled?: boolean;
+  workspaceId?: number;
+}) {
   return unwrap<PageData<Agent>>(http.get<Result<PageData<Agent>>>('/api/agent/list', { params }));
 }
 
@@ -28,6 +34,8 @@ export interface AgentCreatePayload {
   compactionKeep?: number;
   skillNames?: string[];
   feature?: Record<string, unknown>;
+  /** 归属空间 id；省略/undefined = 个人空间（懒创建，SPEC §28.4） */
+  workspaceId?: number;
 }
 
 export function agentCreate(payload: AgentCreatePayload) {
@@ -40,6 +48,13 @@ export function agentUpdate(agentKey: string, payload: Partial<Omit<AgentCreateP
 
 export function agentDelete(agentKey: string) {
   return unwrap<void>(http.delete<Result<void>>(`/api/agent/delete/${agentKey}`));
+}
+
+/** 移动 Agent 到别的空间（SPEC §28.4 需求 5）；workspaceId=null = 移回个人空间 */
+export function agentMoveWorkspace(agentKey: string, workspaceId: number | null) {
+  return unwrap<Agent>(
+    http.put<Result<Agent>>(`/api/agent/${agentKey}/workspace`, { workspaceId }),
+  );
 }
 
 export function agentBindSkill(agentKey: string, skillName: string) {
@@ -57,8 +72,12 @@ export function agentChat(agentKey: string, messageText: string, sessionId?: str
   );
 }
 
-export function modelPresets() {
-  return unwrap<string[]>(http.get<Result<string[]>>('/api/model/presets'));
+export function modelPresets(workspaceId?: number) {
+  return unwrap<string[]>(
+    http.get<Result<string[]>>('/api/model/presets', {
+      params: workspaceId === undefined ? undefined : { workspaceId },
+    }),
+  );
 }
 
 /** 生成模型目录（SPEC-media-gen §4.8）：按能力位给出可选生图/生视频/语音模型与默认值 */

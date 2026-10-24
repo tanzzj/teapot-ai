@@ -16,9 +16,12 @@ public interface AgentMapper {
 
     List<AgentDO> selectPage(@Param("keyword") String keyword,
                              @Param("includeDisabled") boolean includeDisabled,
+                             @Param("workspaceId") Long workspaceId,
                              @Param("offset") int offset, @Param("size") int size);
 
-    long count(@Param("keyword") String keyword, @Param("includeDisabled") boolean includeDisabled);
+    long count(@Param("keyword") String keyword,
+               @Param("includeDisabled") boolean includeDisabled,
+               @Param("workspaceId") Long workspaceId);
 
     List<AgentDO> selectAllEnabled();
 

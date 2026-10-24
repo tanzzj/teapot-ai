@@ -33,6 +33,9 @@ public class TeapotAiProperties {
     /** CORS 允许来源（SPEC §14.4，前端 dev server / 站点域名） */
     private List<String> corsAllowedOrigins = new ArrayList<>();
 
+    /** 业务空间配置（SPEC §28.7）：系统白名单用户可见并管理全部 workspace */
+    private Workspace workspace = new Workspace();
+
     @Data
     public static class Agentscope {
         private Datasource datasource = new Datasource();
@@ -158,5 +161,15 @@ public class TeapotAiProperties {
             /** 对象 key 前缀默认值（t_sys_config oss.key_prefix 可覆盖） */
             private String keyPrefix = "teapot-ai/chat-images/";
         }
+    }
+
+    /**
+     * 业务空间配置（SPEC §28.7）：白名单 userId 可见并管理全部 workspace，
+     * 非白名单用户只见个人空间 + 作为成员加入的团队空间。
+     */
+    @Data
+    public static class Workspace {
+        /** 系统白名单 userId 列表（yml 维护，env 注入） */
+        private List<String> whitelist = new ArrayList<>();
     }
 }

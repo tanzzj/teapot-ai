@@ -37,8 +37,9 @@ public class UserController {
 
     @GetMapping("/list")
     public Result<PageData<TeapotUser>> list(@RequestParam(defaultValue = "1") int page,
-                                             @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(userService.list(page, size));
+                                             @RequestParam(defaultValue = "20") int size,
+                                             @RequestParam(required = false) String keyword) {
+        return Result.ok(userService.list(page, size, keyword));
     }
 
     @PostMapping("/create")

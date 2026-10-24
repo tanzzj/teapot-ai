@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.teamer.teapot.ai.core.dao.WorkspaceMapper">
+
+    <resultMap id="workspaceMap" type="com.teamer.teapot.ai.core.model.WorkspaceDO">
+        <id property="id" column="id"/>
+        <result property="workspaceName" column="workspace_name"/>
+        <result property="workspaceCode" column="workspace_code"/>
+        <result property="workspaceType" column="workspace_type"/>
+        <result property="description" column="description"/>
+        <result property="feature" column="feature"/>
+        <result property="status" column="status"/>
+        <result property="creator" column="creator"/>
+        <result property="gmtCreate" column="gmt_create"/>
+        <result property="gmtModified" column="gmt_modified"/>
+    </resultMap>
+
+    <resultMap id="memberMap" type="com.teamer.teapot.ai.core.model.WorkspaceMemberDO">
+        <id property="id" column="id"/>
+        <result property="workspaceId" column="workspace_id"/>
+        <result property="userId" column="user_id"/>
+        <result property="memberRole" column="member_role"/>
+        <result property="creator" column="creator"/>
+        <result property="gmtCreate" column="gmt_create"/>
+    </resultMap>
+
+    <resultMap id="memberVoMap" type="com.teamer.teapot.ai.core.model.vo.WorkspaceMemberVO">
+        <result property="userId" column="user_id"/>
+        <result property="username" column="username"/>
+        <result property="realName" column="real_name"/>
+        <result property="memberRole" column="member_role"/>
+    </resultMap>
+
+    <sql id="cols">
+        id, workspace_name, workspace_code, workspace_type, description, feature,
+        status, creator, gmt_create, gmt_modified
+    </sql>
+
+    <select id="selectById" resultMap="workspaceMap">
+        SELECT <include refid="cols"/> FROM teapot_workspace WHERE id = #{id} LIMIT 1
+    </select>
+
+    <select id="selectByCode" resultMap="workspaceMap">
+        SELECT <include refid="cols"/> FROM teapot_workspace WHERE workspace_code = #{code} LIMIT 1
+    </select>
+
+    <select id="selectByUser" resultMap="workspaceMap">
+        SELECT w.id, w.workspace_name, w.workspace_code, w.workspace_type, w.description, w.feature,
+               w.status, w.creator, w.gmt_create, w.gmt_modified
+        FROM teapot_workspace w
+        JOIN teapot_workspace_member m ON m.workspace_id = w.id
+        WHERE m.user_id = #{userId} AND w.status = 1
+        ORDER BY w.id
+    </select>
+
+    <select id="selectAllEnabled" resultMap="workspaceMap">
+        SELECT <include refid="cols"/> FROM teapot_workspace WHERE status = 1 ORDER BY id
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO teapot_workspace (workspace_name, workspace_code, workspace_type,
+                                      description, feature, status, creator)
+        VALUES (#{workspaceName}, #{workspaceCode}, #{workspaceType},
+                #{description}, #{feature}, #{status}, #{creator})
+    </insert>
+
+    <update id="update">
+        UPDATE teapot_workspace
+        SET workspace_name = #{workspaceName}, description = #{description},
+            feature = #{feature}, status = #{status}
+        WHERE id = #{id}
+    </update>
+
+    <update id="softDelete">
+        UPDATE teapot_workspace SET status = 0 WHERE id = #{id}
+    </update>
+
+    <select id="countMember" resultType="long">
+        SELECT COUNT(*) FROM teapot_workspace_member WHERE workspace_id = #{workspaceId} AND user_id = #{userId}
+    </select>
+
+    <select id="selectMemberRole" resultType="string">
+        SELECT member_role FROM teapot_workspace_member WHERE workspace_id = #{workspaceId} AND user_id = #{userId} LIMIT 1
+    </select>
+
+    <select id="selectMembersByWorkspace" resultMap="memberVoMap">
+        SELECT m.user_id, m.member_role, u.username, u.real_name
+        FROM teapot_workspace_member m
+        LEFT JOIN t_user u ON u.user_id = m.user_id
+        WHERE m.workspace_id = #{workspaceId}
+        ORDER BY FIELD(m.member_role, 'owner', 'member'), m.id
+    </select>
+
+    <insert id="insertMember" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO teapot_workspace_member (workspace_id, user_id, member_role, creator)
+        VALUES (#{workspaceId}, #{userId}, #{memberRole}, #{creator})
+    </insert>
+
+    <delete id="deleteMember">
+        DELETE FROM teapot_workspace_member WHERE workspace_id = #{workspaceId} AND user_id = #{userId}
+    </delete>
+</mapper>

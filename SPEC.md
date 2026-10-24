@@ -2219,6 +2219,227 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 
 ---
 
+## §28 业务空间（Workspace）与去除全局 Skill
+
+> 状态：**设计稿（先做 spec，未实现）**。本节按用户 2026-10-24 需求编号 1–7 落地，所有落点均引现有代码先例；实现前请先过 §28.10 待确认项。
+
+### §28.0 目标与范围
+
+两件事：
+1. **去除「全局 skill」概念**：Agent 不再在未绑定 skill 时自动继承全部 skill，改为「每个 Agent 只装配自己显式绑定的 skill」。
+2. **引入「业务空间（Workspace）」**：以新表 `teapot_workspace` 承载，Agent 归属到空间；顶栏（图二红框）加空间下拉框，默认「个人空间」；支持建空间 + 拉用户查询组件加成员；跨空间隔离；系统白名单可见全部空间；存量 Agent 脚本迁移到一个新空间。
+
+非目标（本轮不做，见 §28.10）：Skill 实体本身按空间/Agent 归属、空间级配额与审计、空间内二级角色（owner/admin/member 细分）。
+
+### §28.1 去除全局 Skill（需求 1）
+
+- **唯一落点**：`teapot-ai-core/.../AgentBuilder.java:177-179`
+  ```java
+  SkillFilter skillFilter = bound.isEmpty() ?
+          SkillFilter.all() :                       // ← 全局 skill 兜底，删除此语义
+          SkillFilter.only(bound.toArray(new String[0]));
+  ```
+  改为：
+  ```java
+  // 无「全局 skill」概念：未显式绑定即不装配任何 skill（每个 Agent 只用自己的）
+  SkillFilter skillFilter = bound.isEmpty() ?
+          SkillFilter.none() :
+          SkillFilter.only(bound.toArray(new String[0]));
+  ```
+  `SkillFilter.none()` 已存在（`agentscope-core/.../skill/SkillFilter.java:78`），无需改框架。
+- **绑定链路不变**：`t_agent_skill`（`sql/V1:45-54`，UNIQUE(agent_key, skill_name)）+ `AgentService.bindSkill/unbindSkill/replaceBindings`（`AgentService.java:219-345`）已是「按 Agent 装配」，本轮只是把「未绑定 = 全给」的兜底摘掉。
+- **Skill 工坊（`/api/skill/list`，`SkillController.java:35`）保持不变**：它仍是「可装配的 skill 目录/调色板」（mysql 只读 + git + oss 三来源，见 §15），不是「自动继承」。去掉的是运行期的 all 兜底，不是目录本身。
+- **行为变更与迁移影响（必读）**：现网若有 Agent 依赖「不绑定就能用全部 skill」，改后这些 Agent 将**一个 skill 都没有**。上线前需盘点 `t_agent` 中在 `t_agent_skill` 无绑定行的 Agent，为其显式补绑（脚本见 §28.5 备注）。
+
+### §28.2 数据模型（需求 2、6）
+
+沿用 `sql/V*__*.sql` **手工迁移**约定（无 flyway：部署用 `docker exec -i teapot-mysql mysql ... < V*.sql`，先例 `deploy/run-sql.sh`、`deploy/tmp-deploy-v23.sh`；故 V4 有重名两文件）。下一个空位 = **V13**。所有 DDL 用 `information_schema` 存在性守卫保证幂等（先例 `sql/V4__agent_feature.sql:7-16`）。
+
+**新增 `sql/V13__workspace.sql`：**
+
+- `teapot_workspace`（用户指定列名照搬；注意与 `t_*` 表的 `created_at/updated_at/created_by` 命名不同——用户明确要 `gmt_create/gmt_modified/creator`，本节从用户）：
+  ```sql
+  CREATE TABLE IF NOT EXISTS teapot_workspace (
+    id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    workspace_name VARCHAR(64)  NOT NULL COMMENT '空间显示名',
+    workspace_code VARCHAR(64)  NOT NULL COMMENT '空间业务编码，全局唯一；个人空间=personal:{userId}',
+    workspace_type VARCHAR(16)  NOT NULL DEFAULT 'team' COMMENT 'personal=个人空间 team=团队空间',
+    description    VARCHAR(512) NULL,
+    feature        JSON         NULL COMMENT '空间级扩展配置(JSON)，预留，仿 t_agent.feature',
+    status         TINYINT      NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
+    creator        VARCHAR(64)  NOT NULL COMMENT '创建人 userId（个人空间即归属人）',
+    gmt_create     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    gmt_modified   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_workspace_code (workspace_code)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='业务空间';
+  ```
+- `teapot_workspace_member`（承载「加成员即授权」，需求 2-1）：
+  ```sql
+  CREATE TABLE IF NOT EXISTS teapot_workspace_member (
+    id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    workspace_id BIGINT UNSIGNED NOT NULL,
+    user_id      VARCHAR(64)  NOT NULL COMMENT '成员 userId（t_user.user_id）',
+    member_role  VARCHAR(16)  NOT NULL DEFAULT 'member' COMMENT 'owner=创建人/空间主 member=普通成员',
+    creator      VARCHAR(64)  NOT NULL COMMENT '谁加的这条成员',
+    gmt_create   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ws_user (workspace_id, user_id),
+    KEY idx_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='业务空间成员';
+  ```
+- `t_agent` 加**可空** workspace 列（需求 6）：
+  ```sql
+  ALTER TABLE t_agent ADD COLUMN workspace_id BIGINT UNSIGNED NULL
+    COMMENT '归属业务空间；NULL=未归属（存量/未迁移）' AFTER feature;
+  ```
+  幂等守卫同 `V4__agent_feature.sql`。
+
+**实体/Mapper（仿现有 `AgentDO`+`AgentMapper`+`sqlclient/AgentMapper.xml` 三件套）：**
+- `WorkspaceDO`（`model/`）：字段对齐上表；`feature` 为 String（JSON 原文），仿 `AgentDO.feature`。
+- `WorkspaceMemberDO`（`model/`）。
+- `WorkspaceMapper` + `sqlclient/WorkspaceMapper.xml`：`selectById`、`selectByCode`、`selectByUser(userId)`（join member 返回该用户所属空间）、`selectAll`（白名单用）、`insert`、`update`、`softDelete`；`insertMember`、`deleteMember`、`selectMembersByWorkspace`、`selectWorkspaceIdsByUser`、`isMember(workspaceId,userId)`。
+- `AgentDO` 加 `private Long workspaceId;`；`AgentMapper.xml`：`resultMap`+`<sql id="cols">`（`AgentMapper.xml:6-26`）补 `workspace_id`；`insert`（`:59-64`）补列；`update`（`:67-74`）补 `workspace_id = #{workspaceId}`；`selectPage`/`count`（`:32-53`）加可选 `workspaceId` 过滤（`<if test="workspaceId != null">AND workspace_id = #{workspaceId}</if>`）。
+
+### §28.3 权限与隔离模型（需求 2-1、2-2、7）
+
+- **可见空间集合**（`WorkspaceService.listVisible()`）：
+  1. 当前用户**个人空间**（`workspace_type=personal`，`workspace_code=personal:{userId}`）——**懒创建**：无行时前端仍显示为默认项（合成项，id=null），后端在「该用户首次建 Agent」时才 insert 行（见 §28.4）。
+  2. 该用户是 member 的所有 team 空间（`selectWorkspaceIdsByUser`）。
+  3. **系统白名单用户**（§28.7）：额外可见**全部**空间（`selectAll`）。
+- **个人空间语义**（需求 2 括注）：个人空间**不附带任何 Agent**；只有在**第一个 Agent 创建出来时**才创建该 workspace 行，并把该 Agent 归入。个人空间只有 owner 一个成员，不开放加成员/移动他人 Agent。
+- **加成员即授权**（需求 2-1）：`addMember(workspaceId, userId)` 写 `teapot_workspace_member`（`member_role=member`），该用户下次 `listVisible()` 即包含此空间，无需其它授权动作。成员来源 = 「拉起用户查询组件」（§28.6）选出的 `t_user`。
+- **跨空间隔离**（需求 2-2）：所有空间作用域查询在 Service 层先过 `requireMember(workspaceId)`：
+  ```java
+  void requireMember(Long workspaceId) {
+    String uid = ContextUtil.currentUserId();
+    if (isWhitelisted(uid)) return;                    // 白名单放行
+    if (!workspaceMapper.isMember(workspaceId, uid))   // 非成员
+      throw new BizException(Result.CODE_FORBIDDEN, "无权限访问该空间");
+  }
+  ```
+  「不允许查询跨空间的权限」= 非成员无法查该空间的成员列表/Agent 列表/空间详情；`requireMember` 是唯一闸口。**注意 RBAC 现状是粗粒度**：`RbacAccessFilter`（`teapot-ai-rbac/.../RbacAccessFilter.java:47-56`）只按 `roleId → URI 通配` 放行（`application.yml:30-64`），**不认识 workspace**。故空间级隔离是 **Service 层数据作用域**职责（与 `session-history` 在 Service 里 `requireAdmin` 兜底同款思路，见 `AgentController.java:100-101`），不能只靠 URI 白名单。
+
+### §28.4 后端接口与编排
+
+**新增 `WorkspaceController`（`/api/workspace/*`）+ `WorkspaceService`：**
+- `GET /api/workspace/list` → `listVisible()`：返回当前用户可见空间（含个人空间合成项 + 白名单全量）。前端下拉框数据源。
+- `POST /api/workspace/create`（`WorkspaceCreateRequest`：`workspaceName`*、`workspaceCode`*、`description`、`memberUserIds: List<String>`）→ 建 team 空间 + 批量 `addMember`（含 creator 自己为 owner）。`workspaceCode` 唯一冲突拒绝（仿 `AgentService.create` 的 agentKey 冲突校验 `AgentService.java:104-107`）。
+- `GET /api/workspace/{id}/members` → `requireMember(id)` 后返回成员列表（跨空间被拒）。
+- `POST /api/workspace/{id}/member`（`{userId}`）/ `DELETE /api/workspace/{id}/member/{userId}` → 加/移成员，`requireMember(id)`（仅 owner/白名单可改，见 §28.10）。
+- `GET /api/workspace/{id}/agents` 或复用 `/api/agent/list?workspaceId=` → 见下。
+- `PUT /api/workspace/personal/ensure`（内部）：懒创建个人空间，返回其 id。
+
+**改造 `AgentService`（`AgentService.java`）：**
+- `list(page,size,keyword,includeDisabled)` → 加 `workspaceId` 入参（`AgentController.list` 加 `@RequestParam(required=false) Long workspaceId`）。Service 内：`workspaceId` 为空 → 解析为「当前用户个人空间」（懒创建/合成）；随后 `requireMember(workspaceId)`；`agentMapper.selectPage/count` 带上 `workspaceId` 过滤。
+- `create(AgentCreateRequest)`（`AgentService.java:102-136`）：`AgentCreateRequest` 加 `Long workspaceId`（可空）。
+  - 传了 team 空间 id → `requireMember` 后写入 `agent.setWorkspaceId(...)`。
+  - 传空 / 传「personal」→ **懒创建个人空间**（若 `personal:{uid}` 无行则 insert + 加 creator 为 owner），再 `agent.setWorkspaceId(personalId)`。这是「第一个 Agent 触发建个人空间」的落点。
+  - `AgentMapper.insert` 补 `workspace_id`（§28.2）。
+- **移动空间**（需求 5）：`AgentService.moveWorkspace(agentKey, targetWorkspaceId)` → `requireAgent` + `requireMember(target)` + 校验对源空间有权限 → `agent.setWorkspaceId(target)` → `agentMapper.update` → `agentRegistry.invalidate(agentKey)`（仿 `update()` 的失效逻辑 `AgentService.java:180`）→ `auditService.log("agent.moveWorkspace", ...)`。新增 `PUT /api/agent/{agentKey}/workspace`（body `{workspaceId}`）。
+- `AgentDetailVO`（`vo/AgentDetailVO.java`）已内嵌 `AgentDO`，`workspaceId` 随之带出，前端详情可读。
+
+**DTO/前端契约（`api/agent.ts`）：** `AgentCreatePayload` 加 `workspaceId?: number`；新增 `agentMoveWorkspace(agentKey, workspaceId)`；`agentList` params 加 `workspaceId?: number`。`types.ts` 的 `interface Agent`（`types.ts:35`）加 `workspaceId?: number`。
+
+### §28.5 存量迁移脚本（需求 3）
+
+**新增 `sql/V14__workspace_backfill.sql`**（幂等，可重跑）：
+1. 建一个承载存量的 team 空间（若 `workspace_code='legacy-default'` 不存在才 insert）：`workspace_name='存量空间'`、`creator=` 首个 admin（`SELECT user_id FROM t_user WHERE roles LIKE '%admin%' ORDER BY id LIMIT 1`）。
+2. 把所有 `workspace_id IS NULL` 的 `t_agent` 一次性归入该空间：`UPDATE t_agent SET workspace_id = @legacy WHERE workspace_id IS NULL`。
+3. 把每个存量 Agent 的 `created_by` 补成该空间成员（`INSERT ... SELECT DISTINCT created_by ... ON DUPLICATE KEY UPDATE`），避免迁移后原创建人看不到自己的 Agent；admin 另有白名单兜底（§28.7）。
+- **执行方式**：先 `V13`（建表/加列）后 `V14`（回填），经 `deploy/run-sql.sh < V13...` / `< V14...`（先例 `tmp-deploy-v23.sh:9`）。
+- **备注（配合 §28.1）**：迁移同时盘点无 skill 绑定的 Agent，按需补 `t_agent_skill`，否则去全局兜底后它们将无 skill 可用。
+
+### §28.6 前端（需求 2、4、5 + 图二红框）
+
+- **顶栏红框落点**（`layout/AppLayout.tsx`）：header 右侧簇顺序为 `flex 占位 → #topbar-history-slot → <AgentSelector/> → #teapot-header-extra → <UserMenu/>`（`AppLayout.tsx` header 段）。在 `<AgentSelector/>` **左侧**、`#topbar-history-slot` 附近插入两个新组件（即图二红框：导航右、头像左）：
+  - `<WorkspaceSwitcher/>`（新，`layout/`）：`Select`（复用 `@agentscope-ai/design`，仿 `AgentSelector.tsx:78-121`）列出 `listVisible()`，默认选「个人空间」；选项含「+ 新建空间」触发建空间弹窗。选中值存 zustand + localStorage（仿 `AgentSelector` 的 `LS_KEY='teapot:lastAgent'` 与 `store/mobileUI`/`store/auth` 用法）。
+  - `<WorkspaceMenu/>`（新）：`…` 按钮（`Dropdown`，仿 `AppLayout.tsx` 移动端 `Dropdown menu` 用法），下拉项「移动空间」→ 打开空间选择弹窗，对**当前 Agent**（chat 页取 `AgentSelector` 的 `?agent=`；管理页取选中卡片）调 `agentMoveWorkspace`。
+- **当前空间上下文**：新增 `store/workspace.ts`（zustand，仿 `store/auth.ts`）持有 `activeWorkspaceId`；`Agents.tsx` 的 `load()`（`Agents.tsx:42-53`）把 `workspaceId: activeWorkspaceId` 传入 `agentList`，切换空间即重查（`useEffect` 依赖加上它）。
+- **建空间弹窗 + 成员选择组件**（需求 2-1）：`ResponsiveModal`（仿 `Agents.tsx:246-280`）内 `Form`：`workspaceName`*、`workspaceCode`*、`description`、成员多选。成员选择 = **拉起用户查询组件**：新增 `<UserPicker/>`，数据源 `GET /api/user/list`（`UserController.java:38-42`）；因该接口目前**只分页无关键字**（`UserMapper.selectPage` 无 keyword），需给 `/api/user/list` 加 `keyword` 检索参数（`UserMapper.selectPage`/`countAll` 加 `username/real_name LIKE`）以支持搜索添加。选中用户提交到 `workspace/create` 的 `memberUserIds`。
+- **建 Agent 支持选空间**（需求 4）：`Agents.tsx` 新建弹窗（`Agents.tsx:255-279`）与 `AgentDetail.tsx` 配置页各加一个「所属空间」`Select`（默认当前空间，含「+ 新建空间」内联入口），提交进 `AgentCreatePayload.workspaceId`。
+- **RBAC resource-list**（`application.yml:30-64`）：`developer` 段加 `/api/workspace/*`；`viewer` 段加只读 `/api/workspace/list`、`/api/workspace/*/members`（按需）。`/api/user/list` 若要对 developer 开放供 UserPicker，需在 developer 段补 `/api/user/list`（现仅 admin `/*` 覆盖，viewer/developer 未放行）。
+- **移动端**：红框组件在 `isMobile` 下按需收窄/收进 `WorkspaceMenu`（仿 `AppLayout.tsx` 移动端下拉），避免顶栏拥挤。
+
+### §28.7 系统白名单（需求 7，放 properties）
+
+- `TeapotAiProperties`（`config/TeapotAiProperties.java`）加嵌套配置（仿现有 `Sandbox`/`Storage` 内部类与 `modelPresets` 顶层 List 两种先例）：
+  ```java
+  /** 业务空间配置（SPEC §28） */
+  private Workspace workspace = new Workspace();
+
+  @Data
+  public static class Workspace {
+      /** 系统白名单 userId：可见并管理全部 workspace（SPEC §28.7） */
+      private List<String> whitelist = new ArrayList<>();
+  }
+  ```
+- `application.yml`（`teapot.ai:` 段，`application.yml:70+`）加：
+  ```yaml
+  teapot:
+    ai:
+      workspace:
+        whitelist: ${TEAPOT_WORKSPACE_WHITELIST:}   # 逗号分隔 userId，env 注入
+  ```
+- `WorkspaceService.isWhitelisted(uid)` = `properties.getWorkspace().getWhitelist().contains(uid)`；命中则 `listVisible()` 返回全部空间、`requireMember` 直接放行。
+
+### §28.8 验收标准
+
+1. 未绑定 skill 的 Agent 运行时装载 0 个 skill（日志 `boundSkills=[]` 且不再回落全部）；绑定 N 个则恰好 N 个。
+2. 新用户首登：空间下拉默认「个人空间」，此时 `teapot_workspace` 无该用户行；创建第一个 Agent 后，`teapot_workspace` 出现 `personal:{uid}` 行且该 Agent `workspace_id` 指向它。
+3. 建 team 空间：填必填项 + 经 UserPicker 加 2 名成员 → 空间行 + 3 条 member（含 creator=owner）；被加成员登录后下拉可见该空间。
+4. 跨空间：非成员请求 `GET /api/workspace/{id}/members` 与该空间 Agent 列表 → 403「无权限访问该空间」。
+5. 白名单用户（properties 配）下拉可见全部空间，可进入任意空间管理。
+6. `V14` 迁移后：所有存量 `t_agent.workspace_id` 非空且指向「存量空间」；原创建人能在下拉看到「存量空间」并列出其 Agent。
+7. 建 Agent 时选「所属空间」= 某 team 空间 → 该 Agent 直接归属它；不选 → 归个人空间。
+8. 顶栏 `…` →「移动空间」把当前 Agent 移到另一空间后，源空间列表不再出现、目标空间出现，`agentRegistry` 已失效重建。
+
+### §28.9 冒烟
+
+- `mvn -f teapot-ai-server/pom.xml package -DskipTests` 通过；本地起服务，`/api/workspace/list` 返回个人空间合成项；建空间 + 加成员 + 建 Agent + 移动空间全链路 200；非成员越权 403。
+- 前端 `npm run build` 通过；顶栏出现空间下拉与 `…`；切空间后 Agent 列表随之变化。
+
+### §28.10 待确认项 / 风险
+
+1. **`…`「移动空间」的作用对象**：本稿按「移动当前 Agent 到别的空间」实现（chat 页作用于 `AgentSelector` 选中 Agent）。若用户本意是「空间级操作菜单（改名/管成员/删空间）」，需调整为 workspace 动作菜单——**请确认**。
+2. **Skill 是否也要按空间隔离**：本稿只去掉运行期 all 兜底，Skill 工坊仍是全局共享目录（跨空间可见可装配）。若要求「skill 也归属空间/Agent」，是更大改动（skill 实体加 workspace_id + 目录按空间过滤），本轮不含。
+3. **空间内二级权限**：本稿 member 只有 owner/member 两档，且「谁能加/移成员、谁能移动 Agent」暂按 owner + 白名单。是否需要更细角色（如空间 admin）待确认。
+4. **去全局 skill 的存量冲击**：现网无绑定 Agent 会立刻「裸奔」，上线顺序须「先补绑/迁移 → 再发去兜底版本」，否则可能中断线上 Agent 能力。
+5. **`gmt_create/gmt_modified/creator` 命名**与既有 `t_*` 表 `created_at/updated_at/created_by` 不一致（用户显式指定，本稿从用户）；若要全站统一需另议。
+6. **`/api/user/list` 无关键字检索**：UserPicker 需要按名搜索，须扩 `UserMapper.selectPage` + resource-list 放行，属对既有用户模块的小改。
+
+### §28.11 模型入口的空间开放（2026-10-24 追加实现）
+
+需求：模型入口（`t_model_entry`，系统配置→模型）增加「开放给哪个 workspace 使用」的配置。
+
+**决策（用户选定）**：
+- 建模方式 = **多空间授权 + 未授权即不可用（deny-by-default）**，非「未授权即全局」。
+- 生效环节 = **选择 + 保存时**（不改 `ModelRegistry` 运行期热路径）。
+
+**授权模型**：新增授权表 `teapot_workspace_model(workspace_id, model_entry_id)`（仿 `teapot_workspace_member`）。
+- `workspace_id = 0` 为**全局桶**：开放到 0 = 对全部空间（含每个用户的个人空间）可用；个人空间不逐个建授权。
+- `workspace_id > 0` = 对应团队空间。某模型对空间 W 可用 ⟺ 命中 `W` 或全局 `0` 桶的授权行。
+- 存量补授权：`V15` 把当前全部模型入口授权到 0 桶，保持去空间化前既有行为（现有 Agent 照常可选）。
+
+**读路径（选择时过滤）**：
+- `GET /api/model/presets?workspaceId=` → `ModelService.listEnabledModelIds(Long)` → `selectEnabledForWorkspace`（EXISTS 命中 `IN(bucket,0)`）；不回落 yml（空集即「该空间无可用模型」）。`workspaceId` 省略时退回不过滤全量（向后兼容）。
+- 前端 `Agents.tsx` 建 Agent 时按当前空间 `activeId ?? 0` 拉取；`AgentDetail.tsx` 暂不过滤（保存校验兜底，列为后续项）。
+
+**写路径（保存时校验）**：
+- `AgentService.create/update`：非白名单用户，按目标空间桶 `assertOpenToWorkspace(modelId, bucket)`——未登记或未授权即 `BizException`。桶由 `WorkspaceService.modelBucketForWorkspace` 映射（个人/未归属→0，团队→自身 id）。白名单（§28.7）放行。
+- `ModelService.create/update`：`ModelEntryDO.workspaceIds`（非 DB 列，经授权表读写）覆盖式落库（先删后插、去重）；`update` 仅在 `workspaceIds != null` 时改动授权，保证状态开关等局部更新不清空。`delete` 连带删授权行。
+- `listAll`（admin）回填每条 `workspaceIds`；`GET /api/workspace/all`（`listAllEnabledForAdmin`，仅 admin）供模型页「开放空间」多选自举团队空间。
+
+**前端**：`Models.tsx` 新增「开放空间」列（含 0→全部空间 / 空→未开放 / 团队名标签）与建/改弹窗多选（默认 `[0]`）；`api/model.ts` `ModelEntry.workspaceIds`、`api/agent.ts` `modelPresets(workspaceId?)`、`api/workspace.ts` `workspaceAll()`。
+
+**落点**：`sql/V15__model_workspace.sql`、`ModelEntryDO`、`ModelEntryMapper(.java/.xml)`、`ModelWorkspaceGrantDO`、`ModelService`、`ModelController`、`WorkspaceService`（`listAllEnabledForAdmin`/`modelBucketForWorkspace`/`requireAdmin`）、`WorkspaceController`、`AgentService`；前端 `Models.tsx`/`Agents.tsx`/`api/{model,agent,workspace}.ts`。
+
+**验证**：`mvn -f teapot-ai-server/pom.xml package -DskipTests` 通过；前端 `tsc -b && vite build` 通过。
+
+**后续项（未做）**：运行期 `ModelRegistry.resolve` 按空间硬拦截（需给缓存加空间维度）；`capabilities` 端点按空间过滤；`AgentDetail` 模型下拉按 Agent 归属空间过滤；移动 Agent 时联动校验其模型是否开放给目标空间。
+
+---
+
 ## 附录 A：术语
 
 - **HarnessAgent**：AgentScope 2.0 推荐的长时运行 agent 入口，整合 workspace / 记忆 / 持久化 / subagent / 沙箱。

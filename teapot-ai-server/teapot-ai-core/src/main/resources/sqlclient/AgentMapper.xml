@@ -14,6 +14,7 @@
         <result property="compactionTrigger" column="compaction_trigger"/>
         <result property="compactionKeep" column="compaction_keep"/>
         <result property="feature" column="feature"/>
+        <result property="workspaceId" column="workspace_id"/>
         <result property="status" column="status"/>
         <result property="createdBy" column="created_by"/>
         <result property="createdAt" column="created_at"/>
@@ -22,7 +23,7 @@
 
     <sql id="cols">
         id, agent_key, name, description, avatar, sys_prompt, model_id,
-        compaction_trigger, compaction_keep, feature, status, created_by, created_at, updated_at
+        compaction_trigger, compaction_keep, feature, workspace_id, status, created_by, created_at, updated_at
     </sql>
 
     <select id="selectByAgentKey" resultMap="agentMap">
@@ -33,6 +34,7 @@
         SELECT <include refid="cols"/> FROM t_agent
         <where>
             <if test="!includeDisabled">status = 1</if>
+            <if test="workspaceId != null">AND workspace_id = #{workspaceId}</if>
             <if test="keyword != null and keyword != ''">
                 AND (agent_key LIKE CONCAT('%', #{keyword}, '%')
                   OR name LIKE CONCAT('%', #{keyword}, '%'))
@@ -45,6 +47,7 @@
         SELECT COUNT(*) FROM t_agent
         <where>
             <if test="!includeDisabled">status = 1</if>
+            <if test="workspaceId != null">AND workspace_id = #{workspaceId}</if>
             <if test="keyword != null and keyword != ''">
                 AND (agent_key LIKE CONCAT('%', #{keyword}, '%')
                   OR name LIKE CONCAT('%', #{keyword}, '%'))
@@ -58,9 +61,9 @@
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO t_agent (agent_key, name, description, sys_prompt, model_id,
-                             compaction_trigger, compaction_keep, feature, status, created_by)
+                             compaction_trigger, compaction_keep, feature, workspace_id, status, created_by)
         VALUES (#{agentKey}, #{name}, #{description}, #{sysPrompt}, #{modelId},
-                #{compactionTrigger}, #{compactionKeep}, #{feature}, #{status}, #{createdBy})
+                #{compactionTrigger}, #{compactionKeep}, #{feature}, #{workspaceId}, #{status}, #{createdBy})
     </insert>
 
     <!-- 全字段更新（service 侧先合并原值），支持软删行复活 -->
@@ -68,7 +71,7 @@
         UPDATE t_agent
         SET name = #{name}, description = #{description}, avatar = #{avatar}, sys_prompt = #{sysPrompt},
             model_id = #{modelId}, compaction_trigger = #{compactionTrigger},
-            compaction_keep = #{compactionKeep}, feature = #{feature},
+            compaction_keep = #{compactionKeep}, feature = #{feature}, workspace_id = #{workspaceId},
             status = #{status}, created_by = #{createdBy}
         WHERE agent_key = #{agentKey}
     </update>

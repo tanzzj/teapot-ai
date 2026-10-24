@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
@@ -31,10 +32,10 @@ public class ModelController {
         this.modelService = modelService;
     }
 
-    /** Agent 模型下拉枚举（provider:model 列表，DB 入口优先，yml 兜底） */
+    /** Agent 模型下拉枚举（provider:model 列表，DB 入口优先，yml 兜底）；workspaceId 非空则按空间开放范围过滤（SPEC §28.11） */
     @GetMapping("/presets")
-    public Result<List<String>> presets() {
-        return Result.ok(modelService.listEnabledModelIds());
+    public Result<List<String>> presets(@RequestParam(required = false) Long workspaceId) {
+        return Result.ok(modelService.listEnabledModelIds(workspaceId));
     }
 
     /** 启用入口的能力位（SPEC §19：前端多模态 gating，任意登录用户可读） */

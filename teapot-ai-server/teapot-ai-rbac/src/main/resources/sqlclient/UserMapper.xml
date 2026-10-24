@@ -31,11 +31,24 @@
     </select>
 
     <select id="selectPage" resultMap="userMap">
-        SELECT <include refid="cols"/> FROM t_user ORDER BY id LIMIT #{offset}, #{size}
+        SELECT <include refid="cols"/> FROM t_user
+        <where>
+            <if test="keyword != null and keyword != ''">
+                username LIKE CONCAT('%', #{keyword}, '%')
+                OR real_name LIKE CONCAT('%', #{keyword}, '%')
+            </if>
+        </where>
+        ORDER BY id LIMIT #{offset}, #{size}
     </select>
 
     <select id="countAll" resultType="long">
         SELECT COUNT(*) FROM t_user
+        <where>
+            <if test="keyword != null and keyword != ''">
+                username LIKE CONCAT('%', #{keyword}, '%')
+                OR real_name LIKE CONCAT('%', #{keyword}, '%')
+            </if>
+        </where>
     </select>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">

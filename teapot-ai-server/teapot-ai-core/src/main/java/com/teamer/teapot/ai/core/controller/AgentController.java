@@ -7,6 +7,7 @@ import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
 import com.teamer.teapot.ai.core.model.dto.AgentUpdateRequest;
 import com.teamer.teapot.ai.core.model.dto.BindSkillRequest;
 import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
+import com.teamer.teapot.ai.core.model.dto.MoveWorkspaceRequest;
 import com.teamer.teapot.ai.core.model.dto.SessionHistoryItem;
 import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.vo.AgentDetailVO;
@@ -49,8 +50,9 @@ public class AgentController {
     public Result<PageData<AgentDO>> list(@RequestParam(defaultValue = "1") int page,
                                           @RequestParam(defaultValue = "20") int size,
                                           @RequestParam(required = false) String keyword,
-                                          @RequestParam(defaultValue = "false") boolean includeDisabled) {
-        return Result.ok(agentService.list(page, size, keyword, includeDisabled));
+                                          @RequestParam(defaultValue = "false") boolean includeDisabled,
+                                          @RequestParam(required = false) Long workspaceId) {
+        return Result.ok(agentService.list(page, size, keyword, includeDisabled, workspaceId));
     }
 
     @GetMapping("/detail/{agentKey}")
@@ -74,6 +76,13 @@ public class AgentController {
     public Result<Void> delete(@PathVariable String agentKey) {
         agentService.delete(agentKey);
         return Result.ok();
+    }
+
+    /** 移动 Agent 到别的空间（SPEC §28.4 需求 5；body.workspaceId=null = 移回个人空间） */
+    @PutMapping("/{agentKey}/workspace")
+    public Result<AgentDO> moveWorkspace(@PathVariable String agentKey,
+                                         @RequestBody MoveWorkspaceRequest request) {
+        return Result.ok(agentService.moveWorkspace(agentKey, request.getWorkspaceId()));
     }
 
     @PostMapping("/bindSkill/{agentKey}")

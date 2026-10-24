@@ -91,11 +91,12 @@ public class UserService {
         return user;
     }
 
-    public PageData<TeapotUser> list(int page, int size) {
+    public PageData<TeapotUser> list(int page, int size, String keyword) {
         page = Math.max(page, 1);
         size = Math.min(Math.max(size, 1), 100);
-        long total = userMapper.countAll();
-        List<TeapotUser> list = userMapper.selectPage((page - 1) * size, size);
+        String kw = (keyword == null || keyword.isBlank()) ? null : keyword.trim();
+        long total = userMapper.countAll(kw);
+        List<TeapotUser> list = userMapper.selectPage(kw, (page - 1) * size, size);
         return PageData.of(total, list);
     }
 

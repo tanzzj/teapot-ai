@@ -14,6 +14,8 @@ export function profile() {
 export interface UserPageQuery {
   page?: number;
   size?: number;
+  /** 用户名/真实姓名模糊搜索（SPEC §28.6 UserPicker） */
+  keyword?: string;
 }
 
 export function userCreate(payload: {

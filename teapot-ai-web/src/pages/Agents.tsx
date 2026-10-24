@@ -19,9 +19,10 @@ import {
   SparkSearchLine,
 } from '@agentscope-ai/icons';
 import { useNavigate } from 'react-router-dom';
-import { agentCreate, agentDelete, agentList, modelPresets } from '../api/agent';
+import { agentCreate, agentDelete, agentList, agentMoveWorkspace, modelPresets } from '../api/agent';
 import type { Agent } from '../types';
 import { ResponsiveModal } from '../components/ResponsiveModal';
+import { useWorkspaceStore } from '../store/workspace';
 
 /**
  * Agent 管理列表（Barley 设计语言复刻：大标题 + 三列毛玻璃卡片网格）。
@@ -29,6 +30,7 @@ import { ResponsiveModal } from '../components/ResponsiveModal';
  */
 export default function Agents() {
   const navigate = useNavigate();
+  const { workspaces, activeId, loaded, load: loadWorkspaces } = useWorkspaceStore();
   const [list, setList] = useState<Agent[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -37,12 +39,26 @@ export default function Agents() {
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [models, setModels] = useState<string[]>([]);
+  const [moveAgent, setMoveAgent] = useState<Agent | null>(null);
+  const [moveTarget, setMoveTarget] = useState<string>('personal');
   const [form] = Form.useForm();
+
+  useEffect(() => {
+    if (!loaded) {
+      loadWorkspaces();
+    }
+  }, [loaded, loadWorkspaces]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await agentList({ page, size: 12, keyword: keyword || undefined, includeDisabled });
+      const resp = await agentList({
+        page,
+        size: 12,
+        keyword: keyword || undefined,
+        includeDisabled,
+        workspaceId: activeId ?? undefined,
+      });
       setList(resp.list || []);
       setTotal(resp.total || 0);
     } catch {
@@ -50,11 +66,28 @@ export default function Agents() {
     } finally {
       setLoading(false);
     }
-  }, [page, keyword, includeDisabled]);
+  }, [page, keyword, includeDisabled, activeId]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const spaceOptions = [
+    { value: 'personal', label: '个人空间' },
+    ...workspaces
+      .filter((w) => w.id !== null && w.id !== undefined)
+      .map((w) => ({ value: String(w.id), label: w.workspaceName })),
+  ];
+
+  const onMove = async () => {
+    if (!moveAgent) {
+      return;
+    }
+    await agentMoveWorkspace(moveAgent.agentKey, moveTarget === 'personal' ? null : Number(moveTarget));
+    message.success('已移动到目标空间');
+    setMoveAgent(null);
+    load();
+  };
 
   const onCreate = async () => {
     const values = await form.validateFields();
@@ -64,6 +97,7 @@ export default function Agents() {
       description: values.description,
       sysPrompt: values.sysPrompt || '你是一个乐于助人的 AI 助手。',
       modelId: values.modelId,
+      workspaceId: values.workspaceId && values.workspaceId !== 'personal' ? Number(values.workspaceId) : undefined,
     });
     message.success('创建成功');
     setCreateOpen(false);
@@ -109,7 +143,7 @@ export default function Agents() {
           type="primary"
           icon={<SparkPlusLine />}
           onClick={() => {
-            modelPresets().then(setModels).catch(() => undefined);
+            modelPresets(activeId ?? 0).then(setModels).catch(() => undefined);
             setCreateOpen(true);
           }}
         >
@@ -219,6 +253,15 @@ export default function Agents() {
                     >
                       <SparkEditLine /> 编辑
                     </span>
+                    <span
+                      style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'rgba(26, 26, 29, 0.55)', fontSize: 13, cursor: 'pointer' }}
+                      onClick={() => {
+                        setMoveTarget(agent.workspaceId ? String(agent.workspaceId) : 'personal');
+                        setMoveAgent(agent);
+                      }}
+                    >
+                      移动
+                    </span>
                     <Popconfirm
                       title="确认停用并删除该 Agent？"
                       onConfirm={async () => {
@@ -252,7 +295,12 @@ export default function Agents() {
         cancelText="取消"
         destroyOnClose
       >
-        <Form form={form} layout="vertical" preserve={false}>
+        <Form
+          form={form}
+          layout="vertical"
+          preserve={false}
+          initialValues={{ workspaceId: activeId === null ? 'personal' : String(activeId) }}
+        >
           <Form.Item
             name="agentKey"
             label="Agent 标识"
@@ -267,6 +315,9 @@ export default function Agents() {
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="如 通用助手" />
           </Form.Item>
+          <Form.Item name="workspaceId" label="所属空间" extra="个人空间在首个 Agent 创建时才落库">
+            <Select options={spaceOptions} />
+          </Form.Item>
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={2} placeholder="一句话描述该 Agent 的用途" />
           </Form.Item>
@@ -277,6 +328,26 @@ export default function Agents() {
             <Input.TextArea rows={4} placeholder="可留空使用默认提示词" />
           </Form.Item>
         </Form>
+      </ResponsiveModal>
+
+      {/* 移动 Agent 到目标空间（SPEC §28.6 需求 5，卡片级） */}
+      <ResponsiveModal
+        title="移动 Agent 到空间"
+        open={moveAgent !== null}
+        onOk={onMove}
+        onCancel={() => setMoveAgent(null)}
+        okText="移动"
+        cancelText="取消"
+      >
+        <div style={{ marginBottom: 8, color: 'rgba(26, 26, 29, 0.55)', fontSize: 13 }}>
+          当前 Agent：{moveAgent?.name}（{moveAgent?.agentKey}）
+        </div>
+        <Select
+          value={moveTarget}
+          onChange={(v) => setMoveTarget(String(v))}
+          style={{ width: '100%' }}
+          options={spaceOptions}
+        />
       </ResponsiveModal>
     </div>
   );

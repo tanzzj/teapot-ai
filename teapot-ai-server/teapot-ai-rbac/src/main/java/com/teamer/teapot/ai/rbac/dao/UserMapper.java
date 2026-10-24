@@ -16,9 +16,10 @@ public interface UserMapper {
 
     TeapotUser selectByUserId(@Param("userId") String userId);
 
-    List<TeapotUser> selectPage(@Param("offset") int offset, @Param("size") int size);
+    List<TeapotUser> selectPage(@Param("keyword") String keyword,
+                                @Param("offset") int offset, @Param("size") int size);
 
-    long countAll();
+    long countAll(@Param("keyword") String keyword);
 
     int insert(TeapotUser user);
 

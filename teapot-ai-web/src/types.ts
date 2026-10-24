@@ -45,10 +45,31 @@ export interface Agent {
   compactionKeep?: number;
   /** 扩展功能配置 JSON（一期仅 sandbox 命名空间，SPEC §16.6） */
   feature?: string;
+  /** 归属业务空间 id（SPEC §28.4） */
+  workspaceId?: number;
   status: number;
   createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** 业务空间顶栏下拉条目（后端 WorkspaceVO，SPEC §28.4）；id=null 表示个人空间尚未创建 */
+export interface Workspace {
+  id?: number | null;
+  workspaceName: string;
+  workspaceCode: string;
+  workspaceType: 'personal' | 'team';
+  /** owner / member / null */
+  myRole?: string;
+  description?: string;
+}
+
+/** 空间成员（后端 WorkspaceMemberVO，SPEC §28.4） */
+export interface WorkspaceMember {
+  userId: string;
+  username?: string;
+  realName?: string;
+  memberRole: string;
 }
 
 /** feature.sandbox 结构（SPEC §16.6） */

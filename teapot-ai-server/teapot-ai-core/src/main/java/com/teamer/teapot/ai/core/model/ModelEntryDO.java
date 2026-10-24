@@ -3,6 +3,7 @@ package com.teamer.teapot.ai.core.model;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 模型入口配置（t_model_entry，SPEC §6.4 修订：界面配置化）。
@@ -27,6 +28,12 @@ public class ModelEntryDO {
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    /**
+     * 授权空间桶（非 t_model_entry 列，读写经 teapot_workspace_model，SPEC §28.11）：
+     * 0=全部空间（含个人），其余为团队空间 id；空=未开放任何空间。
+     */
+    private List<Long> workspaceIds;
 
     /** provider:model 标识串 */
     public String modelId() {

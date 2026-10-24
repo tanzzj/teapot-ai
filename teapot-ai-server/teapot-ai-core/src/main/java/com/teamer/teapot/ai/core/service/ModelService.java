@@ -7,6 +7,7 @@ import com.teamer.teapot.ai.core.audit.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.ModelEntryMapper;
 import com.teamer.teapot.ai.core.model.ModelEntryDO;
+import com.teamer.teapot.ai.core.model.ModelWorkspaceGrantDO;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import com.teamer.teapot.ai.rbac.model.TeapotUser;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +22,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -72,9 +76,31 @@ public class ModelService {
         return ids;
     }
 
+    /**
+     * Agent 下拉枚举（按空间过滤，SPEC §28.11）：workspaceId 为空间桶（0=全部/个人，>0=团队）。
+     * 命中「该桶或全局 0 桶」授权的启用入口；不回落 yml（空集即「该空间无可用模型」，deny-by-default）。
+     * workspaceId 为 null 表示无空间上下文，退回不过滤的全量枚举（向后兼容）。
+     */
+    public List<String> listEnabledModelIds(Long workspaceId) {
+        if (workspaceId == null) {
+            return listEnabledModelIds();
+        }
+        return modelEntryMapper.selectEnabledForWorkspace(workspaceId).stream()
+                .map(ModelEntryDO::modelId).toList();
+    }
+
     public List<ModelEntryDO> listAll() {
         requireAdmin();
-        return modelEntryMapper.selectAll();
+        List<ModelEntryDO> all = modelEntryMapper.selectAll();
+        Map<Long, List<Long>> grantsByEntry = new HashMap<>();
+        for (ModelWorkspaceGrantDO grant : modelEntryMapper.selectAllGrants()) {
+            grantsByEntry.computeIfAbsent(grant.getModelEntryId(), k -> new ArrayList<>())
+                    .add(grant.getWorkspaceId());
+        }
+        for (ModelEntryDO entry : all) {
+            entry.setWorkspaceIds(grantsByEntry.getOrDefault(entry.getId(), List.of()));
+        }
+        return all;
     }
 
     /** 启用入口的能力位（SPEC §19 前端 gating，任意登录用户可读，不含密钥） */
@@ -141,6 +167,7 @@ public class ModelService {
         request.setCapabilities(normalizeCapabilities(request.getCapabilities()));
         request.setCreatedBy(ContextUtil.currentUserId());
         modelEntryMapper.insert(request);
+        saveGrants(request.getId(), request.getWorkspaceIds());
         modelRegistry.evict(request.modelId());
         auditService.log("model.create", request.modelId(), "baseUrl=" + request.getBaseUrl()
                 + ", capabilities=" + request.getCapabilities());
@@ -174,6 +201,9 @@ public class ModelService {
             existed.setStatus(request.getStatus());
         }
         modelEntryMapper.update(existed);
+        if (request.getWorkspaceIds() != null) {
+            saveGrants(id, request.getWorkspaceIds());
+        }
         modelRegistry.evict(oldModelId);
         modelRegistry.evict(existed.modelId());
         auditService.log("model.update", existed.modelId(), "baseUrl=" + existed.getBaseUrl()
@@ -187,6 +217,7 @@ public class ModelService {
         if (existed == null) {
             throw new BizException("模型入口不存在：id=" + id);
         }
+        modelEntryMapper.deleteGrants(id);
         modelEntryMapper.deleteById(id);
         modelRegistry.evict(existed.modelId());
         auditService.log("model.delete", existed.modelId(), null);
@@ -220,6 +251,42 @@ public class ModelService {
             }
         }
         return parts.isEmpty() ? null : String.join(",", parts);
+    }
+
+    /**
+     * 校验模型是否开放给该空间桶（SPEC §28.11，deny-by-default）：
+     * 未登记或既未授权该桶也未授权全局 0 桶，即拒绝。Agent 建/改时调用（白名单在调用方放行）。
+     */
+    public void assertOpenToWorkspace(String modelId, long bucket) {
+        if (modelId == null || modelId.isBlank()) {
+            throw new BizException("模型不能为空");
+        }
+        int idx = modelId.indexOf(':');
+        if (idx <= 0 || idx == modelId.length() - 1) {
+            throw new BizException("模型标识形如 provider:model：" + modelId);
+        }
+        ModelEntryDO entry = modelEntryMapper.selectByModelId(modelId.substring(0, idx), modelId.substring(idx + 1));
+        if (entry == null) {
+            throw new BizException("模型未配置：" + modelId);
+        }
+        List<Long> granted = modelEntryMapper.selectGrantedWorkspaceIds(entry.getId());
+        if (!granted.contains(bucket) && !granted.contains(0L)) {
+            throw new BizException("模型 " + modelId + " 未开放给当前空间");
+        }
+    }
+
+    /** 覆盖式落库空间授权（SPEC §28.11）：先删后插，去重并跳过 null 桶 */
+    private void saveGrants(Long modelEntryId, List<Long> workspaceIds) {
+        modelEntryMapper.deleteGrants(modelEntryId);
+        if (workspaceIds == null || workspaceIds.isEmpty()) {
+            return;
+        }
+        String uid = ContextUtil.currentUserId();
+        for (Long ws : new LinkedHashSet<>(workspaceIds)) {
+            if (ws != null) {
+                modelEntryMapper.insertGrant(modelEntryId, ws, uid);
+            }
+        }
     }
 
     private void requireAdmin() {

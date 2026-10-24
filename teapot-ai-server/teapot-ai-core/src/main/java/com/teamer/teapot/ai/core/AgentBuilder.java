@@ -174,8 +174,9 @@ public class AgentBuilder {
                 .stream()
                 .map(AgentSkillBind::getSkillName)
                 .toList();
+        // 无「全局 skill」概念（SPEC §28.1）：未显式绑定即不装配任何 skill，每个 Agent 只用自己的
         SkillFilter skillFilter = bound.isEmpty() ?
-                SkillFilter.all() :
+                SkillFilter.none() :
                 SkillFilter.only(bound.toArray(new String[0]));
 
         int trigger = agentDO.getCompactionTrigger() == null
@@ -210,6 +211,9 @@ public class AgentBuilder {
                 .model(modelRegistry.resolve(agentDO.getModelId(), thinking))
                 .workspace(workspace)
                 .stateStore(stateStore)
+                // 框架 2.1.0 起默认 EVENT_LOG，会把消息落本地 journal 而非 MySQL stateStore，
+                // 与 ChatSessionService 只读 stateStore 的链路错位 → 历史空白；强制 legacy 兼容模式回写 MySQL
+                .legacySessionHistory(true)
                 .skillRepositories(repos)
                 .skillFilter(skillFilter);
         // compaction：trigger/keep 任一为 -1 表示关闭压缩，其余走既有配置
@@ -425,9 +429,9 @@ public class AgentBuilder {
      * enabled=true 时按配置构建 A2uiConfig（字段留空 = 回落 SDK 默认：内置 basic catalog、
      * 渲染后中断开启、组件数 50、surface 跨轮持久化）；middleware 在 build 前挂载（onSystemPrompt
      * 注入需要），其 a2ui_render / ask_user_question（表单档）两工具由调用方在 build 后经
-     * installTools 注册（SDK 已无 build 期自动装档回调；自然语言意图入参；组件 DSL 与 a2ui_catalog
-     * 收进 SDK 内部的渲染子 Agent，主 Agent 不感知；原 a2ui_present 并入 a2ui_render，
-     * 渲染后停止本轮由 stopAfterPresent 控制）；
+     * installTools 注册（SDK 已无 build 期自动装档回调；自然语言意图入参；组件 DSL 收进 SDK
+     * 内部的渲染子 Agent——它只持有私有的 a2ui_present 提交工具，组件目录指南编进该子 Agent 的
+     * system prompt，主 Agent 不感知；渲染后停止本轮由 stopAfterPresent 控制）；
      * 渲染子模型缺省回落本 Agent 模型；renderNoThinking=true 时显式注入本 Agent 模型的
      * 无思考实例（同守卫判定同款 resolveNoThinking 链路）。
      * catalog 在构造期加载，加载失败降级为不挂载并告警，不阻断对话。

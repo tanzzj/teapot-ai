@@ -152,7 +152,7 @@ public class ChannelConfigService {
     /** 引用该记录的 Agent 列表（含停用行，扫描全量小表） */
     public List<String> referencingAgents(String recordName) {
         List<String> refs = new ArrayList<>();
-        for (AgentDO agent : agentMapper.selectPage(null, true, 0, 1000)) {
+        for (AgentDO agent : agentMapper.selectPage(null, true, null, 0, 1000)) {
             AgentFeature.Channel ch = AgentFeature.parse(agent.getFeature()).getChannel();
             if (ch != null && recordName.equals(ch.getChannelRecord())) {
                 refs.add(agent.getAgentKey());

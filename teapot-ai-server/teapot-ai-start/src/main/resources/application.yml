@@ -33,6 +33,8 @@ rbac:                                            # 登录-用户体系（SPEC §
     - roleId: developer
       resource:
         - /api/agent/*
+        - /api/workspace/*                     # 业务空间 CRUD（SPEC §28.4，跨空间隔离在 Service 层 requireMember）
+        - /api/user/list                       # 成员选择组件按名搜用户（SPEC §28.6 UserPicker）
         - /api/skill/*
         - /api/chat/*
         - /api/model/*
@@ -49,6 +51,7 @@ rbac:                                            # 登录-用户体系（SPEC §
       resource:
         - /api/agent/list
         - /api/agent/detail/*
+        - /api/workspace/list                  # 顶栏空间下拉数据源（只读；跨空间隔离在 Service 层）
         - /api/skill/list
         - /api/skill/detail/*
         - /api/skill/git/status                # Git 来源状态只读（SPEC §15.9）
@@ -115,6 +118,8 @@ teapot:
     cors-allowed-origins:                        # SPEC §14.4（dev server + 站点域名）
       - http://localhost:5173
       - https://teapot.teamer.com.cn
+    workspace:                                   # 业务空间（SPEC §28.7）
+      whitelist: ${TEAPOT_WORKSPACE_WHITELIST:}  # 逗号分隔 userId：可见并管理全部 workspace（非成员越权放行）
 
 agentscope:                                      # AG-UI starter（SPEC §6.3）
   agui:

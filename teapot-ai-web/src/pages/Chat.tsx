@@ -440,7 +440,7 @@ export default function Chat() {
         dashscope_first_and_last_frame_image_to_video: MediaGenCard,
         dashscope_text_to_audio: MediaGenCard,
         // A2UI surface 渲染：render 读工具结果信封；ask_user_question 见上方统一挂载点分发；
-        // a2ui_present 已并入 a2ui_render，仅为旧会话历史回放保留挂载点
+        // a2ui_present 是 SDK 渲染子 Agent 的私有提交工具，不进主流，挂载点仅服务旧会话历史回放
         a2ui_render: A2uiCard,
         a2ui_present: A2uiCard,
       },

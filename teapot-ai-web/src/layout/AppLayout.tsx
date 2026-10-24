@@ -14,6 +14,7 @@ import { useMobileUIStore } from '../store/mobileUI';
 import { PHONE_BP } from '../theme/breakpoints';
 import AgentSelector from './AgentSelector';
 import UserMenu from './UserMenu';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
 
 /**
  * 主框架布局（Barley 设计语言复刻）：
@@ -195,6 +196,9 @@ export default function AppLayout() {
 
           {/* 会话历史入口的 Portal 挂载点（始终存在，内容根据 mobileView 变化） */}
           <div id="topbar-history-slot" style={{ display: 'flex', alignItems: 'center' }} />
+
+          {/* 业务空间簇（SPEC §28.6 图二红框：导航右、Agent 选择器左）；移动端顶栏不展示避免拥挤 */}
+          {!isMobile && <WorkspaceSwitcher />}
 
           {/* 对话页顶栏 Agent 选择器（原聊天区右上角，移至全局 header） */}
           <AgentSelector />

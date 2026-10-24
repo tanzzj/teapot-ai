@@ -13,6 +13,8 @@ export interface ModelEntry {
   status?: number;
   createdBy?: string;
   createdAt?: string;
+  /** 授权空间桶（SPEC §28.11）：0=全部空间（含个人），其余为团队空间 id；空=未开放 */
+  workspaceIds?: number[];
 }
 
 export function modelList() {
