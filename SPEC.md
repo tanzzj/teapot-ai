@@ -2458,6 +2458,121 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 
 **后续项（未做）**：转让 owner、把「成员管理」独立成抽屉（当前与改名同弹窗）；被移出空间的成员其名下 Agent 仍留在该空间（只影响可见性，不做归属回收）。
 
+### §28.13 对话页也要吃空间上下文（2026-10-24 线上问题修正）
+
+§28.6 落地时只把 `workspaceId` 接进了 Agents 管理页，`Chat.tsx` 与顶栏 `AgentSelector` 的 `agentList({page:1,size:100})` 仍是裸调 → 后端按 §28.3 的默认视图解释成**个人空间**。而 V14 把全部存量 Agent 回填进了 `legacy-default`（线上实测：`general-assistant/digit-tim/teapot` 三条启用记录的 `workspace_id` 都是 1，`teapot_workspace` 里没有任何 personal 行），个人空间视图天然为空。用户顶栏明明选中「存量空间」，对话页却显示「暂无可用 Agent」，直观感受就是**升级后无法对话**。
+
+修法（前端，无接口变更）：
+- `Chat.tsx`、`AgentSelector.tsx` 接入 `useWorkspaceStore`，未 `loaded` 时先 `load()`，拉取时传 `workspaceId: activeId ?? undefined`，并把 `activeId` 列为重查依赖——与 Agents 页同一姿势。
+- 对话页选中项的校正条件从「URL 没有 agent」扩成「URL 的 agent 不在本空间列表里」：切空间后若沿用旧 `?agent=`，会停在一个该空间不可见的 Agent 上。
+- 空列表文案按 `activeId` 分叉：个人空间提示「可在顶栏切换到业务空间」，业务空间提示去 Agent 管理创建。
+
+**验证**（2026-10-24 13:31 UI-only 发布，`deploy/tmp-deploy-v66-chat-ws.sh`，回滚点 `ui.bak-20261024-133058`）：
+- `npm run build` 通过，入口产物 `index-CyuSF7zF.js`；线上 asset 与本地 dist **MD5 逐位相同**（`59bc640a4d8a3182fafb3423a554e1df`，4,562,234B），两道 bundle 探针都命中（新空态文案 + §28.12 的「编辑业务空间」）。
+- 数据面冒烟（admin 登录态）：`/api/workspace/list` 回 `personal:admin` + `legacy-default`；裸调 `/api/agent/list`（不带 workspaceId，即修复前对话页的姿势）`total=0`；带 `workspaceId=1` 回 `general-assistant/digit-tim/teapot` 三条——与上文根因判断一致。
+
+**遗留（仍待产品定）**：非白名单且非 `legacy-default` 成员的启用用户（`viewer / tmp-verify-0816b / cs_awp_liu / jujn / diego`）在任何空间视图下都看不到 Agent——这不是本节的 bug，是 §28.10 的数据面待办：要么给他们补 `teapot_workspace_member`，要么配 `TEAPOT_WORKSPACE_WHITELIST`。
+
+### §28.14 空间动作收进下拉框（2026-10-24 顶栏改版）
+
+§28.6 的顶栏空间簇是「下拉 + ＋ + 」三个并排控件，动作藏在两个独立按钮里，用户看不出它们属于当前空间。本次改为**只留一个空间下拉**，把「新建空间 / 编辑当前空间 / 移动 Agent 到空间」三项收进下拉弹层底部（分隔线下的 `Menu`，图标沿用 `@agentscope-ai/icons` 的 `SparkPlusLine / SparkEditLine / SparkMoveLine`，菜单项写法同 `UserMenu.tsx`）。
+
+实现要点（`WorkspaceSwitcher.tsx`，纯前端，无接口变更）：
+- `Select` 改受控 `open` + `onOpenChange`，用 `popupRender`（antd 5.29 起 `dropdownRender` 已 deprecated）在选项列表后追加动作区；点动作先 `setWsOpen(false)` 再开对应弹窗。
+- 动作区外层 `onMouseDown={(e) => e.preventDefault()}`：不拦 mousedown 时 `Select` 会先失焦收起弹层，`click` 根本到不了 `Menu`。
+- `popupMatchSelectWidth={false}`：动作文案比 140px 的选择框宽，跟随宽度会截断。
+- 行为约束不变：「编辑当前空间」仍只对 `myRole === 'owner'` 且非 personal 的空间出现（§28.12）；「移动 Agent」依旧读 `teapot:lastAgent`，未选 Agent 时提示去对话页选。
+
+**验证**（2026-10-24）：
+- `npm run build`（`tsc -b` + vite）通过，4m17s，无类型错误。
+- 本地无后端（9126 未监听），交互实测走 scratch 预览页：`scratch/ws-preview.{html,tsx}` 挂 `WorkspaceSwitcher`，把 `src/api/http` 的 axios 实例换成有记录的假适配器（`http.defaults.adapter`），既看点什么也看发了什么请求。逐条实测：
+  - 弹层结构 = 3 个空间选项 + 分隔线 + 动作 `Menu`；动作行 40px 高带图标、文案无截断，弹层宽度自适应到 189px（选择框仍 140px）。
+  - 当前空间为**个人空间**或 **`myRole=member` 的团队空间**时，动作区只有「新建空间 / 移动 Agent 到空间」；owner 团队空间才出现「编辑当前空间」——§28.12 的判定收进下拉后仍然成立。
+  - 点动作后弹层进入 `ant-slide-up-leave` 收起（`setWsOpen(false)` 生效），且动作行 `mousedown` 阶段弹层仍在——`preventDefault` 那道保护是真需要的。
+  - 编辑：打开即 `GET /api/workspace/1/members`，名称/描述/成员 tag 全部回填；保存发 `PUT /api/workspace/1`，body 带改名后的 `workspaceName` + 完整 `memberUserIds`。
+  - 新建：`POST /api/workspace/create`；移动：`PUT /api/agent/teapot/workspace`，body `{"workspaceId":null}`（默认目标个人空间）。
+- **未做**：像素级目视核对。内置浏览器该页 `visibilityState=hidden`、viewport 0×0，指针动作与截图都不可用，以上几何/布局均由 DOM 量得。
+
+### §28.15 详情页要能点回列表（2026-10-24 顶栏分段导航修正）
+
+用户截图反馈：在 Agent 详情页（`/agents/digit-tim`）里点顶栏已经高亮的「Agent」分段项没有任何反应，也没有别的返回入口，等于被困在详情页。
+
+根因是 `Segmented` 的受控用法：`selectedKey` 由路径前缀归并得出（`/agents/:key` → `/agents`），所以详情页上「Agent」项本身就是选中态；antd 的 `Segmented` 只在**切换到不同 value** 时触发 `onChange`，点已选中项不回调 → `navigate` 不会被调用。技能详情页同理。
+
+修法（`AppLayout.tsx`，纯前端）：`options` 的 `label` 由字符串改为包一层 `<span onClick>`，`stopPropagation` 后按 `location.pathname !== i.key` 判断——当前命中的是子路由就 `navigate(i.key)` 回到列表；其余逻辑（`onChange` 负责正常切换）不动。
+
+**验证**（2026-10-24，本地无后端，走 `scratch/nav-preview.{html,tsx}` 探针页 + 内置浏览器 `evaluate_script`，读真实 `location`/状态而非截图）：
+
+| 用例 | 结果 |
+| --- | --- |
+| 修复后，详情页点已选中「Agent」 | `/agents/digit-tim` → `/agents`（返回列表） |
+| 修复前（不挂 label span，`B_spanGone=true`），同一路径点已选中 | 停在 `/agents/digit-tim` —— bug 复现 |
+| 修复前，点其它分段 | `/chat` 正常 |
+| 修复后，点其它分段 | `/skills` 正常（`onChange` 链路未被 `stopPropagation` 打断） |
+
+探针页与 5199 端口的临时 vite 已删除（scratch 不入库）。**未做**：真机（带后端的完整 AppLayout）目视核对，结论仅由上述等价 DOM/路由实测得出。
+
+---
+
+## §29 Agent 自带模型（自定义模型 + 自带密钥，2026-10-24）
+
+### §29.1 需求与决策
+
+系统模型下拉原本只能选 `t_model_entry` 里管理员登记、且按空间开放（§28.11）的模型。用户要求：**同一个下拉里既能选系统分配的模型，也能选「自定义」**——自定义时像系统模型配置那样，在 Agent 的 Basic Info 分区里自带一条模型记录。
+
+两条已拍板的设计决策：
+- 自定义模型**带自己的 apiKey**，AES-256-GCM 加密入库（复用 §21/沙箱记录那套 `ConfigCryptoService`，主密钥 `TEAPOT_SECRET_KEY`）。
+- 自定义选项**覆盖全部五处模型下拉**：主模型 + 压缩摘要 + 意图守卫判定 + 记忆摘要 + 会话标题（各界点子模型也可指向自带模型）。
+
+### §29.2 数据落点：feature 命名空间，无 DDL
+
+新增 `t_agent.feature.customModels` 数组，与 `t_model_entry` 同构但凭证随 Agent 存。刻意不建新表：Agent 创建时还没有 `agentKey`，"先存凭证再存 Agent" 会有外键鸡生蛋问题，而 feature 是一次性整体写入的。
+
+```json
+{ "customModels": [
+  { "provider": "dashscope", "modelName": "qwen3.8-max", "displayName": "我的key",
+    "baseUrl": "", "apiKey": "v3:<base64(iv|ct|tag)>", "capabilities": "image,video" }
+] }
+```
+
+`AgentFeature` 侧（`NS_CUSTOM_MODELS`）：`getCustomModels()/setCustomModels()`（空表 = 移除命名空间），`CustomModel.modelId()` 生成 `provider:modelName`，`capabilitySet()` 归一能力位。校验：provider ∈ {dashscope, openai}、modelName 必填、**apiKey 必填**、`baseUrl` 若填必须 `http` 开头、能力位 ∈ {image, video}、`provider:modelName` 不得重复、条数 ≤ 20。
+
+### §29.3 密钥三原则：加密入库 / 留空沿用 / 出参永不出服
+
+`AgentService` 链路（`validateFeature` 增加 `previousFeatureJson` 形参）：
+
+1. **加密入库** `sealCustomModelKeys(feature, previousFeatureJson)` 在 `feature.validate()` **之前**执行：传了明文 → `crypto.encrypt`；留空 → 从上一版按 `modelId` 继承密文（与沙箱/OSS 记录「留空=不改」同语义）。`TEAPOT_SECRET_KEY` 缺失却提交新密钥 → 直接 `BizException`，不静默存明文。改 provider 或模型名视为新模型，必须重填密钥。`hasApiKey` 是出参派生值，入库前置 `null`。
+2. **出参脱敏** `redactSecrets(agent)` 覆盖全部六个出口：`list` / `detail` / `create` / `update` / `updateAvatar` / `moveWorkspace`（均在 `mapper.update` 之后调用），把 `apiKey` 清空、置 `hasApiKey = 原值非空`。密文不出服务端。
+3. **反回落**：`validateCustomModels` 在封印之后仍见空 apiKey = 用户从未填写且无历史密文 → 拒绝保存。装配期 `customCredentials()` 遇到主密钥缺失或密文不可解 → 点名模型抛错。两处都不允许"悄悄用 `DASHSCOPE_API_KEY`/`OPENAI_API_KEY` 顶上"，否则用户自带模型的调用会计费到平台账号。
+
+### §29.4 空间闸门放行自带模型
+
+`assertModelOpen(modelId, bucket, featureJson)` 收敛了原来散在 create/update 里的两处判断：白名单用户放行；**modelId 命中该 Agent 的 customModels 放行**（凭证是用户自己的，不该受空间授权约束）；其余走 `modelService.assertOpenToWorkspace`。update 里这次校验被**移到 feature 合并之后**——同一次保存可能同时带来新模型和它的密钥，顺序反了会被闸门先拒。
+
+### §29.5 运行时：ModelRegistry 凭证槽 + 六个装配点
+
+`ModelRegistry` 新增 `Credential(apiKey, baseUrl, capabilities)` record，缓存 key 追加 `#cred<sha256 前 12 位>`（同 modelId 不同密钥/网关必须分槽，否则会串号）；`resolve(modelId, thinking, cred)` / `resolveNoThinking(modelId, cred)` / `capabilities(modelId, cred)`（凭证声明的能力位优先于 `t_model_entry`）；`evict(modelId)` 前缀匹配把 think/nothink/cred 变体一并清掉。baseUrl 优先级：Agent 自带网关 > 入口配置 > `OPENAI_BASE_URL`。能力位含 image/video 时 DashScope 显式走 `EndpointType.MULTIMODAL`。
+
+`AgentBuilder.assemble()` 先 `customCredentials(feature)` 建 `modelId → Credential` 表，再在每个位点用 `credOf(customCreds, modelId)` 取用（取不到 = null = 走系统入口与环境变量，存量 Agent 行为不变）：**主模型**、**压缩摘要**、**记忆摘要**（两处构建分支）、**守卫判定模型**（llm 档）、**A2UI 渲染子模型**、**会话标题模型**（含"无独立配置时沿用主模型 + thinking"那条分支）、以及**媒体模态守卫的能力位查询**。
+
+### §29.6 前端
+
+- `components/modelOptions.ts`：`modelSelectOptions(systemModels, customModels)` 产出两组（「系统模型」/「本 Agent 自定义」，空组不下发）；自定义组的 label 是 `展示名（provider:model）`。**随表单实时值变化，新增一行立刻可选中，不必先保存**——五处下拉同源（`Form.useWatch('customModels')` + `useMemo`）。
+- Basic Info 新增「自定义模型」`Form.List` 编辑器：provider 下拉 / modelName（必填）/ displayName / API Key（`Input.Password`，占位符按 `hasApiKey` 在「已配置，留空不修改」与「sk-...」间切换，校验器允许"留空但已配置"）/ baseUrl / capabilities 多选 / 删除，底部「添加自定义模型」默认 `provider: dashscope`。回填时把 `capabilities` 逗号串拆成数组，`customModels` 未配置给 `[]`（`Form.List` 的 value 不接受 null）。
+- 保存时过滤掉 provider/modelName 不完整的行，空表则 `delete feature.customModels`；`hasApiKey` 不提交。
+- 顺带修正：`modelPresets()` 由裸调改成 `modelPresets(d.agent.workspaceId ?? 0)`，系统模型下拉按 Agent 所属空间过滤，与 §28.11 的保存闸门同源。
+
+### §29.7 验证与风险
+
+**已验证**：`mvn -f teapot-ai-server/pom.xml clean package -DskipTests` 通过（多次）；前端 `npm run build`（`tsc -b` + vite）通过，入口 `index-CHknkqZ0.js`。**未验证**：本地无后端、无 `TEAPOT_SECRET_KEY`，端到端（真填一个自带密钥跑通对话）尚未跑过；密文可见性只由代码审查保证，发布后需在真机上验一次「回显不含 apiKey」与「留空保存后仍能调用」。
+
+**风险 / 后续项**：
+- **baseUrl 无白名单 → SSRF**：用户可让服务端向任意 http 地址（含内网/云元数据端点 `169.254.169.254`）发带 Authorization 的请求。当前仅校验 `http` 前缀。要么加域名 allowlist，要么由网络侧限制出网。
+- 模型名不做供应商侧存在性校验，填错要到运行时才报错。
+- 主密钥轮换会让存量密文不可解 → 装配整轮失败（按设计点名报错，用户重填即可），但没有 v2 双密钥并存的平滑方案。
+- 删除一条仍被 `runtime/guard/memory/...` 引用的自带模型：该 modelId 既不在系统开放列表也不在自带列表里，会被 §28.11 闸门拒绝保存（表现为"改不动"），提示信息是闸门的原文，暂未专门优化。
+- `mcp`/`sandbox` 等命名空间与自定义模型无耦合，`AgentFeature` 的未知命名空间原样保留机制保证老 feature 不丢字段。
+
 ---
 
 ## 附录 A：术语
