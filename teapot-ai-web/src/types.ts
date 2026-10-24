@@ -440,27 +440,8 @@ export interface SkillListItem {
   name: string;
   description?: string;
   source?: string;
-}
-
-export interface SkillResourceItem {
-  path: string;
-  content: string;
-}
-
-export interface SkillDetail {
-  name: string;
-  description?: string;
-  instructions?: string;
-  source?: string;
-  skillContent?: string;
-  resources?: SkillResourceItem[];
-}
-
-export interface SkillSaveRequest {
-  name: string;
-  description: string;
-  instructions: string;
-  resources?: SkillResourceItem[];
+  /** 绑定该 skill 的 Agent（SPEC §29.10）：为空才允许删除本体 */
+  boundAgents?: string[];
 }
 
 /** GET /api/skill/git/status 出参（SPEC §15.9） */

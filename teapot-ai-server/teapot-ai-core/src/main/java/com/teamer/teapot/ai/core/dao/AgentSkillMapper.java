@@ -16,6 +16,9 @@ public interface AgentSkillMapper {
 
     List<AgentSkillBind> selectBySkillName(@Param("skillName") String skillName);
 
+    /** 全量绑定行（SPEC §29.10）：skill 列表据此给出每个 skill 被哪些 Agent 绑定 */
+    List<AgentSkillBind> selectAllBinds();
+
     int insert(AgentSkillBind bind);
 
     int delete(@Param("agentKey") String agentKey, @Param("skillName") String skillName);

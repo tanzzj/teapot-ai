@@ -30,6 +30,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -110,9 +111,16 @@ public class SkillService {
             }
             merged.put(skill.getName(), toListVO(skill));
         }
-        return merged.values().stream()
+        List<SkillListVO> out = merged.values().stream()
                 .sorted(Comparator.comparing(SkillListVO::getName))
                 .toList();
+        // 绑定关系一次查全表再分组：Agent 侧「删除本体」要据此判断是否还有别的 Agent 在用
+        Map<String, List<String>> binds = new HashMap<>();
+        for (AgentSkillBind bind : agentSkillMapper.selectAllBinds()) {
+            binds.computeIfAbsent(bind.getSkillName(), k -> new ArrayList<>()).add(bind.getAgentKey());
+        }
+        out.forEach(vo -> vo.setBoundAgents(binds.getOrDefault(vo.getName(), List.of())));
+        return out;
     }
 
     public SkillDetailVO detail(String name) {
@@ -167,6 +175,15 @@ public class SkillService {
     }
 
     public void delete(String name) {
+        // 本体是跨 Agent 共享资产（SPEC §29.10）：仍有绑定时拒绝删除，避免在某个 Agent 里
+        // 顺手把别的 Agent 正在用的 skill 连带清掉；要删先在对应 Agent 解绑
+        List<String> users = agentSkillMapper.selectBySkillName(name).stream()
+                .map(AgentSkillBind::getAgentKey)
+                .toList();
+        if (!users.isEmpty()) {
+            throw new BizException("Skill 仍被 " + users.size() + " 个 Agent 使用（"
+                    + String.join("、", users) + "），请先在对应 Agent 解绑再删除本体");
+        }
         AgentSkill skill = mysqlSkillSafe(name);
         if (skill == null) {
             // OSS 来源：平台托管（zip 导入），可删（清空对象前缀）

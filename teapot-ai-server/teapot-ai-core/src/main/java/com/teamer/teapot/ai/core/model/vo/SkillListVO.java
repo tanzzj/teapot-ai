@@ -2,6 +2,8 @@ package com.teamer.teapot.ai.core.model.vo;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * Skill 列表项（SPEC §8.3 list：name/description/来源）。
  */
@@ -12,4 +14,6 @@ public class SkillListVO {
     private String description;
     /** 来源（seed / platform） */
     private String source;
+    /** 绑定该 skill 的 Agent（SPEC §29.10）：Agent 侧据此决定「删除本体」是否可用 */
+    private List<String> boundAgents;
 }

@@ -3,7 +3,6 @@ import { Menu, Segmented, theme, Dropdown } from 'antd';
 import { Button } from '@agentscope-ai/design';
 import {
   SparkRoboticsLine,
-  SparkMagicWandLine,
   SparkMessageLine,
   SparkSettingLine,
   SparkCircleArrowDownLine,
@@ -59,7 +58,7 @@ export default function AppLayout() {
     ];
     if (hasRole('admin', 'developer')) {
       list.push({ key: '/agents', label: 'Agent', icon: <SparkRoboticsLine /> });
-      list.push({ key: '/skills', label: 'Skill', icon: <SparkMagicWandLine /> });
+      // Skill 不再有独立入口（SPEC §29.10）：本体的导入/绑定都在 Agent 详情里
     }
     if (hasRole('admin')) {
       // 系统配置一站式管理台（SPEC §21）：模型/用户/存储/沙箱统一入口

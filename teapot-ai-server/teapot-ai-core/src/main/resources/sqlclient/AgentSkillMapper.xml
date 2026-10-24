@@ -21,6 +21,11 @@
         FROM t_agent_skill WHERE skill_name = #{skillName} ORDER BY id
     </select>
 
+    <select id="selectAllBinds" resultMap="bindMap">
+        SELECT id, agent_key, skill_name, created_by, created_at
+        FROM t_agent_skill ORDER BY skill_name, id
+    </select>
+
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO t_agent_skill (agent_key, skill_name, created_by)
         VALUES (#{agentKey}, #{skillName}, #{createdBy})
