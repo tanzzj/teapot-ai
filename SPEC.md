@@ -2510,7 +2510,7 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 | 修复前，点其它分段 | `/chat` 正常 |
 | 修复后，点其它分段 | `/skills` 正常（`onChange` 链路未被 `stopPropagation` 打断） |
 
-探针页与 5199 端口的临时 vite 已删除（scratch 不入库）。**未做**：真机（带后端的完整 AppLayout）目视核对，结论仅由上述等价 DOM/路由实测得出。
+探针页与 5199 端口的临时 vite 已删除（scratch 不入库）。**未做**：完整 AppLayout 下的目视核对（该改动已随 v67 上线，结论仍只由上述等价 DOM/路由实测得出，待用户在真机点一次确认）。
 
 ---
 
@@ -2564,7 +2564,14 @@ Web 会话已有 t_chat_session 索引，无需新表；两个索引在查看层
 
 ### §29.7 验证与风险
 
-**已验证**：`mvn -f teapot-ai-server/pom.xml clean package -DskipTests` 通过（多次）；前端 `npm run build`（`tsc -b` + vite）通过，入口 `index-CHknkqZ0.js`。**未验证**：本地无后端、无 `TEAPOT_SECRET_KEY`，端到端（真填一个自带密钥跑通对话）尚未跑过；密文可见性只由代码审查保证，发布后需在真机上验一次「回显不含 apiKey」与「留空保存后仍能调用」。
+**构建门禁**：`mvn -f teapot-ai-server/pom.xml clean package -DskipTests` 通过；前端 `npm run build`（`tsc -b` + vite）通过，入口 `index-CHknkqZ0.js`。
+
+**v67 上线**（2026-10-24 17:24，`deploy/tmp-deploy-v67-custom-model.sh`，驱动 `Temp/ssh114/v67-deploy.js`；回滚点 `app.jar.bak-20261024-172434` + `ui.bak-20261024-172434`）：
+- 进程环境里 `TEAPOT_SECRET_KEY` 计数为 1（只数键名不取值）——§29 的加解密在主密钥缺失时会直接拒绝保存，预检必须先确认它被 systemd 载入了。
+- 构件探针：`AgentFeature$CustomModel.class` / `ModelRegistry$Credential.class` 在包内，`AgentService.sealCustomModelKeys`、`AgentBuilder.customCredentials` 字节码命中，v65 的 `WorkspaceUpdateRequest.class` 未回退。
+- 前端产物与本地 dist 逐位相同（入口 md5 `35070ecc…`、4,568,731B），bundle 探针「本 Agent 自定义 / 添加自定义模型」命中，§28.12 的「编辑业务空间」仍在。
+- 服务重启 11.3s 起来，`/api/agent/list`、`/api/model/presets` 无凭据应答 401（鉴权过滤器活着 = 应用在服务）。
+- **数据面四条规则（无密钥拒保存 / 密文入库 / 回显脱敏 / 留空沿用）未能线上实测**：`deploy/tmp-smoke-v67-custom-model.sh` 第一步 admin 默认口令就 401，按「绝不重试口令」立即退出（失败的这一次会计入 admin 的锁定计数，若随后登录不上是 10 分钟锁而非物质问题）。冒烟只建临时 Agent 再软删，退出后复查 `t_agent where agent_key='v67-smoke'` 行数为 0、启用 Agent 仍 3 条，远端口令临时文件已 `rm`。**这四项目前只有代码审查与本地编译担保，需要拿一个能登录的账号在界面上走一遍**：填自带密钥保存 → F12 看 `/api/agent/detail` 的 `feature.customModels[0]` 是否只有 `hasApiKey` 没有 `apiKey` → 不改密钥再保存一次 → 用该模型发一轮对话确认真的用的是用户密钥而不是平台密钥。
 
 **风险 / 后续项**：
 - **baseUrl 无白名单 → SSRF**：用户可让服务端向任意 http 地址（含内网/云元数据端点 `169.254.169.254`）发带 Authorization 的请求。当前仅校验 `http` 前缀。要么加域名 allowlist，要么由网络侧限制出网。
