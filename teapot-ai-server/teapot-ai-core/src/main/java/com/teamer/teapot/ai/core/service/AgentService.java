@@ -14,6 +14,7 @@ import com.teamer.teapot.ai.core.dao.AgentSkillMapper;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.AgentSkillBind;
+import com.teamer.teapot.ai.core.model.provider.ThinkingSupport;
 import com.teamer.teapot.ai.core.model.ChannelConfigDO;
 import com.teamer.teapot.ai.core.model.SandboxConfigDO;
 import com.teamer.teapot.ai.core.model.StorageConfigDO;
@@ -150,6 +151,7 @@ public class AgentService {
         // 模型开放校验（SPEC §28.11）：白名单放行；否则所选模型必须开放给目标空间桶
         assertModelOpen(request.getModelId(), request.getWorkspaceId() == null ? 0L : request.getWorkspaceId(),
                 agent.getFeature());
+        assertProviderAndThinking(request.getModelId(), agent.getFeature());
         if (existed != null) {
             // 软删行复活（唯一键冲突规避，SPEC §10.1）：全字段覆盖更新
             agentMapper.update(agent);
@@ -211,6 +213,8 @@ public class AgentService {
             assertModelOpen(request.getModelId(),
                     workspaceService.modelBucketForWorkspace(agent.getWorkspaceId()), agent.getFeature());
         }
+        // 供应商/思考档校验按合并后的主模型跑：只改思考档、不动模型的保存同样要拦（SPEC §29.16）
+        assertProviderAndThinking(agent.getModelId(), agent.getFeature());
         agentMapper.update(agent);
         if (request.getSkillNames() != null) {
             replaceBindings(agentKey, request.getSkillNames());
@@ -339,6 +343,7 @@ public class AgentService {
         try {
             AgentFeature feature = AgentFeature.parse(objectMapper.writeValueAsString(featureMap));
             sealCustomModelKeys(feature, previousFeatureJson);
+            sealSandboxKey(feature, previousFeatureJson);
             feature.validate(sandboxConnectivity.anyConfigured());
             validateFeatureRecords(feature);
             return feature.toJson();
@@ -381,8 +386,8 @@ public class AgentService {
     }
 
     /**
-     * 出参脱敏（SPEC §29）：自定义模型的 apiKey 是 AES-GCM 密文，一律不回前端，
-     * 只回 hasApiKey 标记供界面提示「已配置密钥，留空则不修改」。
+     * 出参脱敏（SPEC §29）：自定义模型的 apiKey 与自带沙箱的 e2bApiKey 都是 AES-GCM 密文，
+     * 一律不回前端，只回 hasApiKey 标记供界面提示「已配置密钥，留空则不修改」。
      */
     private void redactSecrets(AgentDO agent) {
         if (agent == null || isBlank(agent.getFeature())) {
@@ -390,15 +395,44 @@ public class AgentService {
         }
         AgentFeature feature = AgentFeature.parse(agent.getFeature());
         List<AgentFeature.CustomModel> models = feature.getCustomModels();
-        if (models.isEmpty()) {
+        if (!models.isEmpty()) {
+            for (AgentFeature.CustomModel model : models) {
+                model.setHasApiKey(!isBlank(model.getApiKey()));
+                model.setApiKey(null);
+            }
+            feature.setCustomModels(models);
+        }
+        AgentFeature.Sandbox sb = feature.getSandbox();
+        if (sb != null && sb.isCustom()) {
+            sb.setHasE2bApiKey(!isBlank(sb.getE2bApiKey()));
+            sb.setE2bApiKey(null);
+            feature.setSandbox(sb);
+        }
+        agent.setFeature(feature.toJson());
+    }
+
+    /**
+     * 自带沙箱密钥入库（SPEC §29.17）：传了明文就加密替换；留空则沿用上一版的密文
+     * （与 §29 自带模型、沙箱/OSS 记录同语义）。切回系统记录承载时整段凭证随命名空间消失。
+     */
+    private void sealSandboxKey(AgentFeature feature, String previousFeatureJson) {
+        AgentFeature.Sandbox sb = feature.getSandbox();
+        if (sb == null || !sb.isCustom()) {
             return;
         }
-        for (AgentFeature.CustomModel model : models) {
-            model.setHasApiKey(!isBlank(model.getApiKey()));
-            model.setApiKey(null);
+        AgentFeature.Sandbox old = AgentFeature.parse(previousFeatureJson).getSandbox();
+        String previousKey = old != null && old.isCustom() ? old.getE2bApiKey() : null;
+        if (isBlank(sb.getE2bApiKey())) {
+            sb.setE2bApiKey(previousKey);
+        } else {
+            if (!crypto.available()) {
+                throw new BizException("服务器未配置 TEAPOT_SECRET_KEY，无法保存自带沙箱密钥");
+            }
+            sb.setE2bApiKey(crypto.encrypt(sb.getE2bApiKey().trim()));
         }
-        feature.setCustomModels(models);
-        agent.setFeature(feature.toJson());
+        // 回显标记是出参派生值，前端会原样带回来，不落库
+        sb.setHasE2bApiKey(null);
+        feature.setSandbox(sb);
     }
 
     /** 该 Agent 自带模型的 modelId 集合（SPEC §29）：这些模型不走空间授权 */
@@ -420,6 +454,34 @@ public class AgentService {
             return;
         }
         modelService.assertOpenToWorkspace(modelId, bucket);
+    }
+
+    /**
+     * 供应商白名单 + 思考档表达力校验（SPEC §29.16）。白名单来自已接入的策略 Bean
+     * （{@code ModelService#providers()}），思考档按所选主模型的供应商判定：
+     * 供应商压根没有这条通道、或只有"开"没有"关"时**拒绝保存**并要求改回「默认」，
+     * 而不是收下这个值再在运行期静默忽略。
+     */
+    private void assertProviderAndThinking(String modelId, String featureJson) {
+        AgentFeature feature = AgentFeature.parse(featureJson);
+        for (AgentFeature.CustomModel cm : feature.getCustomModels()) {
+            if (!modelService.providers().contains(cm.getProvider())) {
+                throw new BizException("自定义模型供应商未接入，可选值：" + modelService.providers());
+            }
+        }
+        AgentFeature.Runtime rt = feature.getRuntime();
+        Boolean thinking = rt == null ? null : rt.getThinkingMode();
+        if (thinking == null) {
+            return;
+        }
+        ThinkingSupport support = modelService.thinkingSupport(modelId);
+        // 供应商未知时交给模型开放闸门报错，这里不重复报同一个问题
+        if (support == ThinkingSupport.NONE
+                || (support == ThinkingSupport.ON_ONLY && !thinking)) {
+            throw new BizException("模型 " + modelId + " 的供应商"
+                    + (support == ThinkingSupport.NONE ? "不支持思考模式开关" : "没有关闭思考的通道")
+                    + "，请把思考模式改回「默认」");
+        }
     }
 
     /** 记录引用完整性（§22）：sandbox/storage 引用的记录必须存在且对应链路凭证齐备 */

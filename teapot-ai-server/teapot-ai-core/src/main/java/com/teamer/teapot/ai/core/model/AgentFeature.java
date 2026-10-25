@@ -67,9 +67,11 @@ public class AgentFeature {
     /** 意图守卫拦截方式可选值：jev=JEV 决策模型 / llm=大模型判定 */
     private static final Set<String> GUARD_MODES = Set.of("jev", "llm");
     private static final int GUARD_MAX_RULE_LENGTH = 500;
-    /** 模型供应商可选值（与 ModelRegistry 实际支持的 provider 一致） */
-    private static final Set<String> MODEL_PROVIDERS = Set.of("dashscope", "openai");
-    /** 模型能力位可选值（与 t_model_entry.capabilities 同语义） */
+    /**
+     * 模型能力位可选值（与 t_model_entry.capabilities 同语义）。
+     * 供应商白名单不在这里（SPEC §29.16）：接入哪几家由
+     * {@code core/model/provider} 下的策略 Bean 决定，校验在 AgentService 用 ModelService.providers()。
+     */
     private static final Set<String> MODEL_CAPABILITIES = Set.of("image", "video");
     /** 一个 Agent 只允许一个自带模型（存储仍是数组，便于按 modelId 查凭证与后续演进） */
     private static final int CUSTOM_MODEL_MAX = 1;
@@ -369,12 +371,14 @@ public class AgentFeature {
             return;
         }
         if (sb.isEnabled()) {
-            // §22.2：启用沙箱必须选择沙箱记录作为承载；存量无记录 Agent 回落全局接入门控
-            if (isBlank(sb.getSandboxRecord())) {
-                if (!agentRunConfigured) {
-                    throw new BizException("启用沙箱必须选择沙箱记录（系统配置 - 沙箱中维护）");
-                }
+            // §22.2 启用沙箱必须有承载：系统记录，或自带 E2B 凭证（§29.17）；
+            // 存量无记录 Agent 仍回落全局接入门控
+            if (isBlank(sb.getSandboxRecord()) && !sb.isCustom() && !agentRunConfigured) {
+                throw new BizException("启用沙箱必须选择沙箱记录（系统配置 - 沙箱中维护），或改用自带 E2B 凭证");
             }
+        }
+        if (sb.isEnabled() && sb.isCustom()) {
+            assertCustomSandbox(sb);
         }
         if (sb.getIsolationScope() != null && !ISOLATION_SCOPES.contains(sb.getIsolationScope())) {
             throw new BizException("isolationScope 非法，可选值：" + ISOLATION_SCOPES);
@@ -403,6 +407,31 @@ public class AgentFeature {
             if (sb.getWorkspaceRoot() != null && !sb.getWorkspaceRoot().startsWith(nas.getMountDir())) {
                 throw new BizException("persistence=NAS 时 workspaceRoot 必须以 nas.mountDir 为前缀");
             }
+        }
+    }
+
+    /**
+     * 自带 E2B 承载的约束（SPEC §29.17）：与系统记录二选一、三项齐备、只走 e2b、不碰 NAS。
+     * 不做逐字段混用 —— 一个 Agent 的沙箱要么整个是平台记录的，要么整个是用户自己的。
+     */
+    private void assertCustomSandbox(Sandbox sb) {
+        if (!isBlank(sb.getSandboxRecord())) {
+            throw new BizException("沙箱承载二选一：已选系统记录就不能再填自带 E2B 凭证");
+        }
+        if (!isBlank(sb.getLink()) && !"e2b".equalsIgnoreCase(sb.getLink().trim())) {
+            throw new BizException("自带 E2B 凭证时 link 只能是 e2b 或留空");
+        }
+        // 密钥在 AgentService 封印（留空=沿用上一版密文）之后仍为空 = 用户从未填写，
+        // 不放行 —— 静默回落平台 E2B 密钥会把用户自带沙箱的开销计费到系统账号
+        if (isBlank(sb.getE2bApiKey()) || isBlank(sb.getE2bApiBaseUrl()) || isBlank(sb.getE2bDomain())) {
+            throw new BizException("自带沙箱需要 E2B API Key、控制面地址、沙箱域名三项齐备");
+        }
+        // 模板 ID 是账号内的资源，拿平台默认模板去打用户自己的网关必然 404，故不允许回落
+        if (isBlank(sb.getTemplateName())) {
+            throw new BizException("自带沙箱必须指定该账号下的 E2B 模板名");
+        }
+        if ("NAS".equals(sb.getPersistence())) {
+            throw new BizException("自带沙箱不支持 NAS 持久化（挂载点由服务端配置决定），请改用本地快照或不持久化");
         }
     }
 
@@ -573,8 +602,8 @@ public class AgentFeature {
             throw new BizException("自定义模型存在重复的 provider:modelName");
         }
         for (CustomModel cm : list) {
-            if (!MODEL_PROVIDERS.contains(cm.getProvider())) {
-                throw new BizException("自定义模型供应商非法，可选值：" + MODEL_PROVIDERS);
+            if (isBlank(cm.getProvider()) || cm.getProvider().contains(":")) {
+                throw new BizException("自定义模型必须指定供应商（provider 形如 dashscope / openai）");
             }
             if (isBlank(cm.getModelName())) {
                 throw new BizException("自定义模型必须指定模型名");
@@ -851,6 +880,23 @@ public class AgentFeature {
         /** 闲置回收阈值（秒）300–21600 */
         private Integer idleTimeoutSeconds;
         private Nas nas;
+        /**
+         * 自带 E2B 凭证（SPEC §29.17）：任一字段非空即"自定义承载"，与 {@code sandboxRecord} 二选一、
+         * 不混用 —— 半自带半系统的配置在排查时说不清是谁的沙箱。{@code e2bApiKey} 入库为
+         * {@code ConfigCryptoService} 密文，出参清空并置 {@code hasE2bApiKey}（同 §29 自带模型）。
+         */
+        private String e2bApiKey;
+        /** 自带 E2B 控制面地址（https://api.xxx/sandboxes） */
+        private String e2bApiBaseUrl;
+        /** 自带 E2B 沙箱域名（envd 访问域） */
+        private String e2bDomain;
+        /** 回显标记（派生值，不落库）：服务端已存有自带 E2B 密钥 */
+        private Boolean hasE2bApiKey;
+
+        /** 是否自带沙箱承载（任一 e2b 字段有值即算；校验要求三项齐备） */
+        public boolean isCustom() {
+            return !isBlank(e2bApiKey) || !isBlank(e2bApiBaseUrl) || !isBlank(e2bDomain);
+        }
 
         @Data
         public static class Nas {

@@ -761,9 +761,39 @@ public class AgentBuilder {
     }
 
     /**
+     * {@code feature.sandbox} 的自带 E2B 凭证 → 一条虚拟承载记录（SPEC §29.17），
+     * 让下游的链路判定与取值路径跟系统记录完全同构。未自带时返回 null（走系统记录 / 全局接入）。
+     * 主密钥缺失或密文不可解直接失败：静默改用平台 E2B 密钥会把用户自带沙箱的开销计费到系统账号。
+     */
+    private SandboxConfigDO customE2bRecord(AgentFeature.Sandbox sb, String agentKey) {
+        if (!sb.isCustom()) {
+            return null;
+        }
+        String apiKey = sb.getE2bApiKey();
+        if (notBlank(apiKey)) {
+            if (!crypto.available()) {
+                throw new BizException("服务器未配置 TEAPOT_SECRET_KEY，无法使用 Agent " + agentKey + " 的自带沙箱密钥");
+            }
+            try {
+                apiKey = crypto.decrypt(apiKey);
+            } catch (BizException e) {
+                throw new BizException("Agent " + agentKey + " 的自带沙箱密钥无法解密，请在沙箱分区重新填写：" + e.getMessage());
+            }
+        }
+        SandboxConfigDO record = new SandboxConfigDO();
+        record.setName("(agent:" + agentKey + ")");
+        record.setLinkType("e2b");
+        record.setE2bApiKey(apiKey);
+        record.setE2bApiBaseUrl(sb.getE2bApiBaseUrl().trim());
+        record.setE2bDomain(sb.getE2bDomain().trim());
+        record.setE2bDefaultTemplate(sb.getTemplateName().trim());
+        return record;
+    }
+
+    /**
      * 按 feature.sandbox 装配沙箱（SPEC §16.7 / §22.2 修订）：
      * shell 工具门控由 assemble() 统一负责（runtime.enableShell 优先，存量跟随沙箱）；
-     * 启用且指定 sandboxRecord → 链路与凭证由记录决定（§22.2）；
+     * 自带 E2B 凭证（§29.17）优先于系统记录；启用且指定 sandboxRecord → 链路与凭证由记录决定（§22.2）；
      * 启用无记录（存量）→ 按 sandbox.link 全局路由（e2b / agentrun），首选不可用时自动回落。
      * 返回是否实际装配了沙箱文件系统（false = 非沙箱或降级，供记忆路由决策，SPEC §27）。
      */
@@ -772,9 +802,9 @@ public class AgentBuilder {
             // 无沙箱：不装配文件系统，shell 门控见 assemble()
             return false;
         }
-        // §22.2 记录优先：指定 sandboxRecord 时链路与凭证由记录决定
-        SandboxConfigDO record = null;
-        if (sb.getSandboxRecord() != null && !sb.getSandboxRecord().isBlank()) {
+        // §29.17 自带 E2B 承载优先：整套凭证来自 feature，不引用系统记录、也不逐字段混用
+        SandboxConfigDO record = customE2bRecord(sb, agentKey);
+        if (record == null && sb.getSandboxRecord() != null && !sb.getSandboxRecord().isBlank()) {
             record = sandboxConfigService.getPlain(sb.getSandboxRecord().trim());
             if (!SandboxConfigService.linkConfigured(record)) {
                 // 防御：正常已在保存时拦截（AgentService 校验），此处兜底降级不阻断对话

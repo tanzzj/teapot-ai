@@ -61,6 +61,8 @@ import {
 import HistoryChatPanel from '../chat/HistoryChatPanel';
 import { uploadAgentAvatar } from '../api/avatar';
 import { skillDelete, skillList } from '../api/skill';
+import { modelProviders } from '../api/model';
+import type { ModelProviderMeta } from '../api/model';
 import { AddSkillButton } from '../components/AddSkill';
 import { sessionStats } from '../api/session';
 import { useAuthStore } from '../store/auth';
@@ -219,6 +221,8 @@ export default function AgentDetailPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<string[]>([]);
+  /** 已接入供应商与思考档表达力（SPEC §29.16）：provider 下拉与档位禁用的数据源 */
+  const [providerMeta, setProviderMeta] = useState<ModelProviderMeta[]>([]);
   const [boundSkills, setBoundSkills] = useState<string[]>([]);
   const [allSkills, setAllSkills] = useState<SkillListItem[]>([]);
   const [detail, setDetail] = useState<{ name: string; description?: string; status: number; createdAt?: string; avatar?: string } | null>(null);
@@ -277,6 +281,25 @@ export default function AgentDetailPage() {
   }, [isNew, draftSpace]);
   const sbEnabled = Form.useWatch(['sandbox', 'enabled'], form);
   const sbPersistence = Form.useWatch(['sandbox', 'persistence'], form);
+  /** 沙箱承载（SPEC §29.17）：source 是纯 UI 字段，hasE2bApiKey 是回显标记，都不入库 */
+  const sbCfg = Form.useWatch('sandbox', form) as
+    | (AgentSandboxConfig & { source?: 'record' | 'custom'; hasE2bApiKey?: boolean })
+    | undefined;
+  const sbCustom = sbCfg?.source === 'custom';
+  /** 切承载来源：清掉另一侧字段，避免带着"二选一"的混合值去保存（后端会拒） */
+  const onSandboxSourceChange = (v: 'record' | 'custom') => {
+    if (v === 'custom') {
+      form.setFieldsValue({ sandbox: { sandboxRecord: undefined } });
+      // 自带承载不支持 NAS（挂载点由服务端配置决定）
+      if (form.getFieldValue(['sandbox', 'persistence']) === 'NAS') {
+        form.setFieldValue(['sandbox', 'persistence'], 'LOCAL_SNAPSHOT');
+      }
+      return;
+    }
+    form.setFieldsValue({
+      sandbox: { e2bApiKey: undefined, e2bApiBaseUrl: undefined, e2bDomain: undefined, hasE2bApiKey: undefined },
+    });
+  };
   const chEnabled = Form.useWatch(['channel', 'enabled'], form);
   const mcpEnabled = Form.useWatch(['mcp', 'enabled'], form);
   /** MCP Server 列表（弹窗编辑后需重渲染，走 useWatch） */
@@ -328,6 +351,42 @@ export default function AgentDetailPage() {
   const a2uiEnabled = Form.useWatch(['a2ui', 'enabled'], form);
   const guardEnabled = Form.useWatch(['guard', 'enabled'], form);
   const guardMode = Form.useWatch(['guard', 'mode'], form);
+  /**
+   * 思考档可用性跟着主模型的供应商走（SPEC §29.16）：六家 SDK 通道不等价，
+   * 后端对不支持的档位直接拒保存，所以这里禁用并写明原因，而不是让人选了再报错。
+   * providerMeta 拉不到时（接口异常）不禁用 —— 保持旧行为，交给后端兜底。
+   */
+  const mainModelId = Form.useWatch('modelId', form) as string | undefined;
+  const mainThinkingSupport = providerMeta.find(
+    (p) => mainModelId?.split(':')[0] === p.provider,
+  )?.thinkingSupport;
+  // providerMeta 未就绪时不禁用（undefined），保持旧行为并交给后端闸门兜底
+  const thinkingOnOk = mainThinkingSupport === undefined || mainThinkingSupport !== 'NONE';
+  const thinkingOffOk = mainThinkingSupport === undefined || mainThinkingSupport === 'TRISTATE';
+  const thinkingOptions = useMemo(() => [
+    { label: '默认', value: 'default' },
+    { label: thinkingOnOk ? '开启' : '开启（该供应商无此通道）', value: 'on', disabled: !thinkingOnOk },
+    { label: thinkingOffOk ? '关闭' : '关闭（该供应商没有关闭通道）', value: 'off', disabled: !thinkingOffOk },
+  ], [thinkingOnOk, thinkingOffOk]);
+  // 换模型后原档位可能不再可表达：回落「默认」并说明原因，避免带着后端会拒的值去保存
+  useEffect(() => {
+    const cur = form.getFieldValue(['runtime', 'thinkingMode']);
+    if (cur !== 'on' && cur !== 'off') {
+      return;
+    }
+    if ((cur === 'on' && !thinkingOnOk) || (cur === 'off' && !thinkingOffOk)) {
+      form.setFieldValue(['runtime', 'thinkingMode'], 'default');
+      message.info(
+        `${mainModelId ?? '该模型'} 的供应商不支持思考模式「${cur === 'on' ? '开启' : '关闭'}」，已改回「默认」`,
+      );
+    }
+  }, [thinkingOnOk, thinkingOffOk, mainModelId, form]);
+  /** provider 下拉数据源（SPEC §29.16）：清单没拉到时退回历史两家，保证表单可用 */
+  const providerOptions = useMemo(
+    () => (providerMeta.length ? providerMeta : [{ provider: 'dashscope' }, { provider: 'openai' }])
+      .map((p) => ({ value: p.provider })),
+    [providerMeta],
+  );
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   /** Redis 记忆内容（SPEC §27 记忆管理）：按 uid 分组的记忆文件清单，支持逐条删除 */
@@ -410,7 +469,7 @@ export default function AgentDetailPage() {
     }
     setLoading(true);
     try {
-      const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog] = await Promise.all([
+      const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog, pm] = await Promise.all([
         agentDetail(agentKey),
         skillList(),
         sandboxOptions(),
@@ -419,7 +478,9 @@ export default function AgentDetailPage() {
         channelRegistry().catch(() => [] as ChannelRecordName[]),
         mcpRegistry().catch(() => [] as MCPRecordName[]),
         mediaModelCatalog().catch(() => [] as MediaModelCatalogEntry[]),
+        modelProviders().catch(() => [] as ModelProviderMeta[]),
       ]);
+      setProviderMeta(pm);
       // 系统模型按 Agent 所属空间过滤（SPEC §28.11），与后端保存闸门同源；
       // 存量未归属的 Agent 落全局桶 0
       const presets = await modelPresets(d.agent.workspaceId ?? 0);
@@ -519,7 +580,12 @@ export default function AgentDetailPage() {
         storageTarget,
         sandbox: {
           enabled: !!sb.enabled,
+          // 承载来源回显（SPEC §29.17）：任一自带字段有值 = custom；apiKey 出服务端即清空，靠 has 标记提示
+          source: sb.e2bApiKey || sb.e2bApiBaseUrl || sb.e2bDomain ? 'custom' : 'record',
           sandboxRecord: sb.sandboxRecord,
+          e2bApiBaseUrl: sb.e2bApiBaseUrl,
+          e2bDomain: sb.e2bDomain,
+          hasE2bApiKey: !!sb.hasE2bApiKey,
           isolationScope: sb.isolationScope ?? 'SESSION',
           persistence: sb.persistence ?? 'LOCAL_SNAPSHOT',
           templateName: sb.templateName,
@@ -715,9 +781,22 @@ export default function AgentDetailPage() {
     if (sandbox !== undefined) {
       // enabled=false 时仅提交 {enabled:false}，保持 feature 精简（SPEC §16.11）
       // 记录名 trim：列表下拉历史数据可能带尾随空格，直接引用会被后端记录校验拒绝（§25）
-      const sbOut = { ...sandbox };
+      const sbOut = { ...sandbox } as Record<string, unknown>;
       if (typeof sbOut.sandboxRecord === 'string') {
         sbOut.sandboxRecord = sbOut.sandboxRecord.trim();
+      }
+      // source 是纯 UI 字段；按来源剥掉另一侧，保证落库的 sandbox 只有一套承载（§29.17）
+      delete sbOut.source;
+      delete sbOut.hasE2bApiKey;
+      if (sbOut.enabled) {
+        if (sbOut.e2bApiKey || sbOut.e2bApiBaseUrl || sbOut.e2bDomain || sbCfg?.hasE2bApiKey) {
+          delete sbOut.sandboxRecord;
+          delete sbOut.nas;
+        } else {
+          delete sbOut.e2bApiKey;
+          delete sbOut.e2bApiBaseUrl;
+          delete sbOut.e2bDomain;
+        }
       }
       feature.sandbox = sbOut.enabled ? sbOut : { enabled: false };
     }
@@ -903,6 +982,7 @@ export default function AgentDetailPage() {
     { key: 'profile', label: 'Profile', icon: <SparkIdLine /> },
     { key: 'basic', label: 'Basic Info', icon: <SparkDocumentLine /> },
     { key: 'tools', label: 'Tool & Advanced', icon: <SparkSettingLine /> },
+    { key: 'skills', label: 'Skills', icon: <SparkMagicWandLine /> },
     { key: 'a2ui', label: 'A2UI', icon: <SparkApplicationToolLine /> },
     { key: 'guard', label: '意图守卫', icon: <SparkGuardrailLine /> },
     { key: 'multiagent', label: 'MultiAgent', icon: <SparkMultiAgentLine /> },
@@ -910,7 +990,6 @@ export default function AgentDetailPage() {
     { key: 'sandbox', label: 'Sandbox', icon: <SparkInternetLine /> },
     { key: 'channel', label: 'Channel', icon: <SparkLinkLine /> },
     { key: 'mcp', label: 'MCP', icon: <SparkMagicWandLine /> },
-    { key: 'skills', label: 'Skills', icon: <SparkMagicWandLine /> },
     ...(isAdmin ? [{ key: 'history' as Section, label: '会话历史', icon: <SparkHistoryLine /> }] : []),
   ];
   /** 新建态只开放 Basic Info：其余分区依赖已存在的 Agent 记录（头像上传、Skill 绑定、连接记录…） */
@@ -1307,7 +1386,7 @@ export default function AgentDetailPage() {
                             label="供应商"
                             rules={[{ required: true, message: '必选' }]}
                           >
-                            <Select options={[{ value: 'dashscope' }, { value: 'openai' }]} />
+                            <Select options={providerOptions} />
                           </Form.Item>
                         </Col>
                         <Col xs={12} sm={6}>
@@ -1368,12 +1447,8 @@ export default function AgentDetailPage() {
                     tooltip="三态（仅 DashScope 生效，OpenAI 供应商忽略）：默认=不下发 enableThinking，混合思考模型跟随服务端默认（多为开启）；开启/关闭则显式指定。"
                   >
                     <Select
-                      style={{ width: 160 }}
-                      options={[
-                        { label: '默认', value: 'default' },
-                        { label: '开启', value: 'on' },
-                        { label: '关闭', value: 'off' },
-                      ]}
+                      style={{ width: 200 }}
+                      options={thinkingOptions}
                     />
                   </Form.Item>
                   <Row gutter={16}>
@@ -1963,27 +2038,79 @@ export default function AgentDetailPage() {
                       valuePropName="checked"
                       tooltip="启用后 Agent 获得 shell_execute 与文件读写能力，全部在隔离容器内执行"
                     >
-                      <Switch disabled={sandboxNames.length === 0} />
+                      <Switch />
                     </Form.Item>
                     {sbEnabled && (
                       <>
+                        {/* 承载来源二选一（SPEC §29.17）：系统记录 或 自带 E2B 凭证，不混用。
+                            sandboxSource 是纯 UI 字段，保存时从 feature.sandbox 里剥掉 */}
+                        <Form.Item name={['sandbox', 'source']} label="沙箱承载" tooltip="系统记录=用平台在系统配置里维护的沙箱；自带 E2B 凭证=这个 Agent 用它自己的沙箱账号（密钥加密存储、不回显，整套字段自带、不与记录混用）">
+                          <Radio.Group
+                            optionType="button"
+                            buttonStyle="solid"
+                            onChange={(e) => onSandboxSourceChange(e.target.value as 'record' | 'custom')}
+                          >
+                            <Radio value="record">系统记录</Radio>
+                            <Radio value="custom">自带 E2B 凭证</Radio>
+                          </Radio.Group>
+                        </Form.Item>
                         <Row gutter={16}>
-                          <Col xs={24} sm={12}>
-                            <Form.Item
-                              name={['sandbox', 'sandboxRecord']}
-                              label="沙箱承载记录"
-                              tooltip="启用沙箱必选其一（§22.2）；链路由记录的 linkType 决定，记录在系统配置 - 沙箱中维护"
-                              rules={[{ required: true, message: '启用沙箱必须选择一条沙箱记录' }]}
-                            >
-                              <Select
-                                placeholder="选择沙箱连接记录"
-                                options={sandboxNames.map((r) => ({
-                                  value: r.name,
-                                  label: `${r.name}（${r.linkType === 'e2b' ? 'E2B 兼容' : 'AgentRun MCP'}）`,
-                                }))}
-                              />
-                            </Form.Item>
-                          </Col>
+                          {sbCustom ? (
+                            <>
+                              <Col xs={24} sm={8}>
+                                <Form.Item
+                                  name={['sandbox', 'e2bApiKey']}
+                                  label="E2B API Key"
+                                  rules={[{
+                                    validator: (_, value: string | undefined) =>
+                                      value?.trim() || sbCfg?.hasE2bApiKey
+                                        ? Promise.resolve()
+                                        : Promise.reject(new Error('请填写 E2B API Key')),
+                                  }]}
+                                >
+                                  <Input.Password
+                                    placeholder={sbCfg?.hasE2bApiKey ? '已配置，留空不修改' : 'e2b_xxx'}
+                                    autoComplete="new-password"
+                                  />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} sm={8}>
+                                <Form.Item
+                                  name={['sandbox', 'e2bApiBaseUrl']}
+                                  label="控制面地址"
+                                  rules={[{ required: true, message: '必填' }]}
+                                >
+                                  <Input placeholder="https://api.xxx/sandboxes" />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} sm={8}>
+                                <Form.Item
+                                  name={['sandbox', 'e2bDomain']}
+                                  label="沙箱域名"
+                                  rules={[{ required: true, message: '必填' }]}
+                                >
+                                  <Input placeholder="xxx.e2b.dev" />
+                                </Form.Item>
+                              </Col>
+                            </>
+                          ) : (
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                name={['sandbox', 'sandboxRecord']}
+                                label="沙箱承载记录"
+                                tooltip="链路由记录的 linkType 决定，记录在系统配置 - 沙箱中维护（§22.2）"
+                                rules={[{ required: true, message: '启用沙箱必须选择一条沙箱记录' }]}
+                              >
+                                <Select
+                                  placeholder="选择沙箱连接记录"
+                                  options={sandboxNames.map((r) => ({
+                                    value: r.name,
+                                    label: `${r.name}（${r.linkType === 'e2b' ? 'E2B 兼容' : 'AgentRun MCP'}）`,
+                                  }))}
+                                />
+                              </Form.Item>
+                            </Col>
+                          )}
                           <Col xs={24} sm={12}>
                             <Form.Item name={['sandbox', 'isolationScope']} label="隔离维度" tooltip="SESSION=每会话独立沙箱（推荐）">
                               <Select
@@ -1999,12 +2126,12 @@ export default function AgentDetailPage() {
                         </Row>
                         <Row gutter={16}>
                           <Col xs={24} sm={12}>
-                            <Form.Item name={['sandbox', 'persistence']} label="持久化">
+                            <Form.Item name={['sandbox', 'persistence']} label="持久化" tooltip={sbCustom ? '自带沙箱不支持 NAS 挂载（挂载点由服务端配置决定）' : undefined}>
                               <Select
                                 options={[
                                   { value: 'LOCAL_SNAPSHOT', label: '本地快照（推荐）' },
                                   { value: 'NONE', label: '不持久化' },
-                                  { value: 'NAS', label: 'NAS 挂载' },
+                                  ...(sbCustom ? [] : [{ value: 'NAS', label: 'NAS 挂载' }]),
                                 ]}
                               />
                             </Form.Item>
@@ -2012,8 +2139,13 @@ export default function AgentDetailPage() {
                         </Row>
                         <Row gutter={16}>
                           <Col xs={24} sm={12}>
-                            <Form.Item name={['sandbox', 'templateName']} label="沙箱模板" tooltip="留空用全局默认模板">
-                              <Input placeholder={sbOptions?.defaultTemplate || '全局默认模板'} />
+                            <Form.Item
+                              name={['sandbox', 'templateName']}
+                              label="沙箱模板"
+                              tooltip={sbCustom ? '自带凭证必须指定该账号下的模板，不回落平台默认' : '留空用全局默认模板'}
+                              rules={sbCustom ? [{ required: true, message: '自带沙箱必须指定模板' }] : undefined}
+                            >
+                              <Input placeholder={sbCustom ? '该 E2B 账号下的模板名' : sbOptions?.defaultTemplate || '全局默认模板'} />
                             </Form.Item>
                           </Col>
                           <Col xs={24} sm={12}>
@@ -2281,9 +2413,6 @@ export default function AgentDetailPage() {
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                   <div style={{ fontSize: 20, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>Skills</div>
-                  <span style={{ color: 'rgba(26, 26, 29, 0.45)', fontSize: 13 }}>
-                    本平台不再有「全局 skill」：这里列出的都要显式打开开关才装配
-                  </span>
                   <div style={{ flex: 1 }} />
                   <AddSkillButton agentKey={agentKey} onAdded={load} />
                 </div>

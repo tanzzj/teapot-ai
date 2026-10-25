@@ -92,6 +92,12 @@ export interface AgentSandboxConfig {
   workspaceRoot?: string;
   idleTimeoutSeconds?: number;
   nas?: AgentSandboxNas;
+  /** 自带 E2B 凭证（SPEC §29.17）：任一非空即"自定义承载"，与 sandboxRecord 二选一、不混用 */
+  e2bApiKey?: string;
+  e2bApiBaseUrl?: string;
+  e2bDomain?: string;
+  /** 回显标记（服务端派生，不提交）：已存有自带 E2B 密钥 */
+  hasE2bApiKey?: boolean;
 }
 
 /** feature.runtime 结构：Agent 高级配置（Basic Info + Tool & Advanced），字段缺省 = 回落默认 */
