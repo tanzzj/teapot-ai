@@ -537,7 +537,9 @@ export default function AgentDetailPage() {
           mcpServers: mcp.mcpServers ?? [],
         },
         runtime: {
-          thinkingMode: !!rt.thinkingMode,
+          // 思考模式三态（SPEC §29.15）：表单用字符串承载（Select 的 value 放不了 boolean），
+          // 未配置 = 'default'，保存时再还原成 true / false / 不写该键
+          thinkingMode: rt.thinkingMode === undefined ? 'default' : rt.thinkingMode ? 'on' : 'off',
           temperature: rt.temperature,
           topP: rt.topP,
           maxTokens: rt.maxTokens,
@@ -748,6 +750,11 @@ export default function AgentDetailPage() {
       feature.mcp = mcpOut.enabled ? mcpOut : { enabled: false };
     }
     if (runtime !== undefined) {
+      // 思考模式三态还原（SPEC §29.15）：'default' → 不写该键（后端 null = 不下发参数）
+      const sel = (runtime as Record<string, unknown>).thinkingMode;
+      if (typeof sel === 'string') {
+        (runtime as Record<string, unknown>).thinkingMode = sel === 'default' ? undefined : sel === 'on';
+      }
       // runtime 跨 Basic Info / Tool & Advanced 两分区提交：仅合并本次挂载字段，null = 清除该项
       const merged: Record<string, unknown> = { ...((loadedFeature.runtime as Record<string, unknown>) || {}) };
       for (const [k, v] of Object.entries(runtime)) {
@@ -1358,10 +1365,16 @@ export default function AgentDetailPage() {
                   <Form.Item
                     name={['runtime', 'thinkingMode']}
                     label="Thinking Mode"
-                    valuePropName="checked"
-                    tooltip="开启模型思考模式（仅 DashScope 生效，OpenAI 供应商忽略）"
+                    tooltip="三态（仅 DashScope 生效，OpenAI 供应商忽略）：默认=不下发 enableThinking，混合思考模型跟随服务端默认（多为开启）；开启/关闭则显式指定。"
                   >
-                    <Switch />
+                    <Select
+                      style={{ width: 160 }}
+                      options={[
+                        { label: '默认', value: 'default' },
+                        { label: '开启', value: 'on' },
+                        { label: '关闭', value: 'off' },
+                      ]}
+                    />
                   </Form.Item>
                   <Row gutter={16}>
                     <Col xs={24} sm={12}>

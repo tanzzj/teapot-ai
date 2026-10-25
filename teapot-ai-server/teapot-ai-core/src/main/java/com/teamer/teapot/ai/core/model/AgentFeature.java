@@ -778,7 +778,10 @@ public class AgentFeature {
     /** runtime 命名空间结构：字段全部可空（null = 未配置，回落 SDK 默认 / 存量行为） */
     @Data
     public static class Runtime {
-        /** 思考模式（DashScope enableThinking；openai 供应商忽略） */
+        /**
+         * 思考模式三态（SPEC §29.15）：null=默认（不下发 enableThinking，混合思考模型跟随服务端默认，
+         * 多为开启）/ true=显式开启 / false=显式关闭。仅 DashScope 生效，openai 供应商忽略。
+         */
         private Boolean thinkingMode;
         /** 采样温度 [0,2] */
         private Double temperature;

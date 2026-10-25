@@ -94,9 +94,10 @@ public class ModelRegistry {
 
     /**
      * 解析 Model 实例并缓存；thinking 三态：TRUE=显式开启、FALSE=显式关闭、null=不下发参数
-     * （DashScope 混合思考模型此时跟随服务端默认，多为开启）。
+     * （DashScope 混合思考模型此时跟随服务端默认，多为开启）。Agent 的
+     * {@code runtime.thinkingMode} 本身就是三态，装配时按原样传到这里（SPEC §29.15）。
      */
-    private Model resolve(String modelId, Boolean thinking, Credential cred) {
+    public Model resolve(String modelId, Boolean thinking, Credential cred) {
         if (modelId == null || modelId.isBlank()) {
             throw new BizException("modelId 不能为空");
         }

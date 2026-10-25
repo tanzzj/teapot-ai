@@ -193,7 +193,8 @@ public class AgentBuilder {
         AgentFeature.Sandbox sb = feature.getSandbox();
         AgentFeature.Runtime rt = feature.getRuntime();
 
-        boolean thinking = rt != null && Boolean.TRUE.equals(rt.getThinkingMode());
+        // 思考模式三态原样透传（SPEC §29.15）：null = 不下发 enableThinking，跟随模型服务端默认
+        Boolean thinking = rt == null ? null : rt.getThinkingMode();
         // Agent 自带模型凭证（SPEC §29）：主模型与各界点子模型解析时按 modelId 取用，
         // 取不到即回落系统入口与环境变量（存量 Agent 无该命名空间，行为不变）
         Map<String, ModelRegistry.Credential> customCreds = customCredentials(feature);

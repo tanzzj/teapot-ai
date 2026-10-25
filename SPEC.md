@@ -2636,6 +2636,20 @@ v67 的形态是「Model 下拉里混进一个自定义组 + Basic Info 下面�
 `reasoning:asst-reasoning-0 → tool_call:callA → tool_call_output:callA-output → reasoning:asst-reasoning-1 → tool_call:callB → tool_call_output:callB-output → message:asst-answer`
 与事件发生顺序一致（旧代码这段会是"两个 reasoning → 四个 tool 块 → answer"，由分组循环直接读出）。`npm run build` 通过，入口 `index-ZayGHZyr.js`。探针页与 vite 已删除。**未做**：真机看一轮真实的交错回复。
 
+### §29.15 思考模式改三态：默认 / 开启 / 关闭（2026-10-25）
+
+`runtime.thinkingMode` 此前在界面上是一个 Switch，只有"开/关"两档，而底层 `ModelRegistry` 早就是三态（`TRUE`=下发 `enable_thinking=true`、`FALSE`=下发 `false`、`null`=不下发，混合思考模型跟随服务端默认，多为开启）。装配处 `boolean thinking = Boolean.TRUE.equals(rt.getThinkingMode())` 把 `null` 和 `false` 折成了一个值，且布尔版 `resolve(modelId, boolean, cred)` 内部是 `thinking ? TRUE : null` —— 也就是说**旧的"关"从来不是"显式关闭"，它等于"默认"**，用户没法表达"我要显式关掉思考"。
+
+改动：
+- `ModelRegistry`：把三态版 `resolve(String, Boolean, Credential)` 由 private 提为 public（布尔版仍保留，内部委托）。
+- `AgentBuilder`：`Boolean thinking = rt == null ? null : rt.getThinkingMode()`，原样透传到主模型与会话标题模型的兜底解析（其余子模型走各自的显式档位，不经这个变量）。
+- `AgentFeature.Runtime.thinkingMode` 字段类型不变（本就是可空 `Boolean`），javadoc 补三态语义。
+- 前端：`Thinking Mode` 由 `Switch` 换成 `Select`（默认 / 开启 / 关闭）。Select 的 `value` 放不了 boolean，表单内用字符串 `'default' | 'on' | 'off'` 承载，回显按 `undefined → 'default'` 映射，保存前还原：`'default' → undefined`（`runtime` 合并逻辑对 `undefined` 的既有处理就是删键，于是入库 JSON 里不带 `thinkingMode`）、`'on' → true`、`'off' → false`。对话页配置摘要的 KV 早已按 `!== undefined ? 标签 : '默认'` 渲染，无需改。
+
+**验证**：`mvn -o -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build` 通过，入口 `index-CVIDA6pk.js`。**未做**：三态各自的真机生效（要看 DashScope 请求参数与回复是否带 reasoning）。
+
+**⚠️ 存量语义变更（待用户定，未擅自改库）**：线上 `t_agent` 里 `digit-tim` 与 `teapot`（两个启用中的 Agent）的 feature 存着 `"thinkingMode": false`。旧链路下它等于"不下发参数"；新链路下它等于"显式关闭思考"。qwen3 系混合思考模型不传参数时服务端默认开启，所以**这次发布后这两个 Agent 会从"会思考"变成"不思考"**。三个选项：① 发布同时跑一条幂等 SQL 把这两行的 `thinkingMode` 键删掉（等价于迁移到"默认"，行为与今天一致，之后用户想关再选"关闭"）；② 接受变更（认为当初的 off 就是想要不思考）；③ 前端回显把 `false` 也显示成"默认"（不推荐，等于把三态又压回两态且入库值仍会漂移）。
+
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
 移动端「新建 Agent」弹窗（6 个字段 + 键盘弹起）几乎占满视口，且建完还得再进详情页配模型/提示词，等于同一批字段填两遍。改为**复用详情页当草稿**：
