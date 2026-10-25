@@ -4,7 +4,6 @@ import { Button } from '@agentscope-ai/design';
 import {
   SparkRoboticsLine,
   SparkMessageLine,
-  SparkSettingLine,
   SparkCircleArrowDownLine,
 } from '@agentscope-ai/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -60,28 +59,25 @@ export default function AppLayout() {
       list.push({ key: '/agents', label: 'Agent', icon: <SparkRoboticsLine /> });
       // Skill 不再有独立入口（SPEC §29.10）：本体的导入/绑定都在 Agent 详情里
     }
-    if (hasRole('admin')) {
-      // 系统配置一站式管理台（SPEC §21）：模型/用户/存储/沙箱统一入口
-      list.push({ key: '/system', label: '系统配置', icon: <SparkSettingLine /> });
-    }
+    // 系统配置（SPEC §21）不进顶栏分段，入口在头像下拉里（SPEC §29.18）
     return list;
   }, [hasRole]);
 
-  const selectedKey = items.find((i) => location.pathname.startsWith(i.key))?.key || '/chat';
+  // 命中不了任何分段（如 /system/*）时给一个不存在的值，让 Segmented 不高亮任何一项
+  const selectedKey = items.find((i) => location.pathname.startsWith(i.key))?.key ?? '';
 
-  /** 对话页：用户信息 + 系统配置入口已下沉到左栏底部（UserFooter），顶栏导航同步去掉「系统配置」 */
+  /** 对话页：用户信息已下沉到左栏底部（UserFooter）；系统配置入口在头像下拉里（SPEC §29.18） */
   const isChatPage = location.pathname.startsWith('/chat');
-  const navItems = isChatPage ? items.filter((i) => i.key !== '/system') : items;
 
   /** 移动端下拉菜单选项（对话/Agent/Skill/系统配置） */
   const mobileMenuItems = useMemo(() => {
-    return navItems.map((i) => ({
+    return items.map((i) => ({
       key: i.key,
       label: i.label,
       icon: i.icon,
       onClick: () => navigate(i.key),
     }));
-  }, [navItems, navigate]);
+  }, [items, navigate]);
 
   // 移动端导航已改顶栏下拉菜单，无 Drawer 打开态需随路由关闭
 
@@ -129,7 +125,7 @@ export default function AppLayout() {
                   style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', fontSize: 16 }}
                 >
                   <span style={{ fontWeight: 600 }}>
-                    {navItems.find((i) => i.key === selectedKey)?.label || '对话'}
+                    {items.find((i) => i.key === selectedKey)?.label || '对话'}
                   </span>
                   <SparkCircleArrowDownLine size={14} />
                 </Button>
@@ -187,7 +183,7 @@ export default function AppLayout() {
               <Segmented
                 value={selectedKey}
                 onChange={(v) => navigate(String(v))}
-                options={navItems.map((i) => ({
+                options={items.map((i) => ({
                   value: i.key,
                   icon: i.icon,
                   label: (

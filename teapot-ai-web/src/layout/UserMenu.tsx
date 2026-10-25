@@ -1,14 +1,20 @@
 import { useCallback, useRef, useState } from 'react';
 import { Dropdown, message } from 'antd';
 import { Avatar } from '@agentscope-ai/design';
-import { SparkCameraLine, SparkEscapeLine, SparkUserLine } from '@agentscope-ai/icons';
+import {
+  SparkCameraLine,
+  SparkEscapeLine,
+  SparkSettingLine,
+  SparkUserLine,
+} from '@agentscope-ai/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { uploadUserAvatar } from '../api/avatar';
 
 /**
- * 用户菜单（头像 + 用户名）：点击下拉展示角色 / 更换头像 / 退出登录。
+ * 用户菜单（头像 + 用户名）：点击下拉展示角色 / 更换头像 / 系统配置 / 退出登录。
  * 顶栏（非对话页）与对话页左栏底部 UserFooter 共用；头像上传逻辑（SPEC §23）集中于此。
+ * 系统配置入口挂在这里而非顶栏分段（SPEC §29.18）：它是低频管理动作，不该和对话/Agent 抢主导航位。
  */
 export default function UserMenu(props: {
   /** 是否展示用户名（移动端顶栏只出头像） */
@@ -20,6 +26,8 @@ export default function UserMenu(props: {
 }) {
   const navigate = useNavigate();
   const { user, logout, setUserPatch } = useAuthStore();
+  const hasRole = useAuthStore((s) => s.hasRole);
+  const isAdmin = hasRole('admin');
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
@@ -62,12 +70,10 @@ export default function UserMenu(props: {
           items: [
             { key: 'roles', label: `角色：${user?.roles || '-'}`, disabled: true },
             { type: 'divider' },
-            {
-              key: 'avatar',
-              label: avatarUploading ? '头像上传中…' : '更换头像',
-              icon: <SparkCameraLine />,
-              disabled: avatarUploading,
-            },
+            { key: 'avatar', label: avatarUploading ? '头像上传中…' : '更换头像', icon: <SparkCameraLine />, disabled: avatarUploading },
+            ...(isAdmin
+              ? [{ key: 'system', label: '系统配置', icon: <SparkSettingLine /> }]
+              : []),
             { key: 'logout', label: '退出登录', icon: <SparkEscapeLine /> },
           ],
           onClick: ({ key }: { key: string }) => {
@@ -76,6 +82,8 @@ export default function UserMenu(props: {
               navigate('/login');
             } else if (key === 'avatar') {
               avatarInputRef.current?.click();
+            } else if (key === 'system') {
+              navigate('/system');
             }
           },
         }}
