@@ -2649,6 +2649,76 @@ v67 的形态是「Model 下拉里混进一个自定义组 + Basic Info 下面�
 **验证**：`mvn -o -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build` 通过，入口 `index-CVIDA6pk.js`。**未做**：三态各自的真机生效（要看 DashScope 请求参数与回复是否带 reasoning）。
 
 **⚠️ 存量语义变更（待用户定，未擅自改库）**：线上 `t_agent` 里 `digit-tim` 与 `teapot`（两个启用中的 Agent）的 feature 存着 `"thinkingMode": false`。旧链路下它等于"不下发参数"；新链路下它等于"显式关闭思考"。qwen3 系混合思考模型不传参数时服务端默认开启，所以**这次发布后这两个 Agent 会从"会思考"变成"不思考"**。三个选项：① 发布同时跑一条幂等 SQL 把这两行的 `thinkingMode` 键删掉（等价于迁移到"默认"，行为与今天一致，之后用户想关再选"关闭"）；② 接受变更（认为当初的 off 就是想要不思考）；③ 前端回显把 `false` 也显示成"默认"（不推荐，等于把三态又压回两态且入库值仍会漂移）。
+→ **已按 ① 执行**（v71，2026-10-25 15:48）：迁移前整行 `feature` 备份到 `/root/v71-feature-backup.tsv`（600），`JSON_REMOVE` 删键后 5 条 Agent 的 `runtime.thinkingMode` 全为 absent，`json_valid` 复查通过。
+
+### §29.16 模型供应商全接入（策略模式，2026-10-25）
+
+AgentScope 有六个模型供应商扩展模块，teapot 的 `ModelRegistry` 只 switch 了 `dashscope` / `openai`。本次把六家全接上，并把那段 switch 换成策略分发。
+
+**形状（有先例）**：照 `core/storage` 的存储载体策略 —— 接口带字符串 key（`ImageStorageStrategy.name()` → 这里 `provider()`），实现类各自 `@Component`，按字符串分发，找不到就 `BizException("不支持的模型供应商：" + provider)`（文案同 `ChannelFactory` 的"不支持的…"）。收集方式用 `List<ModelProviderStrategy>` 构造注入收成 `Map`（List 拼装先例 = `AgentBuilder` 拼 skill repos），重复 key 直接启动失败而不是静默覆盖。新包 `core/model/provider/`（按功能域分包）。
+
+**为什么不用 SDK 自带的 SPI**（`io.agentscope.core.model.spi.ModelProvider` + `META-INF/services` + `ModelCreationContext`，六家都已注册）：`ModelCreationContext.enableThinking` **只有 dashscope 和 openai-compat 的 provider 消费，另外四家的实现直接忽略它** —— 而 §29.15 的三态正是核心语义，交给 SPI 会变成"界面能选、运行期静默无效"。另外实例缓存分槽（`#think` / `#nothink` / `#cred<指纹>`）、`evict` 的前缀约定、能力位→`EndpointType.MULTIMODAL` 的判定都得留在 teapot。所以策略接口在 teapot 侧，实现内部各调各家 builder。
+
+**新增/改动**：
+- `ModelProviderStrategy`（`provider()` / `thinkingSupport()` / `apiKeyRequired()` / `create(Spec)` + `record Spec(modelId, modelName, apiKey, baseUrl, thinking, capabilities)`）与 `ThinkingSupport { TRISTATE, ON_ONLY, NONE }`。
+- 六个实现：`DashScopeStrategy`、`OpenAIChatStrategy`、`OpenAIResponsesStrategy`、`AnthropicStrategy`、`GeminiStrategy`、`OllamaStrategy`。各家自己 `@Value` 读自己的环境变量（`DASHSCOPE_API_KEY` / `OPENAI_API_KEY`+`OPENAI_BASE_URL` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_BASE_URL`），"留空回落 env"的定序不再由注册表持有；密钥定序（Agent 自带 > env，缺失即按历史文案报错）收在接口的 `default resolveApiKey(spec, envName, envValue)` 里，`apiKeyRequired()` 就是它判 Ollama 这类无凭证供应商的开关。
+- `ModelRegistry`：删掉三个 `@Value` 字段与整段 switch，改为策略 Map；公共签名与缓存 key 规则一字未动（`AgentBuilder` / `ModelService` 调用点零改动）。新增 `providers()` / `thinkingSupport(modelId)` / `thinkingSupportOf(provider)`，经 `ModelService` 委派给上层。
+- **思考档矩阵**（各家 SDK 实测出来的表达力，界面与保存校验的唯一依据）：
+
+| provider | 通道 | 档位 |
+| --- | --- | --- |
+| dashscope | `enableThinking(Boolean)` | TRISTATE |
+| ollama | `OllamaOptions.thinkOption(ThinkBoolean.ENABLED/DISABLED)` | TRISTATE |
+| openai-official | `GenerateOptions.reasoningEffort("medium")` | ON_ONLY（无显式关闭通道，`thinkingBudget` 在该模块是 fail-fast 抛异常） |
+| openai | 无（per-request `reasoning_effort` 对非推理模型会被拒） | NONE，选档时 warn 并忽略 |
+| anthropic | 只有 `additionalBodyParam("thinking", …)` 透传且需配 max_tokens | NONE（隐式契约，不猜） |
+| gemini | 只有 `thinkingBudget(Integer)`，非空即"要求思考并限预算" | NONE（挑固定数值等于替用户决定成本） |
+
+- **保存期闸门** `AgentService.assertProviderAndThinking(modelId, featureJson)`：自带模型的 provider 必须在已接入清单里；显式选了「开启/关闭」而该供应商表达不出来 → 直接拒保存并写"请把思考模式改回「默认」"。update 里按**合并后的主模型**跑（只改思考档不动模型的保存同样拦）。
+- **消歧不留第二份清单**：`AgentFeature.MODEL_PROVIDERS` 常量删除（原来注释就写着"与 ModelRegistry 实际支持的一致"，属于会漂的复制品），模型层只校验 provider 非空/不含冒号；白名单唯一来源是策略 Bean，经新端点 `GET /api/model/providers` 出给前端。
+- 依赖：`teapot-ai-bom` 加四条 `agentscope-extensions-model-{openai-official,anthropic,gemini,ollama}`，`teapot-ai-core` 对应四条无版本声明；三方 SDK（anthropic-java / google-genai / openai-java）由扩展模块自带传递依赖。
+- 前端：`AgentDetail` 的 provider 下拉与「默认/开启/关闭」联动 —— 不支持的档位置灰且 label 写明原因，换主模型后若原档位不再可表达则自动回落「默认」并 `message.info` 说明；`Models` 管理页的 provider 下拉同源（拉不到时回落静态名单）。
+
+**验证**：`mvn -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build` 通过，入口 `index-OOJAayHp.js`。**坑（必须记）**：这四个新模块带来 `kotlin-reflect`、`jackson-module-kotlin`、`guava:33.4.0-android` 等传递依赖，本机 .m2 里没有 → **`mvn -o` 离线构建会失败**，首次必须联网（Aliyun 镜像）拉一次；另外 `mvn … | tail` 之后 `echo $?` 拿到的是 `tail` 的退出码，看构建结果要用 `${PIPESTATUS[0]}`，否则会误读成绿。**未做**：除 dashscope 外五家都没有密钥，真机调用未验证（尤其 ollama 的 `think` 字段与 openai-official 的 `reasoning_effort` 落到请求体的实际形状）；`/api/model/providers` 的响应形状只由代码推得。
+
+**风险 / 后续项**：
+- `t_model_entry.provider` 是自由文本且历史行不受新闸门约束（只在 create/update 校验）——库里若已有未接入的 provider，解析时才报"不支持的模型供应商"。
+- `openai-official` 的"开启"固定落 `reasoning_effort=medium` 是产品选择，不是从 SDK 推出来的必然；要调档需要新增配置项。
+- gemini / anthropic 若要真正支持思考档，需要各自加"预算/力度"配置项（`thinkingBudget` / `thinking.budget_tokens`），届时 `ThinkingSupport` 相应上调。
+- Ollama 无凭证：`apiKeyRequired()=false` 只影响策略内部是否要求密钥，平台侧"必须配 key"的其它检查（若有）未逐条复核。
+
+### §29.17 Agent 自带沙箱承载（E2B，2026-10-26）
+
+沙箱此前只能引用系统级记录（`t_sandbox_config`，§22.2「启用沙箱必须选一条记录」）。用户要求：**沙箱也要像 skill / 自带模型一样支持 Agent 级配置**。三条已拍板的规则（都选了保守档）：
+
+1. **二选一、不混用**：一个 Agent 的沙箱要么整个是平台记录的，要么整个是自己自带的。不做"密钥自带 + 网关用记录"的逐字段回落 —— 那种半截配置在排查时说不清是谁的沙箱。
+2. **只支持 E2B**：两条链路字段不同构（E2B 三项 apiKey/控制面地址/域名，AgentRun 四项 apiKey/accountId/region/mcpServerUrl），且现网只有 e2b 记录、`region` 的判定在三处还不一致（`linkConfigured` 要、`AgentRunConnection.configured()` 不要、Controller 的 `agentrunConfigured` 不要）。自带 AgentRun 会把这些分歧一起带进来，故先不做。
+3. **持久化限制为本地快照/不持久化**：NAS 挂载点、快照目录、E2B `codec` 都只能来自服务端 yml，不是 Agent 该决定的东西（E2B 链路选 NAS 现在也只是告警后降级 no-op）。
+
+**数据与实现**（复用 §29 自带模型那套，无 DDL）：
+- `AgentFeature.Sandbox` 加 `e2bApiKey`（密文入库）/ `e2bApiBaseUrl` / `e2bDomain` / `hasE2bApiKey`（派生回显，不落库），`isCustom()` = 任一 e2b 字段非空。
+- `AgentService.sealSandboxKey(feature, previousFeatureJson)` 与 `sealCustomModelKeys` 同形：传明文→`crypto.encrypt`；留空→沿用上一版密文；缺 `TEAPOT_SECRET_KEY` 直接拒；`hasE2bApiKey` 入库前置 null。`redactSecrets` 从"只处理 customModels 且空表就 early-return"改成两段独立处理（否则有沙箱无模型时会漏脱敏）。
+- 校验（`AgentFeature.validate` 内，仅 `enabled` 时生效）：与 `sandboxRecord` 互斥、三项齐备、**模板名必填**（模板 ID 是账号内资源，回落平台默认必然 404）、`link` 只能是 e2b/留空、`persistence=NAS` 拒绝。"启用但无承载"的存量门控报错文案补上"或改用自带 E2B 凭证"。
+- 解析点唯一：`AgentBuilder.customE2bRecord()` 把自带凭证组装成一条**虚拟 `SandboxConfigDO`**（`linkType=e2b`、`name=(agent:<key>)`），于是下游的链路判定、`applyE2b`、`resolveE2bTemplate` 全部与系统记录同构、零改动。密文不可解 / 主密钥缺失 → 抛错点名 Agent，**不静默改用平台 E2B 密钥**（否则用户自带沙箱的开销会计费到系统账号）。
+- 前端 Sandbox 分区加「沙箱承载」单选（系统记录 / 自带 E2B 凭证，`source` 是纯 UI 字段，保存时剥掉）；自带时隐藏记录下拉、出三项凭证输入（API Key 按 `hasE2bApiKey` 切占位符）、持久化选项去掉 NAS、模板改必填；切回系统记录时整段 e2b 字段被剥掉 = 凭证随命名空间消失。「启用沙箱」开关不再因"没有系统记录"被禁用。
+
+**验证**：`mvn -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build` 通过，入口 `index-NCmZqDoK.js`。模型层 11 条规则用一次性 main 直跑真类验证（classpath = `teapot-ai-core/target/classes` + `common/target/classes` + 从 app.jar 解出的 `BOOT-INF/lib/*`，跑完即删）：三项齐备/本地快照/只引用记录/未启用残留 → ACCEPT；缺域名、缺模板、与记录混用、NAS、`link=agentrun`、启用无承载且全局未接入 → REJECT 且文案点名原因，**11/11 通过**。**未做**：真实 E2B 账号的端到端（无第二套 E2B 凭证可测）、`customE2bRecord` 解密路径的运行时验证。
+
+**风险 / 后续项**：
+- 自带凭证与记录一样是**跨空间可见的 Agent 属性**，但沙箱没有空间隔离（同 §29.10 的 skill 情况）；A 空间成员若能看到 B 空间 Agent 的详情，会看到它的控制面地址与域名（密钥本身永不回显）。
+- `templateName` 在自带模式下必填，但**不校验该模板在用户账号里真的存在**，填错要到首轮调用才报。
+- 切回「系统记录」即丢弃自带密文（不是隐藏），再切回来要重填 —— 与 §29 自带模型"改 provider/模型名视为新模型"同一取向，避免旧密文被误挂到别的配置上。
+- AgentRun 自带凭证、以及把 `region` 判定三处分歧对齐，是这笔的后续项。
+
+### §29.18 系统配置从顶栏挪进头像下拉（2026-10-26）
+
+顶栏分段此前是「对话 / Agent / 系统配置」，用户要求把系统配置收进头像下拉。它是低频管理动作，不该和对话/Agent 抢主导航位。
+
+- `UserMenu.tsx`（顶栏与对话页左栏 UserFooter 共用）在「更换头像」与「退出登录」之间插一项「系统配置」，仅 `hasRole('admin')` 可见，点击 `navigate('/system')`（该路由本就重定向到 `/system/models`）。
+- `AppLayout.tsx` 删掉 admin 分支的 `/system` 分段项与随之无用的 `SparkSettingLine` 导入；原先为"对话页不显示系统配置"而写的 `navItems = isChatPage ? items.filter(...) : items` 变成死代码，一并删掉并把四处引用改回 `items`。
+- **一个连带修正**：`selectedKey` 的兜底是 `|| '/chat'`，系统配置从分段里消失后，人在 `/system/*` 会被错误高亮成「对话」。改成命中不了时返回 `''`（Segmented 收到不在 options 里的值就不高亮任何项）。
+
+**验证**：`npm run build`（`tsc -b` + vite）通过，入口 `index-DDvA8cEY.js`。**未做**：真机点击（下拉项可见性依赖登录角色，本地无后端）。
 
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
