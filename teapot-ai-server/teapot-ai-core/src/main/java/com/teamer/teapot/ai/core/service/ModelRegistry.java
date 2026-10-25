@@ -3,18 +3,18 @@ package com.teamer.teapot.ai.core.service;
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.core.dao.ModelEntryMapper;
 import com.teamer.teapot.ai.core.model.ModelEntryDO;
+import com.teamer.teapot.ai.core.model.provider.ModelProviderStrategy;
+import com.teamer.teapot.ai.core.model.provider.ThinkingSupport;
 import io.agentscope.core.model.Model;
-import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
-import io.agentscope.extensions.model.dashscope.EndpointType;
-import io.agentscope.extensions.model.openai.OpenAIChatModel;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -27,6 +27,8 @@ import java.util.stream.Collectors;
  * 模型入口（含可选 baseUrl）由 t_model_entry 界面配置化提供；系统入口的 API Key 只存在于
  * 服务器环境变量，t_agent 只存模型标识字符串；Agent 自带模型（SPEC §29）例外——
  * 凭证随 Agent 的 feature 加密存储，解析时以 {@link Credential} 覆写密钥/baseUrl/能力位。
+ * 具体怎么造某家的 Model 不在这里（SPEC §29.16）：本类只做凭证定序、缓存分槽与失效，
+ * 供应商实现各自是一个 {@link ModelProviderStrategy} Bean。
  */
 @Slf4j
 @Service
@@ -48,17 +50,48 @@ public class ModelRegistry {
 
     private final ModelEntryMapper modelEntryMapper;
 
-    @Value("${DASHSCOPE_API_KEY:}")
-    private String dashscopeApiKey;
+    /** provider → 策略（SPEC §29.16）：新增供应商只加一个 @Component，本类不动 */
+    private final Map<String, ModelProviderStrategy> strategies;
 
-    @Value("${OPENAI_API_KEY:}")
-    private String openaiApiKey;
-
-    @Value("${OPENAI_BASE_URL:}")
-    private String openaiBaseUrl;
-
-    public ModelRegistry(ModelEntryMapper modelEntryMapper) {
+    public ModelRegistry(ModelEntryMapper modelEntryMapper, List<ModelProviderStrategy> providers) {
         this.modelEntryMapper = modelEntryMapper;
+        Map<String, ModelProviderStrategy> map = new LinkedHashMap<>();
+        for (ModelProviderStrategy strategy : providers) {
+            ModelProviderStrategy dup = map.put(strategy.provider(), strategy);
+            if (dup != null) {
+                throw new BizException("模型供应商策略重复：" + strategy.provider());
+            }
+        }
+        this.strategies = Map.copyOf(map);
+        log.info("模型供应商已接入 {} providers={}", map.size(), new TreeSet<>(map.keySet()));
+    }
+
+    /** 已接入的供应商标识（Agent 自带模型的 provider 枚举、模型入口表单同源） */
+    public Set<String> providers() {
+        return strategies.keySet();
+    }
+
+    /**
+     * 某 modelId 所属供应商的思考档表达力；供应商未接入时返回 null（由调用方决定报错口径）。
+     * 界面禁用档位、保存期校验都读这里（SPEC §29.16）。
+     */
+    public ThinkingSupport thinkingSupport(String modelId) {
+        ModelProviderStrategy strategy = strategyOf(modelId);
+        return strategy == null ? null : strategy.thinkingSupport();
+    }
+
+    /** 按供应商标识取思考档表达力（供 /api/model/providers 枚举用）；未接入返回 null */
+    public ThinkingSupport thinkingSupportOf(String provider) {
+        ModelProviderStrategy strategy = strategies.get(provider);
+        return strategy == null ? null : strategy.thinkingSupport();
+    }
+
+    private ModelProviderStrategy strategyOf(String modelId) {
+        if (modelId == null) {
+            return null;
+        }
+        int idx = modelId.indexOf(':');
+        return idx <= 0 ? null : strategies.get(modelId.substring(0, idx));
     }
 
     public Model resolve(String modelId) {
@@ -66,8 +99,8 @@ public class ModelRegistry {
     }
 
     /**
-     * 解析 Model 实例并缓存；thinking=true 时构建 DashScope 思考模式实例（独立缓存槽）。
-     * openai 供应商无对应 builder 能力，thinking 被忽略。
+     * 解析 Model 实例并缓存；thinking=true 时构建思考模式实例（独立缓存槽）。
+     * 各供应商能否表达这一档见 {@link #thinkingSupport(String)}（SPEC §29.16）。
      */
     public Model resolve(String modelId, boolean thinking) {
         return resolve(modelId, thinking ? Boolean.TRUE : null, null);
@@ -154,61 +187,19 @@ public class ModelRegistry {
         }
         String provider = modelId.substring(0, idx);
         String modelName = modelId.substring(idx + 1);
-        ModelEntryDO entry = modelEntryMapper.selectByModelId(provider, modelName);
-        return switch (provider) {
-            case "dashscope" -> {
-                String apiKey = cred != null && !cred.apiKey().isBlank() ? cred.apiKey() : dashscopeApiKey;
-                if (apiKey.isBlank()) {
-                    throw new BizException("未配置 DASHSCOPE_API_KEY，无法使用 " + modelId);
-                }
-                DashScopeChatModel.Builder builder = DashScopeChatModel.builder()
-                        .apiKey(apiKey)
-                        .modelName(modelName)
-                        .stream(true);
-                // 能力位含 image/video 时显式走 multimodal-generation 端点，不依赖模型名启发式（SPEC §19）
-                Set<String> caps = capabilities(modelId, cred);
-                if (caps.contains("image") || caps.contains("video")) {
-                    builder.endpointType(EndpointType.MULTIMODAL);
-                }
-                // Agent 级思考模式开关：模型层 enableThinking（GenerateOptions 无此开关）；
-                // 三态透传，FALSE 显式关闭混合思考模型的服务端默认思考
-                if (thinking != null) {
-                    builder.enableThinking(thinking);
-                }
-                yield builder.build();
-            }
-            case "openai" -> {
-                String apiKey = cred != null && !cred.apiKey().isBlank() ? cred.apiKey() : openaiApiKey;
-                if (apiKey.isBlank()) {
-                    throw new BizException("未配置 OPENAI_API_KEY，无法使用 " + modelId);
-                }
-                if (Boolean.TRUE.equals(thinking)) {
-                    // OpenAIChatModel.Builder 无 enableThinking 能力，忽略 Agent 级思考模式开关
-                    log.warn("openai 供应商不支持思考模式开关，已忽略 modelId={}", modelId);
-                }
-                OpenAIChatModel.Builder builder = OpenAIChatModel.builder()
-                        .apiKey(apiKey)
-                        .modelName(modelName)
-                        .stream(true);
-                // baseUrl 优先级：Agent 自带网关 > 入口配置的 baseUrl > 环境变量 OPENAI_BASE_URL
-                String baseUrl = firstNonBlank(cred == null ? null : cred.baseUrl(),
-                        entry == null ? null : entry.getBaseUrl(), openaiBaseUrl);
-                if (!baseUrl.isBlank()) {
-                    builder.baseUrl(baseUrl);
-                }
-                yield builder.build();
-            }
-            default -> throw new BizException("不支持的模型供应商：" + provider);
-        };
-    }
-
-    private static String firstNonBlank(String... values) {
-        for (String v : values) {
-            if (v != null && !v.isBlank()) {
-                return v;
-            }
+        ModelProviderStrategy strategy = strategies.get(provider);
+        if (strategy == null) {
+            throw new BizException("不支持的模型供应商：" + provider);
         }
-        return "";
+        ModelEntryDO entry = modelEntryMapper.selectByModelId(provider, modelName);
+        // baseUrl 定序：Agent 自带网关 > 入口配置的 baseUrl；再往下的环境变量 / SDK 默认
+        // 由各策略自己回落（SPEC §29.16），本类不再持有供应商专属的配置项
+        String baseUrl = ModelProviderStrategy.notBlank(cred == null ? null : cred.baseUrl())
+                ? cred.baseUrl()
+                : (entry == null ? null : entry.getBaseUrl());
+        return strategy.create(new ModelProviderStrategy.Spec(
+                modelId, modelName, cred == null ? null : cred.apiKey(), baseUrl,
+                thinking, capabilities(modelId, cred)));
     }
 
     /**

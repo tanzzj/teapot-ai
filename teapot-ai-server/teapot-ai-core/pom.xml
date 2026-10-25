@@ -25,7 +25,7 @@
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-harness</artifactId>
         </dependency>
-        <!-- 模型接入：一期 DashScope + OpenAI 双供应商 -->
+        <!-- 模型接入：六供应商（SPEC §29.16），每家一个 ModelProviderStrategy 实现 -->
         <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-model-dashscope</artifactId>
@@ -33,6 +33,22 @@
         <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-model-openai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-openai-official</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-anthropic</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-gemini</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-ollama</artifactId>
         </dependency>
         <!-- MySQL 会话状态存储（MysqlAgentStateStore / JdbcStore，Redis 禁用时的降级后端） -->
         <dependency>

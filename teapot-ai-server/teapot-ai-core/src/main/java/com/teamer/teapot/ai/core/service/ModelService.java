@@ -8,6 +8,7 @@ import com.teamer.teapot.ai.core.config.TeapotAiProperties;
 import com.teamer.teapot.ai.core.dao.ModelEntryMapper;
 import com.teamer.teapot.ai.core.model.ModelEntryDO;
 import com.teamer.teapot.ai.core.model.ModelWorkspaceGrantDO;
+import com.teamer.teapot.ai.core.model.provider.ThinkingSupport;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import com.teamer.teapot.ai.rbac.model.TeapotUser;
 import lombok.extern.slf4j.Slf4j;
@@ -257,6 +258,24 @@ public class ModelService {
      * 校验模型是否开放给该空间桶（SPEC §28.11，deny-by-default）：
      * 未登记或既未授权该桶也未授权全局 0 桶，即拒绝。Agent 建/改时调用（白名单在调用方放行）。
      */
+    /**
+     * 已接入的模型供应商（SPEC §29.16）：由 {@link ModelRegistry} 的策略 Bean 汇总，
+     * 是 Agent 自带模型 provider 白名单的唯一来源，界面下拉也从这里取。
+     */
+    public Set<String> providers() {
+        return modelRegistry.providers();
+    }
+
+    /** 某 modelId 所属供应商的思考档表达力；供应商未接入时返回 null */
+    public ThinkingSupport thinkingSupport(String modelId) {
+        return modelRegistry.thinkingSupport(modelId);
+    }
+
+    /** 按供应商标识取思考档表达力；未接入时返回 null */
+    public ThinkingSupport thinkingSupportOf(String provider) {
+        return modelRegistry.thinkingSupportOf(provider);
+    }
+
     public void assertOpenToWorkspace(String modelId, long bucket) {
         if (modelId == null || modelId.isBlank()) {
             throw new BizException("模型不能为空");

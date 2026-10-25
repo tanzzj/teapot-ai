@@ -14,9 +14,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * 模型入口（SPEC §6.4 修订：界面配置化）。
@@ -36,6 +38,20 @@ public class ModelController {
     @GetMapping("/presets")
     public Result<List<String>> presets(@RequestParam(required = false) Long workspaceId) {
         return Result.ok(modelService.listEnabledModelIds(workspaceId));
+    }
+
+    /**
+     * 已接入的供应商及其思考档表达力（SPEC §29.16）：界面 provider 下拉与「默认/开启/关闭」
+     * 禁用联动的数据源，与后端保存校验同源（策略 Bean 清单）。
+     */
+    @GetMapping("/providers")
+    public Result<List<Map<String, Object>>> providers() {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (String provider : new TreeSet<>(modelService.providers())) {
+            list.add(Map.of("provider", provider,
+                    "thinkingSupport", modelService.thinkingSupportOf(provider).name()));
+        }
+        return Result.ok(list);
     }
 
     /** 启用入口的能力位（SPEC §19：前端多模态 gating，任意登录用户可读） */

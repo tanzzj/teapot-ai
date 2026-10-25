@@ -21,6 +21,17 @@ export function modelList() {
   return unwrap<ModelEntry[]>(http.get<Result<ModelEntry[]>>('/api/model/list'));
 }
 
+/** 已接入供应商及其思考档表达力（SPEC §29.16）：TRISTATE=可开可关、ON_ONLY=只能显式开、NONE=无通道 */
+export interface ModelProviderMeta {
+  provider: string;
+  thinkingSupport: 'TRISTATE' | 'ON_ONLY' | 'NONE';
+}
+
+/** 供应商清单（后端策略 Bean 汇总，界面 provider 下拉与思考档联动的唯一数据源） */
+export function modelProviders() {
+  return unwrap<ModelProviderMeta[]>(http.get<Result<ModelProviderMeta[]>>('/api/model/providers'));
+}
+
 /** 供应商在售模型清单（admin；目前仅 dashscope 实现，作模型名下拉数据源） */
 export function modelVendorModels(provider: string) {
   return unwrap<string[]>(http.get<Result<string[]>>(`/api/model/vendor-models/${provider}`));

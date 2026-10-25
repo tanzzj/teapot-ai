@@ -63,6 +63,26 @@
             </dependency>
             <dependency>
                 <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-model-openai-official</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-model-anthropic</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-model-gemini</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-model-ollama</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
                 <artifactId>agentscope-extensions-mysql</artifactId>
                 <version>${agentscope.version}</version>
             </dependency>

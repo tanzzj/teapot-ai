@@ -6,9 +6,11 @@ import {
   modelCreate,
   modelDelete,
   modelList,
+  modelProviders,
   modelUpdate,
   modelVendorModels,
   type ModelEntry,
+  type ModelProviderMeta,
 } from '../api/model';
 import { workspaceAll } from '../api/workspace';
 import type { Workspace } from '../types';
@@ -18,10 +20,19 @@ import { ResponsiveModal } from '../components/ResponsiveModal';
 /** 全局空间桶（SPEC §28.11）：模型开放到 0 = 全部空间（含个人空间）可用 */
 const GLOBAL_WS = 0;
 
-const PROVIDER_OPTIONS = [
-  { label: 'DashScope（通义千问系）', value: 'dashscope' },
-  { label: 'OpenAI / 兼容端点', value: 'openai' },
-];
+/**
+ * 供应商展示名（SPEC §29.16）：清单本身来自 /api/model/providers（后端策略 Bean 汇总），
+ * 这里只补中文说明；接口异常时回落到这份静态名单，保证表单仍可用。
+ */
+const PROVIDER_LABELS: Record<string, string> = {
+  dashscope: 'DashScope（通义千问系）',
+  openai: 'OpenAI / 兼容端点',
+  'openai-official': 'OpenAI 官方 Responses API',
+  anthropic: 'Anthropic（Claude）',
+  gemini: 'Google Gemini',
+  ollama: 'Ollama（本地推理，无需密钥）',
+};
+const PROVIDER_FALLBACK = Object.keys(PROVIDER_LABELS);
 
 // 多模态能力位（SPEC §19）
 const CAPABILITY_OPTIONS = [
@@ -39,6 +50,10 @@ export default function Models() {
   const [editForm] = Form.useForm();
   /** DashScope 在售模型清单（模型名下拉数据源；拉取失败降级为手输） */
   const [vendorModels, setVendorModels] = useState<string[]>([]);
+  /** 已接入供应商（SPEC §29.16）：拉不到时回落静态名单 */
+  const [providerMeta, setProviderMeta] = useState<ModelProviderMeta[]>([]);
+  const providerOptions = (providerMeta.length ? providerMeta.map((p) => p.provider) : PROVIDER_FALLBACK)
+    .map((provider) => ({ label: PROVIDER_LABELS[provider] ?? provider, value: provider }));
   const [vendorLoading, setVendorLoading] = useState(false);
   /** 团队空间清单（模型开放范围数据源，SPEC §28.11） */
   const [teamSpaces, setTeamSpaces] = useState<Workspace[]>([]);
@@ -76,6 +91,10 @@ export default function Models() {
     workspaceAll()
       .then(setTeamSpaces)
       .catch(() => setTeamSpaces([]));
+    // 已接入供应商清单（后端策略 Bean）；失败静默回落静态名单
+    modelProviders()
+      .then(setProviderMeta)
+      .catch(() => setProviderMeta([]));
   }, [load]);
 
   const onCreate = async () => {
@@ -252,7 +271,7 @@ export default function Models() {
       >
         <Form form={createForm} layout="vertical" preserve={false} initialValues={{ provider: 'dashscope', workspaceIds: [GLOBAL_WS] }}>
           <Form.Item name="provider" label="供应商" rules={[{ required: true }]}>
-            <Select options={PROVIDER_OPTIONS} />
+            <Select options={providerOptions} />
           </Form.Item>
           <Form.Item
             noStyle
@@ -325,7 +344,7 @@ export default function Models() {
       >
         <Form form={editForm} layout="vertical" preserve={false}>
           <Form.Item name="provider" label="供应商" rules={[{ required: true }]}>
-            <Select options={PROVIDER_OPTIONS} />
+            <Select options={providerOptions} />
           </Form.Item>
           <Form.Item
             noStyle
