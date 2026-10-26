@@ -245,8 +245,8 @@ export default function AgentDetailPage() {
   const [loadedFeature, setLoadedFeature] = useState<Record<string, unknown>>({});
   /** feature 驱动中间件清单（SPEC §29.23）：后端内省配置类产出的 schema + 本 Agent 已存配置 */
   const [mwViews, setMwViews] = useState<MiddlewareSchemaView[]>([]);
-  /** 中间件启用位（不进表单值：开关是「要不要写这个命名空间」，不是配置字段） */
-  const [mwOn, setMwOn] = useState<Record<string, boolean>>({});
+  /** 中间件装配位（SPEC §29.25）：只有点「装配中间件」挑中的才出现在界面并写进 feature */
+  const [mwAttached, setMwAttached] = useState<Record<string, boolean>>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
   /** 新建态：所属空间下拉与空间作用域的模型清单（SPEC §28.11 与后端保存闸门同源） */
   const { workspaces, activeId, loaded: wsLoaded, load: loadWorkspaces } = useWorkspaceStore();
@@ -596,7 +596,7 @@ export default function AgentDetailPage() {
       // feature 驱动中间件回显（SPEC §29.23）：开关位由「有没有写这个命名空间」派生
       setMwViews(mwSchemas);
       const mwSeed = seedMiddleware(mwSchemas);
-      setMwOn(mwSeed.on);
+      setMwAttached(mwSeed.attached);
       form.setFieldsValue({
         mw: mwSeed.values,
         name: d.agent.name,
@@ -910,7 +910,7 @@ export default function AgentDetailPage() {
     }
     if (mw !== undefined) {
       // feature 驱动中间件（SPEC §29.23）：关 = 删命名空间，开 = 只写非空字段，数组形态原样保留
-      applyMiddlewareFeature(feature, mwViews, mw, mwOn);
+      applyMiddlewareFeature(feature, mwViews, mw, mwAttached);
     }
     if (memory !== undefined) {
       // enabled=false 时仅提交 {enabled:false}，落盘策略无意义（SPEC §25）
@@ -2200,8 +2200,9 @@ export default function AgentDetailPage() {
               <MiddlewareConfigSection
                 form={form}
                 views={mwViews}
-                on={mwOn}
-                onToggle={(key, checked) => setMwOn((s) => ({ ...s, [key]: checked }))}
+                attached={mwAttached}
+                onAdd={(key) => setMwAttached((s) => ({ ...s, [key]: true }))}
+                onRemove={(key) => setMwAttached((s) => ({ ...s, [key]: false }))}
               />
             )}
 

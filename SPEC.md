@@ -2794,7 +2794,7 @@ teapot 现有 13 个中间件全是「装配现场 new 一个、参数从 featur
 - **可见性与装配解耦**。`forFrontendDisplay()=false` → 不进 schema 出参但照常装配；`appliedAgents()` 非空 → 只对这些 agentKey 出现在 schema/配置查询里，装配仍以 `accept()` 为准（默认口径 = 命名空间存在且非空）。
 - **接口**：`GET /api/agent/middleware-schema?agentKey=`（admin/developer，viewer 无）→ key、featureKey、description、array、fields、该 Agent 已存的 config 原样回显、以及 `configError`（存得下但跑不起来的配置要在界面上说出来）。
 - **保存校验**接在 `AgentService.validateFeature` 末尾：feature 里出现且平台认识的 `middleware_*` 必须能解析，否则 `BizException("中间件 X 的配置非法：…")`。**没有对应 Bean 的命名空间不拒** —— Bean 下线不该让存量 Agent 存不了盘（与 teapot「未知命名空间原样保留」同口径）。
-- **前端入口**：Agent 详情页新增 `Middleware` 分区（`teapot-ai-web/src/components/MiddlewareConfig.tsx`，三段导出：`seedMiddleware` 回显 / `applyMiddlewareFeature` 落库 / `MiddlewareConfigSection` 渲染）。一个中间件一张卡：key + `description()` + 启用开关；开关开了才按 `fields` 逐个渲染控件（STRING→Input、INTEGER/NUMBER→InputNumber、BOOLEAN→Switch、ENUM→Select(options)、STRING_MAP→`key=value` 多行框，复用 MCP 那对 `mapToLines/linesToMap`）。`required` 进 `rules`，`defaultValue` 既进 placeholder 又作回显初值 —— 界面摆的值与后端解析到的值同源。关 = 从 feature 里删掉整个命名空间（后端据此判「未配置」），开 = 只写非空字段；`array=true` 的只说明不编辑（保存靠已加载的原始命名空间原样带走）；`configError` 用 Alert 直说「已存配置不会生效」并带原因；清单为空显示「平台暂未提供可配置的中间件」。开关位是 React state 而非表单值 —— 它表达「要不要写这个命名空间」，不是配置字段，混进表单会多出一个假字段。
+- **前端入口**：Agent 详情页新增 `Middleware` 分区（`teapot-ai-web/src/components/MiddlewareConfig.tsx`，三段导出：`seedMiddleware` 回显 / `applyMiddlewareFeature` 落库 / `MiddlewareConfigSection` 渲染）。**装配制**（见 §29.26）：一开始是空的，点「装配中间件」从平台可选项下拉里挑，挑中的才出现配置卡，卡片右上角可移除。一张卡 = key + `description()` + 按 `fields` 逐个渲染的控件（STRING→Input、INTEGER/NUMBER→InputNumber、BOOLEAN→Switch、ENUM→Select(options)、STRING_MAP→`key=value` 多行框，复用 MCP 那对 `mapToLines/linesToMap`）。`required` 进 `rules`，`defaultValue` 既进 placeholder 又作回显初值 —— 界面摆的值与后端解析到的值同源。没装配的中间件保存时从 feature 里删掉命名空间（后端据此判「未配置」），装配的只写非空字段；`array=true` 的既不给装配也只说明不编辑（存量数组配置保存时原样带走）；`configError` 用 Alert 直说「已存配置不会生效」并带原因。装配位是 React state 而非表单值 —— 它表达「要不要写这个命名空间」，不是配置字段，混进表单会多出一个假字段。
 
 解析口径的几个确定语义（探针实测）：`{}` / `[]` / 空白字符串 = 未配置（不触发必填校验、不装配）；未声明字段一律拒（Jackson 默认语义，防拼错的键静默丢失）；`options` 对 String 字段是**硬约束**，补在解析侧（Jackson 不管 String 的取值范围，枚举字段才由 Jackson 兜住）；`defaultValue` 只回填「解析后为 null」的字段，**基本类型不回填**（`boolean enabled` 带 `defaultValue="true"` 仍是 false —— 要默认值就用包装类型）。
 
@@ -2815,6 +2815,47 @@ teapot 现有 13 个中间件全是「装配现场 new 一个、参数从 featur
 - **立规**：注释、javadoc、SPEC 里写技术理由，不写「参考 X」；确实依赖某个包就用包名。参考实现的名字只出现在提交说明与 PR 描述里（改动要提上游时另说）。
 
 **验证**：全仓（排除 node_modules/target/dist）大小写不敏感扫描这两个被点名的产品名，前端源码与注释零命中（`teapot-ai-server/` 原本就零命中）；`spark` 的剩余命中逐条核对，全部是上述图标组件名、CSS 选择器或依赖包名。`npm run build` 通过。
+
+### §29.25 三个 feature 驱动中间件：限速 / 动态提示词 / 模型回退（2026-10-26）
+
+§29.23 那套机制的第一批使用者，也是「新增可配中间件只加一个 Bean」的第一次实证 —— **前端零改动**：Agent 详情页的 `Middleware` 分区自动长出三张卡，字段、默认值、必填、下拉候选全部由配置类内省出来。落点 `core/middleware/feature/impl/`。
+
+框架文档给了四种中间件形态（计费 / 限速 / 动态 system prompt / 模型回退），这里做后三种。**计费没做**：teapot 没有账单或配额落点，做成"只往日志里写一行 token 数"的中间件对用户没有可操作价值，等有计量去处再补。
+
+| 中间件 | 命名空间 | 配置字段 | 挂点 / 顺序 |
+| --- | --- | --- | --- |
+| `RateLimitMiddleware` | `middleware_rateLimit` | `minIntervalMs`（INTEGER，默认 0 = 不限速） | `ON_MODEL_CALL` / 默认 1 |
+| `DynamicPromptMiddleware` | `middleware_dynamicPrompt` | `withDate`（BOOLEAN，默认 true）、`datePattern`（默认 `yyyy-MM-dd HH:mm EEEE`）、`timeZone`（默认 `Asia/Shanghai`）、`appendText`（可选） | `ON_SYSTEM_PROMPT` |
+| `ModelFallbackMiddleware` | `middleware_modelFallback` | `fallbackModelId`（必填）、`errorContains`（逗号分隔关键字，空 = 任何错误都回退）、`backoffMs`（默认 0） | `ON_MODEL_CALL` / **5** |
+
+各自的语义边界：
+
+- **限速按 agentKey 分桶**记在单例的 `ConcurrentHashMap` 里（键数量与 Agent 数同阶，不随会话增长），语义是"别把这一个 Agent 的请求堆到供应商脸上"，跨会话共享同一间隔。**认不出 Agent（拿不到 name）就不限速** —— 把无名流量挤进同一个"未知桶"会让互不相干的调用互相拖住（探针第一版就是这么暴露的）。等待用 `Mono.delay(...).thenMany(next)`，时刻在真正订阅下游时才落，等待期间到达的调用排到更后；是排队不是拒绝，所以间隔填得过大只会让对话变慢，不会报错。
+- **动态提示词**在 Agent 自己的 `sysPrompt` 列**之外**追加（不动那一列，就不污染用户手写的那份）：`## 当前时间` + 可选 `## 补充说明`。时间格式与时区是用户手打的字符串，`DateTimeFormatter`/`ZoneId` 解析不了时**记警告并回落默认**（`yyyy-MM-dd HH:mm` / `Asia/Shanghai`），不让一个写歪的格式把整轮对话打死。`withDate` 用包装类型 `Boolean` 才吃得到默认值（§29.23：基本类型不回填）。
+- **模型回退**只重试一次，回退那次再失败就原样抛给调用方；触发条件按**整条异常链文本的小写包含**匹配关键字（`429,throttling,timeout` 这类），不命中就不换模型 —— 免得把"参数非法"这种确定性错误拖成一次注定失败的重复调用。回退目标解析不出来（模型没登记 / 供应商没密钥）时**不掩盖原始错误**，照样抛原异常。`order()=5` 刻意比限速靠外，回退的那一次同样要过限速，不会因为是重试就绕过间隔。回退目标走系统模型入口（`resolve(id, null, null)`：不带 Agent 自带凭证、不下发思考档），所以**Agent 自带模型暂不能作为回退目标**。
+
+**验证**：`mvn -o -pl teapot-ai-core -am package -DskipTests` 通过。一次性探针直跑真注册表 + 真桥接实例 48 例全过（假 `Model` + 覆写 `resolve` 的 `ModelRegistry` 替身 + 假 `Agent`）：三张 schema 的类型/默认值/必填、accept 门控（未配置/空对象/单个/三个全配）、保存校验三种拒与放、**限速真的等**（第二次调用实测 240ms、间隔 0 不等待、别的 Agent 0ms 不受影响、无 Agent 身份不排队）、动态提示词的拼接与"关掉时间注入"、非法格式/时区回落、回退的六条路径（命中换模型且成功、不命中只发一次且原样抛、大小写不敏感、目标解析失败不掩盖、backoff 在失败路径才等、配置非法则本次不生效）、`order()`/`activePoints()` 由本体决定。探针目录跑完已删。
+
+**踩坑**：① 限速那条"新 Agent 首调不被拖住"的断言第一版假失败 —— 我把一次**合法该被限**的有名调用混进了同一个计时窗口（实测 198ms），计时断言要一次只测一件事；② 假 `Agent` 要补齐 `CallableAgent`/`StreamableAgent`/`ObservableAgent` 共 9 个抽象方法，编译器逐个报出来才凑齐。
+
+**未做**：真机跑一轮带限速/回退的对话（要登录态改 Agent 配置）；`middleware_*` 三张卡的实际填写与保存回路（同上）。
+
+### §29.26 Middleware 分区改装配制（2026-10-27 用户手机截图挑出）
+
+v80 上线后用户看手机截图第一句就是「不应该是这样，应该一开始啥都没有，然后点击 + 之后下拉选取 middleware 再装配，现在这个 mw 一多很难看」。§29.25 那版把平台认识的每个中间件都摆成一张常驻卡（各自带启用开关），三个还行，十几个就是一条滚不完的设置清单 —— 而且"这个 Agent 用了哪些中间件"这件事反而看不出来。
+
+改成**装配制**，与 Skill 绑定、自定义模型同一套交互：
+
+- 分区顶部一个「装配中间件」下拉按钮（`Dropdown` + `menu.items`，同 `AddSkill` 的写法），只列**尚未装配**的可选项；已装配的从菜单里消失。
+- 空态一句「尚未装配中间件」+ `Empty`，不再摆一排关着的卡。
+- 装配出来的卡片右上角是移除按钮（`Popconfirm`「移除该中间件？保存后这个 Agent 不再装配它」），移除即从 feature 里删掉那个命名空间。
+- 卡片里直接是配置项（默认值已回填进表单），不再有"开关开了才显字段"这一层 —— 装配本身就是那个开关。
+- 数组形态的配置不给进装配菜单（界面填不了就不给入口，别装了再告诉用户改不了），但存量数组配置仍照常显示一张说明卡，保存时原样带走。
+- 边界：装配后**所有字段都留空且该中间件没有默认值**时，落库会是空对象 = 后端判「未配置」，卡片会在下次进入时消失 —— 这种情况在卡底出一行「一项没填且没有默认值 —— 保存后这张卡不会留下」说清楚。当前三个都有默认值，走不到这条。
+
+**验证**：`npm run build` 通过（入口 `index-BSlqTEJF.js`）。一次性页面挂真 `MiddlewareConfigSection` + 与接口同形状的 fixture 实测整条流程：初始只显两张已装配卡（含存量数组说明卡）→ 打开下拉只列 `rateLimit`/`modelFallback` → 装配 `rateLimit` 后卡片出现、下拉里不再出现它、保存映射多出 `middleware_rateLimit:{minIntervalMs:0}` 且 `runtime`/数组命名空间/另一张卡的配置都没被动 → 点移除出确认框 → 确认后卡片消失、`middleware_rateLimit` 从映射里去掉。探针文件已删。
+
+**未做**：登录态下从真详情页装配一个中间件、保存、再进对话页看运行效果（要登录态）。
 
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
