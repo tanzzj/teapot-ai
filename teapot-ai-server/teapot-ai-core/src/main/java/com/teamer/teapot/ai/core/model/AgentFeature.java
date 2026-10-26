@@ -75,6 +75,8 @@ public class AgentFeature {
     private static final Set<String> MODEL_CAPABILITIES = Set.of("image", "video");
     /** 一个 Agent 只允许一个自带模型（存储仍是数组，便于按 modelId 查凭证与后续演进） */
     private static final int CUSTOM_MODEL_MAX = 1;
+    /** 压缩尾部保留方式（SPEC §29.20）：dynamic 按窗口预算 / messages 按条数 / tokens 按固定预算 */
+    private static final Set<String> COMPACTION_KEEP_MODES = Set.of("dynamic", "messages", "tokens");
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
@@ -366,6 +368,7 @@ public class AgentFeature {
         validateA2ui();
         validateGuard();
         validateCustomModels();
+        validateCompaction();
         Sandbox sb = getSandbox();
         if (sb == null) {
             return;
@@ -624,6 +627,41 @@ public class AgentFeature {
         }
     }
 
+    /**
+     * compaction 命名空间校验（SPEC §29.20）：尾部保留方式枚举，tokens 模式必须给正预算。
+     * 裁剪/落盘只校验"数值若填则必须为正"，阈值本身交给框架默认。
+     */
+    private void validateCompaction() {
+        Compaction c = getCompaction();
+        if (c == null) {
+            return;
+        }
+        if (!isBlank(c.getKeepMode()) && !COMPACTION_KEEP_MODES.contains(c.getKeepMode())) {
+            // 文案固定顺序：Set.of 的迭代顺序每次 JVM 启动都可能不同，不能直接进用户可见报错
+            throw new BizException("compaction.keepMode 非法，可选值：dynamic / messages / tokens");
+        }
+        if ("tokens".equals(c.getKeepMode()) && (c.getKeepTokens() == null || c.getKeepTokens() <= 0)) {
+            throw new BizException("keepMode=tokens 时必须指定正的 keepTokens");
+        }
+        Compaction.Prune prune = c.getPrune();
+        if (prune != null) {
+            requirePositive("compaction.prune.protectTokens", prune.getProtectTokens());
+            requirePositive("compaction.prune.minimumTokens", prune.getMinimumTokens());
+            requirePositive("compaction.prune.maxOutputChars", prune.getMaxOutputChars());
+        }
+        Compaction.Eviction ev = c.getEviction();
+        if (ev != null) {
+            requirePositive("compaction.eviction.maxResultChars", ev.getMaxResultChars());
+            requirePositive("compaction.eviction.previewChars", ev.getPreviewChars());
+        }
+    }
+
+    private static void requirePositive(String field, Integer value) {
+        if (value != null && value <= 0) {
+            throw new BizException(field + " 必须为正数");
+        }
+    }
+
     /** storage 命名空间结构（SPEC §22.1：图片存储载体按 Agent 选择，非全局） */
     @Data
     public static class Storage {
@@ -677,6 +715,36 @@ public class AgentFeature {
     public static class Compaction {
         /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
         private String modelId;
+        /**
+         * 尾部保留方式（SPEC §29.20）：dynamic（默认）= 按上下文窗口预算留尾部，此时
+         * t_agent.compaction_keep 不参与；messages = 按条数留尾部（keepMessages 生效）；
+         * tokens = 按固定 token 预算留尾部（keepTokens 生效）。
+         * 框架里 keepTokens 三态是 0=条数 / &gt;0=静态预算 / -1=动态，这里换成可读枚举。
+         */
+        private String keepMode;
+        /** keepMode=tokens 时的尾部 token 预算（必须 &gt; 0） */
+        private Integer keepTokens;
+        /** 工具结果聚合裁剪（框架默认开启，enabled=false 才关） */
+        private Prune prune;
+        /** 单条超大工具输出落盘换占位（框架默认开启，阈值 80k 字符） */
+        private Eviction eviction;
+
+        /** 聚合裁剪参数：只保护最近 protectTokens，可裁总量过 minimumTokens 才动手 */
+        @Data
+        public static class Prune {
+            private boolean enabled;
+            private Integer protectTokens;
+            private Integer minimumTokens;
+            private Integer maxOutputChars;
+        }
+
+        /** 单条输出宽度控制：超 maxResultChars 的产物写工作区文件，上下文里换成占位 + readFile 提示 */
+        @Data
+        public static class Eviction {
+            private boolean enabled;
+            private Integer maxResultChars;
+            private Integer previewChars;
+        }
     }
 
     /**

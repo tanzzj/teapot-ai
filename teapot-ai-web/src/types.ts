@@ -241,10 +241,18 @@ export interface AgentSessionTitleConfig {
   modelId?: string;
 }
 
-/** feature.compaction 结构：压缩摘要模型覆盖（trigger/keep 仍在 AgentDO 列） */
+/** feature.compaction 结构（SPEC §25 / §29.20）：摘要模型 + 尾部保留方式 + 裁剪与落盘开关 */
 export interface AgentCompactionConfig {
   /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
   modelId?: string;
+  /** 尾部保留方式：dynamic=按上下文窗口预算（框架默认，此时 compactionKeep 不起作用）/ messages / tokens */
+  keepMode?: 'dynamic' | 'messages' | 'tokens';
+  /** keepMode=tokens 时的尾部 token 预算 */
+  keepTokens?: number;
+  /** 工具结果聚合裁剪（框架默认开启；界面只在关掉时下发 enabled:false） */
+  prune?: { enabled?: boolean };
+  /** 单条超大工具输出落盘（框架默认 80k 字符触发） */
+  eviction?: { enabled?: boolean };
 }
 
 /** feature.mcp 结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置，不依赖系统配置） */

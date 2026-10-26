@@ -343,6 +343,12 @@ export default function AgentDetailPage() {
   const mcpModalMode = Form.useWatch('mode', mcpModalForm);
   /** 上下文压缩显式开关（映射 compactionTrigger：关 = -1，SPEC §25） */
   const compactionEnabled = Form.useWatch('compactionEnabled', form);
+  /** 尾部保留方式（SPEC §29.20）：决定"压缩保留轮数"还是"尾部 token 预算"出现在界面上 */
+  const compactionKeepMode = Form.useWatch(['compaction', 'keepMode'], form) as
+    | 'dynamic'
+    | 'messages'
+    | 'tokens'
+    | undefined;
   /** 记忆落盘策略（throttled 时展示节流间隔，SPEC §25） */
   const memFlushTrigger = Form.useWatch(['memory', 'flushTrigger'], form);
   /** 生图/生视频开关：开启后才展示六个能力位的模型选择器（SPEC-media-gen §4.8） */
@@ -638,6 +644,11 @@ export default function AgentDetailPage() {
         },
         compaction: {
           modelId: comp.modelId,
+          // 未配置 = 框架默认（动态窗口预算）；裁剪与落盘默认开启（SPEC §29.20）
+          keepMode: comp.keepMode ?? 'dynamic',
+          keepTokens: comp.keepTokens,
+          prune: { enabled: comp.prune?.enabled !== false },
+          eviction: { enabled: comp.eviction?.enabled !== false },
         },
         // a2ui 缺省不启用；持久化未配置时回显 SDK 默认 true（与后端回落一致）
         a2ui: {
@@ -874,9 +885,26 @@ export default function AgentDetailPage() {
       feature.sessionTitle = sessionTitle.enabled !== false ? sessionTitle : { enabled: false };
     }
     if (compactionFeature !== undefined) {
-      // compaction 命名空间仅 modelId；有值时提交，空值时清除
+      // compaction 命名空间（§29.20）：只下发"与框架默认不同"的部分 ——
+      // 裁剪/落盘的"开"等价于不下发，只有显式关掉才写 {enabled:false}
+      const cp: Record<string, unknown> = {};
       if (compactionFeature.modelId) {
-        feature.compaction = compactionFeature;
+        cp.modelId = compactionFeature.modelId;
+      }
+      if (compactionFeature.keepMode && compactionFeature.keepMode !== 'dynamic') {
+        cp.keepMode = compactionFeature.keepMode;
+        if (compactionFeature.keepMode === 'tokens' && compactionFeature.keepTokens) {
+          cp.keepTokens = compactionFeature.keepTokens;
+        }
+      }
+      if (compactionFeature.prune?.enabled === false) {
+        cp.prune = { enabled: false };
+      }
+      if (compactionFeature.eviction?.enabled === false) {
+        cp.eviction = { enabled: false };
+      }
+      if (Object.keys(cp).length > 0) {
+        feature.compaction = cp;
       } else {
         delete feature.compaction;
       }
@@ -1541,14 +1569,39 @@ export default function AgentDetailPage() {
                       </Col>
                       <Col xs={24} sm={12}>
                         <Form.Item
-                          name="compactionKeep"
-                          label="压缩保留轮数"
-                          tooltip="压缩后保留的最近轮数原文，更早消息被摘要替代"
+                          name={['compaction', 'keepMode']}
+                          label="尾部保留"
+                          tooltip="动态=按模型上下文窗口预算保留最近尾部（框架默认，此时「压缩保留轮数」不参与）；按条数=固定保留 N 条；按 token=固定保留 N tokens"
                         >
-                          <InputNumber min={1} max={100} style={{ width: '100%' }} />
+                          <Select
+                            options={[
+                              { value: 'dynamic', label: '动态（窗口预算）' },
+                              { value: 'messages', label: '按条数' },
+                              { value: 'tokens', label: '按 token' },
+                            ]}
+                          />
                         </Form.Item>
                       </Col>
                     </Row>
+                    {compactionKeepMode === 'messages' && (
+                      <Form.Item
+                        name="compactionKeep"
+                        label="压缩保留轮数"
+                        tooltip="压缩后保留的最近轮数原文，更早消息被摘要替代"
+                      >
+                        <InputNumber min={1} max={100} style={{ width: '100%' }} />
+                      </Form.Item>
+                    )}
+                    {compactionKeepMode === 'tokens' && (
+                      <Form.Item
+                        name={['compaction', 'keepTokens']}
+                        label="尾部 token 预算"
+                        tooltip="从最近消息往前扫到该预算耗尽为止"
+                        rules={[{ required: true, message: '按 token 保留时必须填写' }]}
+                      >
+                        <InputNumber min={256} max={200000} step={256} style={{ width: '100%' }} />
+                      </Form.Item>
+                    )}
                     <Form.Item
                       name={['compaction', 'modelId']}
                       label="压缩摘要模型"
@@ -1560,6 +1613,28 @@ export default function AgentDetailPage() {
                         options={modelOptions}
                       />
                     </Form.Item>
+                    <Row gutter={16}>
+                      <Col xs={24} sm={12}>
+                        <Form.Item
+                          name={['compaction', 'prune', 'enabled']}
+                          label="工具结果裁剪"
+                          valuePropName="checked"
+                          tooltip="把较早的工具输出聚合裁剪成 head+tail 预览（框架默认：保护最近 40k tokens、可裁总量超 20k 才动手、每条留 2k 字符）"
+                        >
+                          <Switch />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} sm={12}>
+                        <Form.Item
+                          name={['compaction', 'eviction', 'enabled']}
+                          label="超大输出落盘"
+                          valuePropName="checked"
+                          tooltip="单条工具输出超阈值（默认 80k 字符）时写入沙箱工作区文件，上下文里换成占位 + 用 readFile 取全文"
+                        >
+                          <Switch />
+                        </Form.Item>
+                      </Col>
+                    </Row>
                     </>
                   )}
                   <Row gutter={16}>

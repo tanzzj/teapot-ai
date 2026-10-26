@@ -2736,6 +2736,23 @@ AgentScope 有六个模型供应商扩展模块，teapot 的 `ModelRegistry` 只
 
 **验证**：`npm run build` 通过，入口 `index-Bh75sz4R.js`；对产物做字符串对拍 —— 11 条被删文案在 bundle 中全部查无（含「当前共」「支持多条记录」「界面不回显明文」「系统已有」等），4 条应保留文案（「创建后不可修改」「前往系统配置」「请求级开关优先于本配置」「需公开可读」）全部命中。**未做**：真机目视版面（删字后是否有留白/错位需刷新看）。
 
+### §29.20 压缩策略接入：尾部保留方式 + 工具结果裁剪 + 超大输出落盘（2026-10-26）
+
+读 AgentScope 源码发现两件事：
+
+1. **`CompactionConfig.keepTokens` 是三态且默认 `-1`**（`ConversationCompactor.determineCutoffIndex` 只在 `keepTokens > 0` 时走 token 分支，否则走消息数；但 `CompactionMiddleware:247-259` 会先把 `-1` 换算成 `min(keepTokensMax, max(keepTokensMin, 预算 × ratio))` 再喂下去）。也就是说 **teapot 此前只配 `triggerMessages`/`keepMessages`，模型报了上下文窗口时"压缩保留轮数"根本不参与** —— 界面在说谎。
+2. 框架还有两套**默认就开着、会改变模型所见内容**的机制，teapot 从没暴露过：`PruneConfig`（聚合裁剪老的工具输出，默认保护最近 40k tokens / 可裁总量过 20k 才动手 / 每条留 2k 字符预览）与 `ToolResultEvictionConfig`（单条超 80k 字符的输出写进沙箱工作区、上下文换成占位 + 提示 readFile；与压缩正交，一个管历史长度、一个管单条宽度）。
+
+**接入方式**（`feature.compaction` 扩展，无 DDL；`t_agent.compaction_trigger/keep` 两列语义不变）：
+- `keepMode`：`dynamic`（默认 = 现状不变）/ `messages`（映射 `keepTokens=0`，让 `compactionKeep` 真正生效）/ `tokens`（映射 `keepTokens=N`）。界面「尾部保留」三选一下拉，选"按条数"才出现"压缩保留轮数"、选"按 token"才出现"尾部 token 预算"，不再同时摆着两个只有一个起作用的数字框。
+- `prune` / `eviction`：各一个开关。**只下发"与框架默认不同"的部分** —— 开 = 不下发该对象（跟随框架默认），关 = 下发 `{enabled:false}`（分别映射 `builder.prune(null)` 与 `builder.toolResultEviction(null)`，后者 null 即整体关闭）。阈值数值后端支持（`protectTokens`/`minimumTokens`/`maxOutputChars`/`maxResultChars`/`previewChars`）但界面先不摆，避免又铺一堆数字。
+- 校验（`AgentFeature.validateCompaction`）：`keepMode` 枚举、`tokens` 模式必须给正预算、数值型阈值填了就必须为正。报错文案里枚举顺序写死（`Set.of` 的迭代顺序每次 JVM 都可能不同，不能直接进用户可见文本）。
+- 回显：未配置 = `dynamic` + 两个开关都显示"开"，与框架默认一致；保存时 `keepMode=dynamic` 且无其他差异 → 整个命名空间删掉（存量 Agent 的 feature 不会因为打开过一次配置页就变胖）。
+
+**验证**：`mvn -o -pl teapot-ai-core -am package -DskipTests` 通过；`npm run build` 通过，入口 `index-wpNYC5Al.js`。校验规则用一次性 main 直跑真类（classpath = core/common 的 target/classes + 从 app.jar 解出的 `BOOT-INF/lib/*`）13 例全过：历史形态（只 modelId）/dynamic/messages/tokens+正预算/裁剪关闭/阈值合法/空命名空间 → ACCEPT；tokens 缺预算、预算为 0、非法枚举、负阈值、`previewChars=0` → REJECT 且点名原因。跑完的探针与解包目录已删。**未做**：真机跑一轮长会话验证三种尾部保留与两个开关的实际上下文形态。
+
+**风险**：选"按条数"时若单条工具结果极大，10 条也可能顶满窗口 —— 框架有 context overflow 兜底重试（`CompactionMiddleware:146-156` 会以 `triggerMessages(1)/keepMessages(1)/keepTokens(0)` 强制压一次再重试），但那是报错后补救，不是预防。关掉两个默认机制同理会让历史更容易涨到窗口上限。
+
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
 移动端「新建 Agent」弹窗（6 个字段 + 键盘弹起）几乎占满视口，且建完还得再进详情页配模型/提示词，等于同一批字段填两遍。改为**复用详情页当草稿**：

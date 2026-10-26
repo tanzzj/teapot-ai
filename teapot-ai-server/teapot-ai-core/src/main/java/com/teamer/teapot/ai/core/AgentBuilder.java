@@ -61,6 +61,7 @@ import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.local.LocalFilesystem;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
+import io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig;
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
 import io.agentscope.harness.agent.sandbox.snapshot.LocalSnapshotSpec;
 import io.agentscope.harness.agent.sandbox.snapshot.NoopSnapshotSpec;
@@ -227,13 +228,15 @@ public class AgentBuilder {
                 .skillRepositories(repos)
                 .skillFilter(skillFilter);
         // compaction：trigger/keep 任一为 -1 表示关闭压缩，其余走既有配置
+        AgentFeature.Compaction compactionCfg = feature.getCompaction();
         if (trigger < 0 || keep < 0) {
             builder.disableCompaction();
         } else {
-            AgentFeature.Compaction compactionCfg = feature.getCompaction();
             CompactionConfig.Builder ccBuilder = CompactionConfig.builder()
                     .triggerMessages(trigger)
                     .keepMessages(keep);
+            applyKeepMode(ccBuilder, compactionCfg);
+            applyPrune(ccBuilder, compactionCfg);
             if (compactionCfg != null && compactionCfg.getModelId() != null && !compactionCfg.getModelId().isBlank()) {
                 String compactionModelId = compactionCfg.getModelId();
                 ccBuilder.model(modelRegistry.resolve(compactionModelId, false,
@@ -242,6 +245,8 @@ public class AgentBuilder {
             }
             builder.compaction(ccBuilder.build());
         }
+        // 超大工具输出落盘（SPEC §29.20）：与摘要压缩正交（管单条宽度，不管历史长度）
+        applyEviction(builder, compactionCfg);
         applyRuntime(builder, rt);
         // 请求级计划模式覆盖（chat 界面 forwardedProps.planMode，SPEC §25）：
         // 优先于 Agent 配置；null = 未传参，回落 applyRuntime 已设置的值
@@ -382,6 +387,71 @@ public class AgentBuilder {
         // MCP Server 注册（SPEC §MCP）：Agent 级配置，引用系统记录或内联完整配置
         applyMcp(agent, feature.getMcp());
         return agent;
+    }
+
+    /**
+     * 尾部保留方式 → 框架 keepTokens 三态（SPEC §29.20）。框架里 {@code >0}=静态 token 预算、
+     * {@code 0}=按条数、{@code -1}=按窗口动态；不配置时保持框架默认（动态），行为与接入本项之前一致。
+     */
+    private static void applyKeepMode(CompactionConfig.Builder builder, AgentFeature.Compaction c) {
+        if (c == null || c.getKeepMode() == null || c.getKeepMode().isBlank()) {
+            return;
+        }
+        int keepTokens = switch (c.getKeepMode()) {
+            case "messages" -> 0;
+            case "tokens" -> c.getKeepTokens();
+            default -> -1;
+        };
+        builder.keepTokens(keepTokens);
+    }
+
+    /**
+     * 工具结果聚合裁剪（SPEC §29.20）：框架默认开启（保护最近 40k tokens、可裁总量过 20k 才动手、
+     * 每条留 2k 字符预览）。未配置 = 跟随默认；{@code enabled=false} = 传 null 关掉；
+     * 开启态下只覆盖显式填了的阈值。
+     */
+    private static void applyPrune(CompactionConfig.Builder builder, AgentFeature.Compaction c) {
+        AgentFeature.Compaction.Prune p = c == null ? null : c.getPrune();
+        if (p == null) {
+            return;
+        }
+        if (!p.isEnabled()) {
+            builder.prune(null);
+            log.info("工具结果聚合裁剪已关闭");
+            return;
+        }
+        CompactionConfig.PruneConfig.PruneBuilder pb = CompactionConfig.PruneConfig.builder();
+        if (p.getProtectTokens() != null) {
+            pb.protectTokens(p.getProtectTokens());
+        }
+        if (p.getMinimumTokens() != null) {
+            pb.minimumTokens(p.getMinimumTokens());
+        }
+        if (p.getMaxOutputChars() != null) {
+            pb.maxOutputChars(p.getMaxOutputChars());
+        }
+        builder.prune(pb.build());
+    }
+
+    /** 单条超大工具输出落盘（SPEC §29.20）：{@code enabled=false} 走 {@code toolResultEviction(null)} 整体关闭 */
+    private static void applyEviction(HarnessAgent.Builder builder, AgentFeature.Compaction c) {
+        AgentFeature.Compaction.Eviction e = c == null ? null : c.getEviction();
+        if (e == null) {
+            return;
+        }
+        if (!e.isEnabled()) {
+            builder.toolResultEviction(null);
+            log.info("工具输出落盘已关闭");
+            return;
+        }
+        ToolResultEvictionConfig.Builder eb = ToolResultEvictionConfig.builder();
+        if (e.getMaxResultChars() != null) {
+            eb.maxResultChars(e.getMaxResultChars());
+        }
+        if (e.getPreviewChars() != null) {
+            eb.previewChars(e.getPreviewChars());
+        }
+        builder.toolResultEviction(eb.build());
     }
 
     /**
