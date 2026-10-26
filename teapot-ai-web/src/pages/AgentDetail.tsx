@@ -29,6 +29,7 @@ import {
   SparkMultiAgentLine,
   SparkApplicationToolLine,
   SparkGuardrailLine,
+  SparkPluginLine,
   SparkPlusLine,
   SparkDeleteLine,
 } from '@agentscope-ai/icons';
@@ -42,6 +43,7 @@ import {
   deleteMemoryItem,
   mediaModelCatalog,
   memoryItems,
+  middlewareSchema,
   modelPresets,
 } from '../api/agent';
 import type { AgentCreatePayload } from '../api/agent';
@@ -59,6 +61,11 @@ import {
   mapToLines,
 } from '../components/MCPConfigForm';
 import HistoryChatPanel from '../chat/HistoryChatPanel';
+import {
+  MiddlewareConfigSection,
+  applyMiddlewareFeature,
+  seedMiddleware,
+} from '../components/MiddlewareConfig';
 import { uploadAgentAvatar } from '../api/avatar';
 import { skillDelete, skillList } from '../api/skill';
 import { modelProviders } from '../api/model';
@@ -85,13 +92,14 @@ import type {
   MCPRecordName,
   MediaModelCatalogEntry,
   MemoryUserGroup,
+  MiddlewareSchemaView,
   SandboxOptions,
   SandboxRecordName,
   SkillListItem,
   StorageRecordName,
 } from '../types';
 
-type Section = 'profile' | 'basic' | 'tools' | 'a2ui' | 'guard' | 'multiagent' | 'memory' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
+type Section = 'profile' | 'basic' | 'tools' | 'a2ui' | 'guard' | 'multiagent' | 'memory' | 'middleware' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
 
 /** 胶囊菜单展开宽度（移动端悬浮展开层同宽） */
 const MENU_W = 208;
@@ -192,7 +200,7 @@ function Heatmap({ agentKey }: { agentKey: string }) {
 }
 
 /**
- * Agent 详情（Barley 设计语言复刻：左侧胶囊菜单 + 分区内容）。
+ * Agent 详情（左侧胶囊菜单 + 分区内容）。
  * SPEC §12.2：sysPrompt/模型/压缩参数/Skill 绑定。
  * 路由 /agents/new 复用本页作为「新建态」（SPEC §12.2）：只开放 Basic Info 分区，
  * Save 走 create，成功后换成真实 agentKey 继续配置。
@@ -235,6 +243,10 @@ export default function AgentDetailPage() {
   const [mediaCatalog, setMediaCatalog] = useState<MediaModelCatalogEntry[]>([]);
   /** 已加载的原始 feature 命名空间：分区保存时合并，避免单分区覆盖另一分区（§22） */
   const [loadedFeature, setLoadedFeature] = useState<Record<string, unknown>>({});
+  /** feature 驱动中间件清单（SPEC §29.23）：后端内省配置类产出的 schema + 本 Agent 已存配置 */
+  const [mwViews, setMwViews] = useState<MiddlewareSchemaView[]>([]);
+  /** 中间件启用位（不进表单值：开关是「要不要写这个命名空间」，不是配置字段） */
+  const [mwOn, setMwOn] = useState<Record<string, boolean>>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
   /** 新建态：所属空间下拉与空间作用域的模型清单（SPEC §28.11 与后端保存闸门同源） */
   const { workspaces, activeId, loaded: wsLoaded, load: loadWorkspaces } = useWorkspaceStore();
@@ -481,7 +493,7 @@ export default function AgentDetailPage() {
     }
     setLoading(true);
     try {
-      const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog, pm] = await Promise.all([
+      const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog, pm, mwSchemas] = await Promise.all([
         agentDetail(agentKey),
         skillList(),
         sandboxOptions(),
@@ -491,6 +503,7 @@ export default function AgentDetailPage() {
         mcpRegistry().catch(() => [] as MCPRecordName[]),
         mediaModelCatalog().catch(() => [] as MediaModelCatalogEntry[]),
         modelProviders().catch(() => [] as ModelProviderMeta[]),
+        middlewareSchema(agentKey).catch(() => [] as MiddlewareSchemaView[]),
       ]);
       setProviderMeta(pm);
       // 系统模型按 Agent 所属空间过滤（SPEC §28.11），与后端保存闸门同源；
@@ -580,7 +593,12 @@ export default function AgentDetailPage() {
         }
       }
       setLoadedFeature(parsedFeature);
+      // feature 驱动中间件回显（SPEC §29.23）：开关位由「有没有写这个命名空间」派生
+      setMwViews(mwSchemas);
+      const mwSeed = seedMiddleware(mwSchemas);
+      setMwOn(mwSeed.on);
       form.setFieldsValue({
+        mw: mwSeed.values,
         name: d.agent.name,
         description: d.agent.description,
         modelId: d.agent.modelId,
@@ -763,7 +781,7 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, guard, customModels: customRows, modelSource, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, guard, customModels: customRows, modelSource, mw, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
       channel?: Partial<AgentChannelConfig>;
@@ -889,6 +907,10 @@ export default function AgentDetailPage() {
     }
     if (multiagent !== undefined) {
       feature.multiagent = multiagent;
+    }
+    if (mw !== undefined) {
+      // feature 驱动中间件（SPEC §29.23）：关 = 删命名空间，开 = 只写非空字段，数组形态原样保留
+      applyMiddlewareFeature(feature, mwViews, mw, mwOn);
     }
     if (memory !== undefined) {
       // enabled=false 时仅提交 {enabled:false}，落盘策略无意义（SPEC §25）
@@ -1040,6 +1062,7 @@ export default function AgentDetailPage() {
     { key: 'guard', label: '意图守卫', icon: <SparkGuardrailLine /> },
     { key: 'multiagent', label: 'MultiAgent', icon: <SparkMultiAgentLine /> },
     { key: 'memory', label: '记忆', icon: <SparkMemoryLine /> },
+    { key: 'middleware', label: 'Middleware', icon: <SparkPluginLine /> },
     { key: 'sandbox', label: 'Sandbox', icon: <SparkInternetLine /> },
     { key: 'channel', label: 'Channel', icon: <SparkLinkLine /> },
     { key: 'mcp', label: 'MCP', icon: <SparkMagicWandLine /> },
@@ -1132,7 +1155,7 @@ export default function AgentDetailPage() {
           </div>
         </div>
         <div style={{ flex: 1 }} />
-        {(section === 'basic' || section === 'tools' || section === 'a2ui' || section === 'guard' || section === 'multiagent' || section === 'memory' || section === 'sandbox' || section === 'channel') && (
+        {(section === 'basic' || section === 'tools' || section === 'a2ui' || section === 'guard' || section === 'multiagent' || section === 'memory' || section === 'middleware' || section === 'sandbox' || section === 'channel') && (
           <Button type="primary" onClick={onSave} loading={saving}>
             {isNew ? '创建' : 'Save'}
           </Button>
@@ -2171,6 +2194,15 @@ export default function AgentDetailPage() {
                 )}
               </div>
               </div>
+            )}
+
+            {section === 'middleware' && (
+              <MiddlewareConfigSection
+                form={form}
+                views={mwViews}
+                on={mwOn}
+                onToggle={(key, checked) => setMwOn((s) => ({ ...s, [key]: checked }))}
+              />
             )}
 
             {section === 'sandbox' && (

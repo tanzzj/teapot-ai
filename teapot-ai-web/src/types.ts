@@ -452,6 +452,35 @@ export interface SandboxListData {
   records: SandboxRecord[];
 }
 
+/**
+ * feature 驱动中间件的字段 schema（SPEC §29.23）：后端由中间件配置类内省产出，
+ * 界面按 type 渲染控件 —— 声明与解析同源，前端不再手写一遍字段。
+ */
+export interface MiddlewareFieldSchema {
+  name: string;
+  type: 'STRING' | 'INTEGER' | 'NUMBER' | 'BOOLEAN' | 'ENUM' | 'STRING_MAP';
+  label: string;
+  description?: string;
+  required?: boolean;
+  defaultValue?: string | number | boolean | null;
+  options?: string[];
+}
+
+/** GET /api/agent/middleware-schema 出参（SPEC §29.23） */
+export interface MiddlewareSchemaView {
+  key: string;
+  /** feature 里的命名空间名（middleware_<key>） */
+  featureKey: string;
+  description: string;
+  /** true = 配置本体是数组，界面暂不编辑（保存时原样保留） */
+  array: boolean;
+  fields: MiddlewareFieldSchema[];
+  /** 该 Agent 已存的配置；未配置为 null */
+  config?: Record<string, unknown> | Record<string, unknown>[] | null;
+  /** 已存配置解析失败的原因（存得下但跑不起来，要在界面上说出来） */
+  configError?: string | null;
+}
+
 export interface AgentDetail {
   agent: Agent;
   skillNames: string[];

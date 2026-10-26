@@ -17,6 +17,7 @@ import com.teamer.teapot.ai.core.middleware.PerMessageCheckpointMiddleware;
 import com.teamer.teapot.ai.core.middleware.PermissionModeMiddleware;
 import com.teamer.teapot.ai.core.middleware.ToolProvidedMiddleware;
 import com.teamer.teapot.ai.core.middleware.UserAttachmentRefMiddleware;
+import com.teamer.teapot.ai.core.middleware.feature.FeatureMiddlewareRegistry;
 import com.teamer.teapot.ai.core.sandbox.agentrun.AgentRunConnection;
 import com.teamer.teapot.ai.core.sandbox.e2b.E2bConnection;
 import com.teamer.teapot.ai.core.oss.OssConnection;
@@ -123,6 +124,8 @@ public class AgentBuilder {
     private final ImageStorageRouter imageStorageRouter;
     /** Agent 自带模型密钥的解密入口（feature.customModels，SPEC §29） */
     private final ConfigCryptoService crypto;
+    /** feature 驱动中间件注册表（SPEC §29.23：feature 里的 middleware_* 命名空间 → 中间件装配） */
+    private final FeatureMiddlewareRegistry featureMiddlewareRegistry;
     /** 生图/生视频工具密钥（SPEC-media-gen §4.1：复用现有环境变量，不落库） */
     @Value("${DASHSCOPE_API_KEY:}")
     private String dashscopeApiKey;
@@ -147,7 +150,8 @@ public class AgentBuilder {
                           OssClientManager ossClientManager,
                           OssConnection ossConnection,
                           ImageStorageRouter imageStorageRouter,
-                          ConfigCryptoService crypto) {
+                          ConfigCryptoService crypto,
+                          FeatureMiddlewareRegistry featureMiddlewareRegistry) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.chatSessionMapper = chatSessionMapper;
@@ -166,6 +170,7 @@ public class AgentBuilder {
         this.ossConnection = ossConnection;
         this.imageStorageRouter = imageStorageRouter;
         this.crypto = crypto;
+        this.featureMiddlewareRegistry = featureMiddlewareRegistry;
     }
 
     /** 按 t_agent 记录装配 HarnessAgent；extraMiddlewares 允许为空 */
@@ -316,6 +321,11 @@ public class AgentBuilder {
             }
         }
         for (ToolProvidedMiddleware middleware : toolMiddlewares) {
+            builder.middleware(middleware);
+        }
+        // feature 驱动中间件（SPEC §29.23）：按 feature 里的 middleware_* 命名空间装配，
+        // 配置在本次装配的快照上懒解析；新增中间件只加 Bean，本类与 AgentFeature 都不用改
+        for (MiddlewareBase middleware : featureMiddlewareRegistry.assemble(agentKey, feature)) {
             builder.middleware(middleware);
         }
         // A2UI 界面生成（feature.a2ui）：启用即挂 A2uiMiddleware，注册 a2ui_render + ask_user_question

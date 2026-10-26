@@ -22,6 +22,8 @@ import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
 import com.teamer.teapot.ai.core.model.dto.AgentUpdateRequest;
 import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
 import com.teamer.teapot.ai.core.model.vo.AgentDetailVO;
+import com.teamer.teapot.ai.core.model.vo.FeatureMiddlewareVO;
+import com.teamer.teapot.ai.core.middleware.feature.FeatureMiddlewareRegistry;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
@@ -70,6 +72,8 @@ public class AgentService {
     private final WorkspaceService workspaceService;
     private final ModelService modelService;
     private final ConfigCryptoService crypto;
+    /** feature 驱动中间件注册表（SPEC §29.23）：保存时校验 middleware_* 命名空间，界面按 schema 渲染配置 */
+    private final FeatureMiddlewareRegistry featureMiddlewareRegistry;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentService(AgentMapper agentMapper, AgentSkillMapper agentSkillMapper,
@@ -82,7 +86,8 @@ public class AgentService {
                         ChannelHub channelHub,
                         WorkspaceService workspaceService,
                         ModelService modelService,
-                        ConfigCryptoService crypto) {
+                        ConfigCryptoService crypto,
+                        FeatureMiddlewareRegistry featureMiddlewareRegistry) {
         this.agentMapper = agentMapper;
         this.agentSkillMapper = agentSkillMapper;
         this.agentRegistry = agentRegistry;
@@ -97,6 +102,7 @@ public class AgentService {
         this.workspaceService = workspaceService;
         this.modelService = modelService;
         this.crypto = crypto;
+        this.featureMiddlewareRegistry = featureMiddlewareRegistry;
     }
 
     public PageData<AgentDO> list(int page, int size, String keyword, boolean includeDisabled, Long workspaceId) {
@@ -124,6 +130,18 @@ public class AgentService {
         List<String> skillNames = agentSkillMapper.selectByAgentKey(agentKey)
                 .stream().map(AgentSkillBind::getSkillName).toList();
         return AgentDetailVO.of(agent, skillNames);
+    }
+
+    /**
+     * feature 驱动中间件清单（SPEC §29.23）：schema 由配置类内省产出，界面据此渲染配置表单。
+     * agentKey 为空 = 只列全平台可见项、不带已存配置；给了 agentKey 则带上该 Agent 的配置与解析错误。
+     */
+    public List<FeatureMiddlewareVO> middlewareSchema(String agentKey) {
+        if (agentKey == null || agentKey.isBlank()) {
+            return featureMiddlewareRegistry.schema(null, null);
+        }
+        AgentDO agent = requireAgent(agentKey);
+        return featureMiddlewareRegistry.schema(agentKey, AgentFeature.parse(agent.getFeature()));
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -366,6 +384,7 @@ public class AgentService {
             sealSandboxKey(feature, previousFeatureJson);
             feature.validate(sandboxConnectivity.anyConfigured());
             validateFeatureRecords(feature);
+            featureMiddlewareRegistry.validate(feature.getNamespaces());
             return feature.toJson();
         } catch (BizException e) {
             throw e;

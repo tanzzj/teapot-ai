@@ -11,6 +11,7 @@ import com.teamer.teapot.ai.core.model.dto.MoveWorkspaceRequest;
 import com.teamer.teapot.ai.core.model.dto.SessionHistoryItem;
 import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.vo.AgentDetailVO;
+import com.teamer.teapot.ai.core.model.vo.FeatureMiddlewareVO;
 import com.teamer.teapot.ai.core.model.vo.MemoryStoreVO;
 import com.teamer.teapot.ai.core.service.AgentService;
 import com.teamer.teapot.ai.core.service.MemoryStoreService;
@@ -58,6 +59,15 @@ public class AgentController {
     @GetMapping("/detail/{agentKey}")
     public Result<AgentDetailVO> detail(@PathVariable String agentKey) {
         return Result.ok(agentService.detail(agentKey));
+    }
+
+    /**
+     * feature 驱动中间件清单（SPEC §29.23）：schema 由中间件配置类内省产出，界面据此渲染配置表单；
+     * 带 agentKey 时同时返回该 Agent 已存的配置与解析错误。
+     */
+    @GetMapping("/middleware-schema")
+    public Result<List<FeatureMiddlewareVO>> middlewareSchema(@RequestParam(required = false) String agentKey) {
+        return Result.ok(agentService.middlewareSchema(agentKey));
     }
 
     @PostMapping("/create")

@@ -2783,6 +2783,39 @@ AgentScope 有六个模型供应商扩展模块，teapot 的 `ModelRegistry` 只
 
 **验证**：`mvn -o clean package -DskipTests` 与 `npm run build` 通过；`AgentFeature.validateCompaction` 的枚举用例补 `messages` 转 ACCEPT、非法值报错文案含三个候选；`assertMessagesTrigger` 的拒判走真类一次性用例。**未做**：浏览器里逐口径切换看左格换字段（要登录态）。
 
+### §29.23 feature 驱动中间件：单例 Bean + 配置外置 + 注册表（2026-10-26）
+
+teapot 现有 13 个中间件全是「装配现场 new 一个、参数从 feature 现取」：每加一个可配中间件都要动三处 —— `AgentFeature` 加命名空间与校验、`AgentBuilder` 加挂载分支、界面加表单。本节把这条路径收敛成一套机制（落点 `core/middleware/feature/`，10 个文件）：
+
+- **中间件本体是单例 Bean，不持 Agent 状态**。每个 Agent 的差异全部外置到 `t_agent.feature` 的 `middleware_<key>` 命名空间（历史 `middleware_<key>Hook` 仍认）。`AgentFeature` 本来就「未知顶层命名空间原样保留（不拒不改）」，所以**无 DDL、无 AgentFeature 改动**：新增一个可配中间件 = 新增一个 Bean。
+- **两层回调**。框架层是 `FeatureMiddlewareBinding`（每次装配一个实例，持有本次装配的 feature 快照，实现 `MiddlewareBase` 的 6 个钩子，`activePoints()`/`order()` 透传本体）；业务层是子类覆写的 `onXxx(config, agent, ctx, input, next)`，进来时 config 一定非 null。配置**首次用到才解析并记忆**（不触发的钩子不付解析代价）。
+- **启动 fail-fast / 运行 fail-open**。注册表构造时逐个内省，类名不以 `Middleware` 结尾、key 重复、`description()` 空白、泛型参数缺失（含被 CGLIB 代理掉）、字段缺 `@ConfigField`、类型不支持、`options` 非枚举常量、`defaultValue` 解析不了 —— 一律抛 `IllegalStateException` 让应用起不来。运行期解析失败只记警告并**原样放行**（`next.apply(input)`），不让一个中间件的配置问题拖死整轮对话。
+- **schema 与解析同源**。`@ConfigField(label/description/required/defaultValue/options)` 一份声明既产出前端 schema（`ConfigSchema`/`ConfigFieldSchema`）又产出解析规则（`ConfigModel` 带反射句柄，不外泄）。类型映射：String→STRING，int/long→INTEGER，double/float→NUMBER，boolean→BOOLEAN，枚举→ENUM（options 自动取常量），`Map<String,String>`→STRING_MAP，带 `options` 的 String→ENUM，其余类型直接失败不静默降级；配置类是 `List<T>` 时 schema 标 `array=true` 并内省 T。
+- **可见性与装配解耦**。`forFrontendDisplay()=false` → 不进 schema 出参但照常装配；`appliedAgents()` 非空 → 只对这些 agentKey 出现在 schema/配置查询里，装配仍以 `accept()` 为准（默认口径 = 命名空间存在且非空）。
+- **接口**：`GET /api/agent/middleware-schema?agentKey=`（admin/developer，viewer 无）→ key、featureKey、description、array、fields、该 Agent 已存的 config 原样回显、以及 `configError`（存得下但跑不起来的配置要在界面上说出来）。
+- **保存校验**接在 `AgentService.validateFeature` 末尾：feature 里出现且平台认识的 `middleware_*` 必须能解析，否则 `BizException("中间件 X 的配置非法：…")`。**没有对应 Bean 的命名空间不拒** —— Bean 下线不该让存量 Agent 存不了盘（与 teapot「未知命名空间原样保留」同口径）。
+- **前端入口**：Agent 详情页新增 `Middleware` 分区（`teapot-ai-web/src/components/MiddlewareConfig.tsx`，三段导出：`seedMiddleware` 回显 / `applyMiddlewareFeature` 落库 / `MiddlewareConfigSection` 渲染）。一个中间件一张卡：key + `description()` + 启用开关；开关开了才按 `fields` 逐个渲染控件（STRING→Input、INTEGER/NUMBER→InputNumber、BOOLEAN→Switch、ENUM→Select(options)、STRING_MAP→`key=value` 多行框，复用 MCP 那对 `mapToLines/linesToMap`）。`required` 进 `rules`，`defaultValue` 既进 placeholder 又作回显初值 —— 界面摆的值与后端解析到的值同源。关 = 从 feature 里删掉整个命名空间（后端据此判「未配置」），开 = 只写非空字段；`array=true` 的只说明不编辑（保存靠已加载的原始命名空间原样带走）；`configError` 用 Alert 直说「已存配置不会生效」并带原因；清单为空显示「平台暂未提供可配置的中间件」。开关位是 React state 而非表单值 —— 它表达「要不要写这个命名空间」，不是配置字段，混进表单会多出一个假字段。
+
+解析口径的几个确定语义（探针实测）：`{}` / `[]` / 空白字符串 = 未配置（不触发必填校验、不装配）；未声明字段一律拒（Jackson 默认语义，防拼错的键静默丢失）；`options` 对 String 字段是**硬约束**，补在解析侧（Jackson 不管 String 的取值范围，枚举字段才由 Jackson 兜住）；`defaultValue` 只回填「解析后为 null」的字段，**基本类型不回填**（`boolean enabled` 带 `defaultValue="true"` 仍是 false —— 要默认值就用包装类型）。
+
+**验证**：`mvn -o -pl teapot-ai-core -am clean package -DskipTests` 通过（core 139 个源文件）；`npm run build`（`tsc -b` + vite）通过，入口 `index-CGeD_oci.js`。一次性 main 直跑真类 59 例全过：内省的类型映射/字段顺序/数组配置、11 类启动 fail-fast（含 key 重复与缺泛型）、accept 门控（未配置/空对象/已配置/历史 Hook 键/存量无关命名空间）、桥接层派发与三种 fail-open（缺必填、未声明字段、非法类型）、默认值回填与基本类型不回填、保存校验的拒与放（含数组元素级）、schema 出参的三重门控与 configError。跑完探针与解包目录已删。前端版式另用一次性页面（`middleware-preview.html` + 与接口同形状的 fixture）挂**真** `MiddlewareConfigSection` 在 dev server 里实测：必填框出红字「问候语 必填」、开关开→字段出现 / 关→字段隐藏并出提示、`configError` 出告警、数组形态出说明、以及保存映射（`runtime` 与数组命名空间原样保留、关掉的命名空间被删、存量非法字段被丢弃）。探针文件已删。
+
+**踩坑**：`raw == long.class ? Long.valueOf(t) : Integer.valueOf(t)` 这种「两个包装类型混在一支」的三元表达式会触发数值提升，默认值统统变 `Long`，与 schema 声明的 INTEGER 对不上（探针第一跑就 FAIL 在 `expected=<2> actual=<2>`）。数值分支必须写成 if/yield。
+
+**未做**：① 目前**没有任何生产中间件用这套机制**，它是为后续新增可配中间件铺的路（存量 13 个中间件不动，避免改在跑的东西），所以「登录态下从详情页点 Save 打到真实接口」这条整链路还没跑过 —— 界面无数据可配；② 桥接层不覆盖 `ToolProvidedMiddleware`/`ToolInstallingMiddleware`，即 feature 驱动的中间件暂时**不能自带工具**（要工具仍走 `AgentBuilder.buildToolMiddlewares` 那条手写路径）；③ 数组形态配置只有说明没有编辑器。
+
+**风险**：单例 Bean 里写 Agent 级状态会跨 Agent 串号（机制要求状态只能来自 config 参数或 `RuntimeContext`）；Bean 被 AOP 代理后泛型参数解析不到，会在启动时直接失败（不会静默变成"无配置"）。
+
+### §29.24 注释与文档不点名参考实现（2026-10-26 全站清理）
+
+代码里散落着「复刻某某外部产品设计语言」「参照某某模板」这类注释：它们点名了别人家的产品，却没说清我们自己为什么这么写。按用户要求全仓清一遍（`teapot-ai-server/` 本就零命中）：
+
+- **改掉的**：`index.css`（毛玻璃工具类、用户气泡、四角星图标、无边框选择器、呼吸光效 5 处）、`AppLayout.tsx`（框架布局 / 应用容器 / 分段导航 3 处）、`Agents.tsx`（列表头注释 + 标题行 + 底部操作 3 处）、`AgentDetail.tsx` 头注释、`aguiBridge.ts`、`sessionBridge.ts`、`Chat.tsx`、`main.tsx`、`breakpoints.ts`、`tailwind.config.js`、`package.json` 的 description。写法统一成「说清这件事本身」——例如把「（某产品：Start Chat / New Automation 风格）」改成「（对话 / 编辑 / 删除）」，而不是换个品牌名继续点名。
+- **保留的**：真实标识符改不了也不该改 —— 图标组件名（`@agentscope-ai/icons` 导出的 `SparkXxxLine` 一批）、CSS 选择器（`.spark-modal-title-close` / `.spark-modal-title`，§29.9 那条弹窗修复规则靠它）、以及依赖包名（`@agentscope-ai/design`、`@agentscope-ai/chat`）。`breakpoints.ts` 里原先用产品的简称指代那条断点约束，改成包名 + 组件名的准确写法而不是删掉了事 —— 那是必须对齐的真实约束。
+- **立规**：注释、javadoc、SPEC 里写技术理由，不写「参考 X」；确实依赖某个包就用包名。参考实现的名字只出现在提交说明与 PR 描述里（改动要提上游时另说）。
+
+**验证**：全仓（排除 node_modules/target/dist）大小写不敏感扫描这两个被点名的产品名，前端源码与注释零命中（`teapot-ai-server/` 原本就零命中）；`spark` 的剩余命中逐条核对，全部是上述图标组件名、CSS 选择器或依赖包名。`npm run build` 通过。
+
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
 移动端「新建 Agent」弹窗（6 个字段 + 键盘弹起）几乎占满视口，且建完还得再进详情页配模型/提示词，等于同一批字段填两遍。改为**复用详情页当草稿**：

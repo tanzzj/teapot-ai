@@ -4,6 +4,7 @@ import type {
   AgentDetail,
   MediaModelCatalogEntry,
   MemoryUserGroup,
+  MiddlewareSchemaView,
   PageData,
   Result,
   SessionHistoryItem,
@@ -63,6 +64,15 @@ export function agentBindSkill(agentKey: string, skillName: string) {
 
 export function agentUnbindSkill(agentKey: string, skillName: string) {
   return unwrap<void>(http.post<Result<void>>(`/api/agent/unbindSkill/${agentKey}`, { skillName }));
+}
+
+/** feature 驱动中间件清单（SPEC §29.23）：schema + 该 Agent 已存配置与解析错误 */
+export function middlewareSchema(agentKey?: string) {
+  return unwrap<MiddlewareSchemaView[]>(
+    http.get<Result<MiddlewareSchemaView[]>>('/api/agent/middleware-schema', {
+      params: agentKey ? { agentKey } : undefined,
+    }),
+  );
 }
 
 /** 同步调试对话（SPEC §7.1 /api/agent/chat） */
