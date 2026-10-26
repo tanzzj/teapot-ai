@@ -144,6 +144,7 @@ public class AgentService {
         agent.setCompactionKeep(request.getCompactionKeep() == null
                 ? DEFAULT_COMPACTION_KEEP : request.getCompactionKeep());
         agent.setFeature(validateFeature(request.getFeature(), existed == null ? null : existed.getFeature()));
+        assertMessagesTrigger(agent);
         agent.setStatus(1);
         agent.setCreatedBy(ContextUtil.currentUserId());
         // 归属空间：null → 个人空间（首个 Agent 触发懒创建）；非 null → 校验成员后归属（SPEC §28.4）
@@ -208,6 +209,7 @@ public class AgentService {
             String previousFeature = agent.getFeature();
             agent.setFeature(validateFeature(request.getFeature(), previousFeature));
         }
+        assertMessagesTrigger(agent);
         // 模型开放校验放在 feature 合并之后：本次保存可能同时带来新模型与它的自带凭证（SPEC §29）
         if (request.getModelId() != null) {
             assertModelOpen(request.getModelId(),
@@ -235,6 +237,24 @@ public class AgentService {
         }
         if (keep != null && keep != -1 && (keep < 0 || keep > 100)) {
             throw new BizException("compactionKeep 须为 -1（关闭）或 0–100");
+        }
+    }
+
+    /**
+     * 触发口径选「按条数」时轮数就是主输入，填 0（=不按条数触发）等于该口径下没有条数触发（SPEC §29.22）。
+     * 轮数为 null 视为未指定，运行时回落默认 30，不拦。
+     */
+    private static void assertMessagesTrigger(AgentDO agent) {
+        if (agent.getFeature() == null || agent.getFeature().isBlank()) {
+            return;
+        }
+        AgentFeature.Compaction c = AgentFeature.parse(agent.getFeature()).getCompaction();
+        if (c == null || !"messages".equals(c.getTriggerMode())) {
+            return;
+        }
+        Integer trigger = agent.getCompactionTrigger();
+        if (trigger != null && trigger == 0) {
+            throw new BizException("触发口径选「按条数」时，触发轮数不能为 0（0 = 不按条数触发）");
         }
     }
 

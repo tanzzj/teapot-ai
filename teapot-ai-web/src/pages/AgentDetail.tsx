@@ -343,9 +343,10 @@ export default function AgentDetailPage() {
   const mcpModalMode = Form.useWatch('mode', mcpModalForm);
   /** 上下文压缩显式开关（映射 compactionTrigger：关 = -1，SPEC §25） */
   const compactionEnabled = Form.useWatch('compactionEnabled', form);
-  /** 触发口径（SPEC §29.21）：决定"预缓冲 token"还是"token 阈值"出现在界面上 */
+  /** 触发口径（SPEC §29.21/§29.22）：决定左格摆预缓冲、token 阈值还是触发轮数 */
   const compactionTriggerMode = Form.useWatch(['compaction', 'triggerMode'], form) as
     | 'dynamic'
+    | 'messages'
     | 'tokens'
     | undefined;
   /** 尾部保留方式（SPEC §29.20）：决定"压缩保留轮数"还是"尾部 token 预算"出现在界面上 */
@@ -903,12 +904,15 @@ export default function AgentDetailPage() {
       if (compactionFeature.modelId) {
         cp.modelId = compactionFeature.modelId;
       }
-      // 触发口径（§29.21）：dynamic + 未填预缓冲 = 框架默认，不下发
+      // 触发口径（§29.21/§29.22）：dynamic 且未填预缓冲 = 框架默认，不下发；
+      // messages 只是口径标注（轮数走 compaction_trigger 列），reserved 在该口径下不生效所以不带
       if (compactionFeature.triggerMode === 'tokens') {
         cp.triggerMode = 'tokens';
         if (compactionFeature.triggerTokens) {
           cp.triggerTokens = compactionFeature.triggerTokens;
         }
+      } else if (compactionFeature.triggerMode === 'messages') {
+        cp.triggerMode = 'messages';
       } else if (compactionFeature.reserved) {
         cp.reserved = compactionFeature.reserved;
       }
@@ -1583,11 +1587,12 @@ export default function AgentDetailPage() {
                         <Form.Item
                           name={['compaction', 'triggerMode']}
                           label="触发口径"
-                          tooltip="动态=对话估算 token 涨到「模型窗口 − 预缓冲」时才压；固定阈值=涨到该 token 数就提前压（仍不会超过窗口预算）"
+                          tooltip="按条数只是把下面的「触发轮数」当主输入，token 侧仍按窗口动态算 —— 两个触发器先到先算，窗口预算那条关不掉，长会话里往往是它先触发"
                         >
                           <Select
                             options={[
                               { value: 'dynamic', label: '动态（窗口预算）' },
+                              { value: 'messages', label: '按条数' },
                               { value: 'tokens', label: '固定 token 阈值' },
                             ]}
                           />
@@ -1619,6 +1624,14 @@ export default function AgentDetailPage() {
                             rules={[{ required: true, message: '固定 token 阈值时必须填写' }]}
                           >
                             <InputNumber min={1000} max={2000000} step={1000} style={{ width: '100%' }} />
+                          </Form.Item>
+                        ) : compactionTriggerMode === 'messages' ? (
+                          <Form.Item
+                            name="compactionTrigger"
+                            label="触发轮数"
+                            tooltip="消息条数达到即触发；窗口预算那条仍在背后先到先算，长会话可能它先到。0 请在其他口径下填（本口径下会被后端拒）"
+                          >
+                            <InputNumber min={1} max={200} placeholder="默认 30" style={{ width: '100%' }} />
                           </Form.Item>
                         ) : (
                           <Form.Item
@@ -1658,13 +1671,21 @@ export default function AgentDetailPage() {
                         )}
                       </Col>
                     </Row>
-                    <Form.Item
-                      name="compactionTrigger"
-                      label="触发轮数"
-                      tooltip="条数是与 token 口径并列的独立触发器，谁先到算谁；0 = 不按条数触发（留空 = 默认 30）"
-                    >
-                      <InputNumber min={0} max={200} placeholder="默认 30；0 = 不按条数" style={{ width: 280 }} />
-                    </Form.Item>
+                    {/* 按条数口径下这个框已经搬到左格（同名 Form.Item 不能同时挂两处） */}
+                    {compactionTriggerMode !== 'messages' && (
+                      <Form.Item
+                        name="compactionTrigger"
+                        label="触发轮数"
+                        tooltip="条数是与 token 口径并列的独立触发器，谁先到算谁；0 = 不按条数触发（留空 = 默认 30）"
+                      >
+                        <InputNumber
+                          min={0}
+                          max={200}
+                          placeholder="默认 30；0 = 不按条数"
+                          style={{ width: 280 }}
+                        />
+                      </Form.Item>
+                    )}
                     <Form.Item
                       name={['compaction', 'modelId']}
                       label="压缩摘要模型"

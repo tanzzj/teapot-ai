@@ -391,20 +391,23 @@ public class AgentBuilder {
     }
 
     /**
-     * 触发口径 → 框架 triggerTokens（SPEC §29.21）。框架的 token 触发无法关闭：{@code 0}=按
-     * 「窗口 − reserved」动态算，{@code >0}=固定阈值但仍被窗口取小，所以这里只有动态/固定两态；
-     * 条数触发走 compaction_trigger 列（0 = 不按条数），与 token 触发先到先算。
+     * 触发口径 → 框架 triggerTokens（SPEC §29.21/§29.22）。框架的 token 触发无法关闭：{@code 0}=按
+     * 「窗口 − reserved」动态算，{@code >0}=固定阈值但仍被窗口取小。条数触发走 compaction_trigger 列
+     * （0 = 不按条数），与 token 触发先到先算；{@code messages} 只是把条数当主输入，token 侧仍回落动态，
+     * 并忽略 reserved（该口径下界面不摆这个框，避免存量值静默生效）。
      */
     private static void applyTriggerMode(CompactionConfig.Builder builder, AgentFeature.Compaction c) {
         if (c == null || c.getTriggerMode() == null || c.getTriggerMode().isBlank()) {
             return;
         }
-        if ("tokens".equals(c.getTriggerMode())) {
-            builder.triggerTokens(c.getTriggerTokens());
-        } else {
-            builder.triggerTokens(0);
-            if (c.getReserved() != null) {
-                builder.reserved(c.getReserved());
+        switch (c.getTriggerMode()) {
+            case "tokens" -> builder.triggerTokens(c.getTriggerTokens());
+            case "messages" -> builder.triggerTokens(0);
+            default -> {
+                builder.triggerTokens(0);
+                if (c.getReserved() != null) {
+                    builder.reserved(c.getReserved());
+                }
             }
         }
     }

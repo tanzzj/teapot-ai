@@ -2771,6 +2771,18 @@ AgentScope 有六个模型供应商扩展模块，teapot 的 `ModelRegistry` 只
 
 **验证**：`mvn -o clean package -DskipTests` 与 `npm run build` 通过；`AgentFeature.validateCompaction` 的用例覆盖 dynamic 缺省 / dynamic+reserved / tokens+正阈值 / tokens 缺阈值 / 阈值非正 / 非法枚举。**未做**：真机跑一轮验证四种口径组合下实际触发时机（要登录态 + 长会话）。
 
+### §29.22 触发口径补第三个选项「按条数」（2026-10-26 用户看 v77 界面追问"条数没了？"）
+
+§29.21 上线后用户挑出：「触发口径」下拉只有两项，而隔壁「尾部保留」有三项，看着像把条数弄丢了（条数框其实在下面一行恒在，被截图裁掉了）。给了两条路——改名叫「token 触发」以对齐选项范围，或者补第三个选项 —— 用户选后者，并要求 tooltip 写清"窗口预算仍会先触发"。
+
+**这个选项的语义要说清楚，它不是互斥口径**：`messages` 表示"把「触发轮数」当主输入"，token 侧接线与 `dynamic` 完全相同（框架里 token 触发关不掉，见 §29.21），所以长会话里往往仍是窗口预算先到。选它时左格从"预缓冲 token"换成"触发轮数"，`reserved` 在该口径下**不再生效也被显式忽略**（`AgentBuilder.applyTriggerMode` 的 `messages` 分支只 `triggerTokens(0)`，不读 reserved），免得存量 feature 里留着的旧值静默影响触发。
+
+- 界面：`compactionTrigger` 这一个 Form.Item 在 `messages` 口径下渲染进左格（`min=1`）、其他口径下渲染在下面那行（`min=0`，可填"不按条数"）——两处同名，靠口径互斥保证同时只挂一个。
+- 闸门：`AgentService.assertMessagesTrigger` 在 create/update 两条路径上交叉校验 —— 口径为 `messages` 却把轮数填成 0（=不按条数触发）等于该口径下没有条数触发，直接拒；轮数为 null 不拦（运行时回落默认 30，仍有条数触发）。
+- 下发：`messages` 只落 `{triggerMode:'messages'}` 一个键，不带 `reserved`/`triggerTokens`。
+
+**验证**：`mvn -o clean package -DskipTests` 与 `npm run build` 通过；`AgentFeature.validateCompaction` 的枚举用例补 `messages` 转 ACCEPT、非法值报错文案含三个候选；`assertMessagesTrigger` 的拒判走真类一次性用例。**未做**：浏览器里逐口径切换看左格换字段（要登录态）。
+
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
 移动端「新建 Agent」弹窗（6 个字段 + 键盘弹起）几乎占满视口，且建完还得再进详情页配模型/提示词，等于同一批字段填两遍。改为**复用详情页当草稿**：

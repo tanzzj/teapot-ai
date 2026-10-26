@@ -78,10 +78,11 @@ public class AgentFeature {
     /** 压缩尾部保留方式（SPEC §29.20）：dynamic 按窗口预算 / messages 按条数 / tokens 按固定预算 */
     private static final Set<String> COMPACTION_KEEP_MODES = Set.of("dynamic", "messages", "tokens");
     /**
-     * 触发口径只有两态：框架里 token 触发无法关闭（{@code triggerTokens=0} 是"按窗口动态算"而非"不触发"，
-     * {@code >0} 又与窗口预算取小），能关的只有条数触发（{@code triggerMessages=0}），故不提供"仅按条数"。
+     * 触发口径三态里只有 token 侧是互斥的：{@code dynamic}=按「窗口 − reserved」动态算，
+     * {@code tokens}=固定阈值（仍与窗口预算取小，填得再大也超不过窗口）；{@code messages} 不改变
+     * token 侧接线（框架里 token 触发无法关闭），它表示"把条数当主输入"，见 §29.22。
      */
-    private static final Set<String> COMPACTION_TRIGGER_MODES = Set.of("dynamic", "tokens");
+    private static final Set<String> COMPACTION_TRIGGER_MODES = Set.of("dynamic", "messages", "tokens");
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
@@ -642,7 +643,7 @@ public class AgentFeature {
             return;
         }
         if (!isBlank(c.getTriggerMode()) && !COMPACTION_TRIGGER_MODES.contains(c.getTriggerMode())) {
-            throw new BizException("compaction.triggerMode 非法，可选值：dynamic / tokens");
+            throw new BizException("compaction.triggerMode 非法，可选值：dynamic / messages / tokens");
         }
         if ("tokens".equals(c.getTriggerMode())) {
             if (c.getTriggerTokens() == null || c.getTriggerTokens() <= 0) {
@@ -730,9 +731,10 @@ public class AgentFeature {
         /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
         private String modelId;
         /**
-         * 触发口径（SPEC §29.21）：dynamic（默认）= 到「模型窗口 − reserved」才压；
-         * tokens = 固定 token 阈值提前压（仍与窗口预算取小）。条数触发（t_agent.compaction_trigger）
-         * 与之并列、先到先算，不是互斥项。
+         * 触发口径（SPEC §29.21/§29.22）：dynamic（默认）= 到「模型窗口 − reserved」才压；
+         * tokens = 固定 token 阈值提前压（仍与窗口预算取小）；messages = 把条数当主输入，
+         * token 侧接线与 dynamic 相同（框架里 token 触发关不掉，窗口预算仍会先触发）。
+         * 条数触发（t_agent.compaction_trigger）与之并列、先到先算，不是互斥项。
          */
         private String triggerMode;
         /** triggerMode=tokens 时的 token 阈值（必须 &gt; 0） */

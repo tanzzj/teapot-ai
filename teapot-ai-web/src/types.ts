@@ -245,8 +245,11 @@ export interface AgentSessionTitleConfig {
 export interface AgentCompactionConfig {
   /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
   modelId?: string;
-  /** 触发口径：dynamic=按「窗口 − 预缓冲」动态（框架默认）/ tokens=固定 token 阈值（提前触发） */
-  triggerMode?: 'dynamic' | 'tokens';
+  /**
+   * 触发口径：dynamic=按「窗口 − 预缓冲」动态（框架默认）/ tokens=固定 token 阈值（提前触发）
+   * / messages=把条数当主输入（token 侧仍回落窗口，先到先算，关不掉）
+   */
+  triggerMode?: 'dynamic' | 'messages' | 'tokens';
   /** triggerMode=tokens 时的 token 阈值 */
   triggerTokens?: number;
   /** triggerMode=dynamic 时给摘要本身预留的缓冲 token（框架默认 20000） */
