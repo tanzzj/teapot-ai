@@ -1329,11 +1329,11 @@ export default function AgentDetailPage() {
                             message: '小写字母开头，仅含小写字母/数字/短横线，2-64 位',
                           },
                         ]}
-                        extra="创建后不可修改，将作为 AG-UI 路由 key"
+                        extra="创建后不可修改"
                       >
                         <Input placeholder="如 general-assistant" />
                       </Form.Item>
-                      <Form.Item name="workspaceId" label="所属空间" extra="个人空间在首个 Agent 创建时才落库">
+                      <Form.Item name="workspaceId" label="所属空间">
                         <Select options={spaceOptions} />
                       </Form.Item>
                     </>
@@ -1509,7 +1509,7 @@ export default function AgentDetailPage() {
                       type="info"
                       showIcon
                       style={{ marginBottom: 16 }}
-                      message="尚无 OSS 连接记录，当前仅可使用 Base64 内联；如需 OSS，请在系统配置 - 存储中新建记录。"
+                      message="尚无 OSS 连接记录，当前仅可使用 Base64 内联"
                     />
                   )}
                 </Form>
@@ -1646,7 +1646,7 @@ export default function AgentDetailPage() {
                         type="info"
                         showIcon
                         style={{ marginBottom: 12 }}
-                        message="留空即跟随工具默认模型；一旦指定，服务端会按此覆写生成请求（不依赖模型自觉）"
+                        message="留空即跟随工具默认模型；指定后服务端按此覆写生成请求"
                       />
                       <Row gutter={16}>
                         {mediaCatalog.map((entry) => (
@@ -1874,9 +1874,6 @@ export default function AgentDetailPage() {
                   >
                     <Switch />
                   </Form.Item>
-                  <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
-                    关闭后将禁用 subagent 工具与动态 subagent 生成。保存后对新请求即时生效。
-                  </div>
                 </Form>
               </div>
             )}
@@ -1889,7 +1886,7 @@ export default function AgentDetailPage() {
                     name={['memory', 'enabled']}
                     label="启用记忆"
                     valuePropName="checked"
-                    tooltip="开启后对话自动沉淀长期记忆并在后续会话注入；关闭则停用记忆落盘与 memory_search 等记忆工具"
+                    tooltip="开启后对话自动沉淀长期记忆并在后续会话注入；关闭则停用记忆落盘与 memory_search 等记忆工具。对话界面可按请求临时覆盖，请求级开关优先于本配置"
                   >
                     <Switch />
                   </Form.Item>
@@ -1951,9 +1948,6 @@ export default function AgentDetailPage() {
                       options={modelOptions}
                     />
                   </Form.Item>
-                  <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
-                    chat 界面支持用户按请求临时覆盖记忆开关（参数传递），请求级开关优先于本配置。
-                  </div>
                 </Form>
               </div>
 
@@ -2206,10 +2200,6 @@ export default function AgentDetailPage() {
                         前往系统配置
                       </Button>
                     </div>
-                    <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginTop: 12 }}>
-                      当前共 {sandboxNames.length} 条沙箱连接记录；启用沙箱时必选其一作为承载，
-                      链路与凭证由记录决定。
-                    </div>
                   </div>
                 )}
               </div>
@@ -2262,10 +2252,6 @@ export default function AgentDetailPage() {
                             <Radio value="MAIN">全局单会话</Radio>
                           </Radio.Group>
                         </Form.Item>
-                        <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
-                          渠道会话不进 Web 对话台（会话域隔离）；管理员可在左侧菜单「会话历史」中查看全量对话。
-                          保存后服务端自动重启该 Agent 的渠道连接。
-                        </div>
                       </>
                     )}
                   </Form>
@@ -2279,9 +2265,6 @@ export default function AgentDetailPage() {
                       <Button icon={<SparkSettingLine />} onClick={() => navigate('/system/channel')}>
                         前往系统配置
                       </Button>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)', marginTop: 12 }}>
-                      当前共 {channelNames.length} 条渠道连接记录；启用时必选其一，凭证由记录决定。
                     </div>
                   </div>
                 )}
@@ -2397,14 +2380,9 @@ export default function AgentDetailPage() {
                 </ResponsiveModal>
 
                 {isAdmin && mcpNames.length > 0 && (
-                  <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.45)' }}>
-                    系统已有 {mcpNames.length} 条 MCP Server 记录可供引用。
-                    {isAdmin && (
-                      <Button type="text" size="small" icon={<SparkSettingLine />} onClick={() => navigate('/system/mcp')} style={{ fontSize: 12, padding: '0 4px' }}>
-                        前往系统配置
-                      </Button>
-                    )}
-                  </div>
+                  <Button type="text" size="small" icon={<SparkSettingLine />} onClick={() => navigate('/system/mcp')}>
+                    前往系统配置
+                  </Button>
                 )}
               </div>
             )}

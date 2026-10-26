@@ -144,10 +144,6 @@ export default function Models() {
           新建模型入口
         </Button>
       </Space>
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        模型标识形如 provider:model（如 dashscope:qwen-plus）。API Key 仍由服务器环境变量
-        （DASHSCOPE_API_KEY / OPENAI_API_KEY）管理，界面不存储任何密钥；OpenAI 兼容端点可在此配置 baseUrl。
-      </Typography.Paragraph>
       <div className="mobile-table-scroll">
       <Table<ModelEntry>
         rowKey="id"

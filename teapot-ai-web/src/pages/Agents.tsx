@@ -93,9 +93,6 @@ export default function Agents() {
         <h2 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>
           Agents
         </h2>
-        <span style={{ color: 'rgba(26, 26, 29, 0.45)', fontSize: 13 }}>
-          管理与配置你的 AI Agent
-        </span>
         <div style={{ flex: 1 }} />
         <Input
           placeholder="按名称/标识搜索"

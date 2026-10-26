@@ -187,8 +187,7 @@ export function AddSkillButton({ agentKey, onAdded }: { agentKey: string; onAdde
             ]}
           />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            OSS 落点写入 {ossStatus?.bucket || '—'}/{ossStatus?.prefix || 'teapot-ai/skills/'}；
-            导入成功的 skill 会自动绑定到当前 Agent，其它 Agent 需要用的话在各自 Agent 里打开开关。
+            导入成功后自动绑定到当前 Agent。
           </Typography.Text>
         </Space>
       </ResponsiveModal>
@@ -221,11 +220,7 @@ export function AddSkillButton({ agentKey, onAdded }: { agentKey: string; onAdde
             />
           </div>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            仅支持可公开访问的仓库；需含 SKILL.md（根级或首层子目录）。导入时从远程拉取一次，
-            内容存入平台数据库，同名再次导入即更新。
-            {gitStatus?.enabled
-              ? `另有一个全局管控仓库（${gitStatus.branch || '默认分支'}），用下面的按钮刷新它的来源。`
-              : ''}
+            需公开可读，含 SKILL.md（根级或首层子目录）；同名再次导入即更新。
           </Typography.Text>
           {gitStatus?.enabled ? (
             <Button size="small" icon={<SparkRefreshLine />} loading={syncing} onClick={onSyncGit}>

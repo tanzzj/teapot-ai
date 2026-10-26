@@ -90,7 +90,6 @@ export default function SystemConfigPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
         <SparkSettingLine style={{ fontSize: 18, color: 'rgba(26,26,29,0.7)' }} />
         <span style={{ fontWeight: 700, fontSize: 17, color: 'rgba(26, 26, 29, 0.92)' }}>系统配置</span>
-        <span style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>模型 · 用户 · 存储 · 沙箱 · 连接器 · MCP（仅管理员）</span>
       </div>
 
       <Row gutter={20}>
@@ -224,10 +223,6 @@ function StorageSection() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700 }}>OSS 连接记录</div>
-              <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)' }}>
-                支持多条记录（不同 bucket / 账号）；Agent 在各自配置页（Basic Info）选择其一作为图片载体。
-                AK/Secret 加密入库，界面不回显明文。
-              </div>
             </div>
             <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
               新建记录
@@ -448,10 +443,6 @@ function SandboxSection() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700 }}>沙箱连接记录</div>
-              <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)' }}>
-                支持多条记录（E2B 兼容 / AgentRun MCP 双链路）；Agent 启用沙箱时在各自配置页选择其一作为承载。
-                API Key / 账号 ID 加密入库，界面不回显明文。
-              </div>
             </div>
             <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
               新建记录
@@ -725,10 +716,6 @@ function ChannelSection() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700 }}>渠道连接记录</div>
-              <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)' }}>
-                支持钉钉机器人（Stream 模式）与 Discord（Gateway 长连）出站长连，及 GitHub（公网 Webhook 回调）；
-                Agent 在各自配置页（Channel）选择其一启用。凭证加密入库，界面不回显明文。
-              </div>
             </div>
             <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
               新建记录
@@ -993,10 +980,6 @@ function MCPSection() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700 }}>MCP Server 配置</div>
-              <div style={{ fontSize: 12, color: 'rgba(26,26,29,0.5)' }}>
-                管理 MCP（Model Context Protocol）Server 连接，支持本地进程（stdio）与远程服务（HTTP/SSE）；
-                Agent 可在各自配置页选择启用。
-              </div>
             </div>
             <Button type="primary" icon={<SparkPlusLine />} onClick={openCreate}>
               新建配置
