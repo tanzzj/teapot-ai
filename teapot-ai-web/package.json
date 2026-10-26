@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Teapot AI 平台前端（SPEC §12：Vite5 + React18 + TS + Spark Design）",
+  "description": "Teapot AI 平台前端（SPEC §12：Vite5 + React18 + TS + @agentscope-ai/design）",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

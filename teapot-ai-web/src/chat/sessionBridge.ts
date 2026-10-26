@@ -10,7 +10,7 @@ import { http } from '../api/http';
 import { useAuthStore } from '../store/auth';
 
 /**
- * 会话桥接（sparkdesign chat template ↔ Teapot 后端）：
+ * 会话桥接（对话组件 ↔ Teapot 后端）：
  * - 会话索引（列表/创建/删除）走后端 /api/chat/session（SPEC §9）
  * - 消息体以后端 agentscope_sessions（StateStore）为唯一事实源：每次打开会话都拉
  *   后端历史接口 /api/chat/session/messages/{sessionId}，不做 localStorage 缓存，

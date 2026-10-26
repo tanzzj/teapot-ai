@@ -196,7 +196,7 @@ function ChatBridge(props: {
 }
 
 /**
- * 对话页（Spark Design chat template：AgentScopeRuntimeWebUI，SPEC §12.1）。
+ * 对话页（AgentScopeRuntimeWebUI，SPEC §12.1）。
  * - 会话列表 / 消息气泡 / 工具调用 / 思考过程 / Welcome 屏 / 窄屏 Drawer 均由模板内置
  * - 后端协议经 aguiBridge（AG-UI ↔ Runtime SSE）与 sessionBridge（会话索引）适配
  */

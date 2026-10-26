@@ -2,7 +2,7 @@ import { ACCESS_TOKEN_KEY } from '../api/http';
 import { consumeResume, registerInterrupts, resetForRun } from './askUserStore';
 
 /**
- * AG-UI ↔ AgentScope Runtime WebUI 协议桥接（参照 sparkdesign chat template）。
+ * AG-UI ↔ AgentScope Runtime WebUI 协议桥接。
  *
  * AgentScopeRuntimeWebUI 的消费协议（AgentScopeRuntimeResponseBuilder）：
  *   - { object: 'response', ... }  全量/增量响应（status / usage / output 按 id 合并）

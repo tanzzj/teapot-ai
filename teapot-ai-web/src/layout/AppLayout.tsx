@@ -15,7 +15,7 @@ import UserMenu from './UserMenu';
 import WorkspaceSwitcher from './WorkspaceSwitcher';
 
 /**
- * 主框架布局（Barley 设计语言复刻）：
+ * 主框架布局：
  * 整站一张悬浮毛玻璃大圆角卡片；顶栏 = 汉堡(移动) + Logo + 分段标签导航 + 用户菜单。
  * SPEC §12.1：菜单按角色显隐；移动端汉堡菜单 + Drawer。
  */
@@ -83,7 +83,7 @@ export default function AppLayout() {
 
   return (
     <div style={{ height: vvHeight ?? '100dvh', padding: isMobile ? 6 : 12, boxSizing: 'border-box' }}>
-      {/* 悬浮毛玻璃大卡片（Barley 应用容器） */}
+      {/* 悬浮毛玻璃大卡片（应用容器） */}
       <div
         className="glass-panel"
         style={{
@@ -177,7 +177,7 @@ export default function AppLayout() {
                 <span style={{ fontSize: 10, color: '#bbb', marginLeft: 2 }}>v0902b</span>
               </div>
 
-              {/* 分段标签导航（Barley Chat/Agent 切换样式）。label 自带 onClick：受控 value
+              {/* 分段标签导航（Chat/Agent 切换）。label 自带 onClick：受控 value
                   命中子路由（/agents/:key、/skills/:name）时点已选中项不触发 onChange，
                   详情页就没有返回列表的入口了 */}
               <Segmented

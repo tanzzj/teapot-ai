@@ -25,7 +25,7 @@ import { ResponsiveModal } from '../components/ResponsiveModal';
 import { useWorkspaceStore } from '../store/workspace';
 
 /**
- * Agent 管理列表（Barley 设计语言复刻：大标题 + 三列毛玻璃卡片网格）。
+ * Agent 管理列表（大标题 + 三列毛玻璃卡片网格）。
  * SPEC §12.2
  */
 export default function Agents() {
@@ -88,7 +88,7 @@ export default function Agents() {
 
   return (
     <div style={{ padding: '24px 28px', minHeight: '100%' }}>
-      {/* 标题行（Barley：大标题 + 副标题 + 右侧黑色主按钮） */}
+      {/* 标题行（大标题 + 副标题 + 右侧黑色主按钮） */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>
           Agents
@@ -204,7 +204,7 @@ export default function Agents() {
                     {agent.description || '（无描述）'}
                   </div>
 
-                  {/* 底部操作（Barley：Start Chat / New Automation 风格） */}
+                  {/* 底部操作（对话 / 编辑 / 删除） */}
                   <div
                     style={{
                       borderTop: '1px solid rgba(0, 0, 0, 0.06)',
