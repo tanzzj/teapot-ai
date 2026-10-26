@@ -343,6 +343,11 @@ export default function AgentDetailPage() {
   const mcpModalMode = Form.useWatch('mode', mcpModalForm);
   /** 上下文压缩显式开关（映射 compactionTrigger：关 = -1，SPEC §25） */
   const compactionEnabled = Form.useWatch('compactionEnabled', form);
+  /** 触发口径（SPEC §29.21）：决定"预缓冲 token"还是"token 阈值"出现在界面上 */
+  const compactionTriggerMode = Form.useWatch(['compaction', 'triggerMode'], form) as
+    | 'dynamic'
+    | 'tokens'
+    | undefined;
   /** 尾部保留方式（SPEC §29.20）：决定"压缩保留轮数"还是"尾部 token 预算"出现在界面上 */
   const compactionKeepMode = Form.useWatch(['compaction', 'keepMode'], form) as
     | 'dynamic'
@@ -581,7 +586,8 @@ export default function AgentDetailPage() {
         compactionTrigger: d.agent.compactionTrigger,
         compactionKeep: d.agent.compactionKeep,
         // 压缩开关回显：列值为负数/0 = 关；空值 = 跟随 SDK 默认（启用）
-        compactionEnabled: !(d.agent.compactionTrigger != null && d.agent.compactionTrigger <= 0),
+        // 0 = 压缩仍开、只是不按条数触发（§29.21），故仅 -1 判关
+        compactionEnabled: !(d.agent.compactionTrigger != null && d.agent.compactionTrigger < 0),
         sysPrompt: d.agent.sysPrompt,
         storageTarget,
         sandbox: {
@@ -644,7 +650,10 @@ export default function AgentDetailPage() {
         },
         compaction: {
           modelId: comp.modelId,
-          // 未配置 = 框架默认（动态窗口预算）；裁剪与落盘默认开启（SPEC §29.20）
+          // 未配置 = 框架默认（动态窗口预算 + 20k 预缓冲）；裁剪与落盘默认开启（SPEC §29.20/§29.21）
+          triggerMode: comp.triggerMode ?? 'dynamic',
+          triggerTokens: comp.triggerTokens,
+          reserved: comp.reserved,
           keepMode: comp.keepMode ?? 'dynamic',
           keepTokens: comp.keepTokens,
           prune: { enabled: comp.prune?.enabled !== false },
@@ -770,16 +779,19 @@ export default function AgentDetailPage() {
       modelSource?: 'system' | 'custom';
     };
     const payload: Record<string, unknown> = { ...rest };
-    // 压缩开关 ↔ 列值映射：关 = -1/-1；开且未填有效值时回落默认 30/10（SPEC §25）
+    // 压缩开关 ↔ 列值映射：关 = -1/-1；开且留空时回落默认 30/10（SPEC §25）。
+    // 0 是合法值（§29.21：轮数填 0 = 不按条数触发，只按 token/窗口），不能被回落吃掉
     if (compactionEnabled !== undefined) {
       if (!compactionEnabled) {
         payload.compactionTrigger = -1;
         payload.compactionKeep = -1;
-      } else if (payload.compactionTrigger == null || (payload.compactionTrigger as number) <= 0) {
-        payload.compactionTrigger = 30;
-        payload.compactionKeep = payload.compactionKeep == null || (payload.compactionKeep as number) <= 0
-          ? 10
-          : payload.compactionKeep;
+      } else {
+        if (payload.compactionTrigger == null || (payload.compactionTrigger as number) < 0) {
+          payload.compactionTrigger = 30;
+        }
+        if (payload.compactionKeep == null || (payload.compactionKeep as number) < 0) {
+          payload.compactionKeep = 10;
+        }
       }
     }
     // feature：在已加载命名空间基础上合并本次分区提交，避免单分区覆盖另一分区（§22）
@@ -890,6 +902,15 @@ export default function AgentDetailPage() {
       const cp: Record<string, unknown> = {};
       if (compactionFeature.modelId) {
         cp.modelId = compactionFeature.modelId;
+      }
+      // 触发口径（§29.21）：dynamic + 未填预缓冲 = 框架默认，不下发
+      if (compactionFeature.triggerMode === 'tokens') {
+        cp.triggerMode = 'tokens';
+        if (compactionFeature.triggerTokens) {
+          cp.triggerTokens = compactionFeature.triggerTokens;
+        }
+      } else if (compactionFeature.reserved) {
+        cp.reserved = compactionFeature.reserved;
       }
       if (compactionFeature.keepMode && compactionFeature.keepMode !== 'dynamic') {
         cp.keepMode = compactionFeature.keepMode;
@@ -1551,7 +1572,7 @@ export default function AgentDetailPage() {
                     name="compactionEnabled"
                     label="启用上下文压缩"
                     valuePropName="checked"
-                    tooltip="开启后会话历史超过触发轮数时自动压缩摘要；关闭则完整保留全部历史（可能超出模型上下文）"
+                    tooltip="开启后按下方口径自动压缩历史摘要；关闭则完整保留全部历史（可能超出模型上下文）"
                   >
                     <Switch />
                   </Form.Item>
@@ -1560,11 +1581,16 @@ export default function AgentDetailPage() {
                     <Row gutter={16}>
                       <Col xs={24} sm={12}>
                         <Form.Item
-                          name="compactionTrigger"
-                          label="压缩触发轮数"
-                          tooltip="会话历史超过该轮数时触发记忆压缩"
+                          name={['compaction', 'triggerMode']}
+                          label="触发口径"
+                          tooltip="动态=对话估算 token 涨到「模型窗口 − 预缓冲」时才压；固定阈值=涨到该 token 数就提前压（仍不会超过窗口预算）"
                         >
-                          <InputNumber min={1} max={200} style={{ width: '100%' }} />
+                          <Select
+                            options={[
+                              { value: 'dynamic', label: '动态（窗口预算）' },
+                              { value: 'tokens', label: '固定 token 阈值' },
+                            ]}
+                          />
                         </Form.Item>
                       </Col>
                       <Col xs={24} sm={12}>
@@ -1583,25 +1609,62 @@ export default function AgentDetailPage() {
                         </Form.Item>
                       </Col>
                     </Row>
-                    {compactionKeepMode === 'messages' && (
-                      <Form.Item
-                        name="compactionKeep"
-                        label="压缩保留轮数"
-                        tooltip="压缩后保留的最近轮数原文，更早消息被摘要替代"
-                      >
-                        <InputNumber min={1} max={100} style={{ width: '100%' }} />
-                      </Form.Item>
-                    )}
-                    {compactionKeepMode === 'tokens' && (
-                      <Form.Item
-                        name={['compaction', 'keepTokens']}
-                        label="尾部 token 预算"
-                        tooltip="从最近消息往前扫到该预算耗尽为止"
-                        rules={[{ required: true, message: '按 token 保留时必须填写' }]}
-                      >
-                        <InputNumber min={256} max={200000} step={256} style={{ width: '100%' }} />
-                      </Form.Item>
-                    )}
+                    <Row gutter={16}>
+                      <Col xs={24} sm={12}>
+                        {compactionTriggerMode === 'tokens' ? (
+                          <Form.Item
+                            name={['compaction', 'triggerTokens']}
+                            label="触发 token 阈值"
+                            tooltip="估算 token 超过该值即触发压缩；与窗口预算取较小者，所以填得比窗口还大等于回到动态"
+                            rules={[{ required: true, message: '固定 token 阈值时必须填写' }]}
+                          >
+                            <InputNumber min={1000} max={2000000} step={1000} style={{ width: '100%' }} />
+                          </Form.Item>
+                        ) : (
+                          <Form.Item
+                            name={['compaction', 'reserved']}
+                            label="预缓冲 token"
+                            tooltip="从模型窗口里扣掉、留给摘要调用本身的 token（框架默认 20000）；扣得越多越早触发"
+                          >
+                            <InputNumber
+                              min={1}
+                              max={200000}
+                              step={1000}
+                              placeholder="默认 20000"
+                              style={{ width: '100%' }}
+                            />
+                          </Form.Item>
+                        )}
+                      </Col>
+                      <Col xs={24} sm={12}>
+                        {compactionKeepMode === 'messages' && (
+                          <Form.Item
+                            name="compactionKeep"
+                            label="压缩保留轮数"
+                            tooltip="压缩后保留的最近轮数原文，更早消息被摘要替代"
+                          >
+                            <InputNumber min={0} max={100} style={{ width: '100%' }} />
+                          </Form.Item>
+                        )}
+                        {compactionKeepMode === 'tokens' && (
+                          <Form.Item
+                            name={['compaction', 'keepTokens']}
+                            label="尾部 token 预算"
+                            tooltip="从最近消息往前扫到该预算耗尽为止"
+                            rules={[{ required: true, message: '按 token 保留时必须填写' }]}
+                          >
+                            <InputNumber min={256} max={200000} step={256} style={{ width: '100%' }} />
+                          </Form.Item>
+                        )}
+                      </Col>
+                    </Row>
+                    <Form.Item
+                      name="compactionTrigger"
+                      label="触发轮数"
+                      tooltip="条数是与 token 口径并列的独立触发器，谁先到算谁；0 = 不按条数触发（留空 = 默认 30）"
+                    >
+                      <InputNumber min={0} max={200} placeholder="默认 30；0 = 不按条数" style={{ width: 280 }} />
+                    </Form.Item>
                     <Form.Item
                       name={['compaction', 'modelId']}
                       label="压缩摘要模型"

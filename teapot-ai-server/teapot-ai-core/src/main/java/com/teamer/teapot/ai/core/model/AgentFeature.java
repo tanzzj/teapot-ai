@@ -77,6 +77,11 @@ public class AgentFeature {
     private static final int CUSTOM_MODEL_MAX = 1;
     /** 压缩尾部保留方式（SPEC §29.20）：dynamic 按窗口预算 / messages 按条数 / tokens 按固定预算 */
     private static final Set<String> COMPACTION_KEEP_MODES = Set.of("dynamic", "messages", "tokens");
+    /**
+     * 触发口径只有两态：框架里 token 触发无法关闭（{@code triggerTokens=0} 是"按窗口动态算"而非"不触发"，
+     * {@code >0} 又与窗口预算取小），能关的只有条数触发（{@code triggerMessages=0}），故不提供"仅按条数"。
+     */
+    private static final Set<String> COMPACTION_TRIGGER_MODES = Set.of("dynamic", "tokens");
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
@@ -636,6 +641,15 @@ public class AgentFeature {
         if (c == null) {
             return;
         }
+        if (!isBlank(c.getTriggerMode()) && !COMPACTION_TRIGGER_MODES.contains(c.getTriggerMode())) {
+            throw new BizException("compaction.triggerMode 非法，可选值：dynamic / tokens");
+        }
+        if ("tokens".equals(c.getTriggerMode())) {
+            if (c.getTriggerTokens() == null || c.getTriggerTokens() <= 0) {
+                throw new BizException("triggerMode=tokens 时必须指定正的 triggerTokens");
+            }
+        }
+        requirePositive("compaction.reserved", c.getReserved());
         if (!isBlank(c.getKeepMode()) && !COMPACTION_KEEP_MODES.contains(c.getKeepMode())) {
             // 文案固定顺序：Set.of 的迭代顺序每次 JVM 启动都可能不同，不能直接进用户可见报错
             throw new BizException("compaction.keepMode 非法，可选值：dynamic / messages / tokens");
@@ -715,6 +729,16 @@ public class AgentFeature {
     public static class Compaction {
         /** 压缩摘要专用模型，留空跟随 Agent 主模型 */
         private String modelId;
+        /**
+         * 触发口径（SPEC §29.21）：dynamic（默认）= 到「模型窗口 − reserved」才压；
+         * tokens = 固定 token 阈值提前压（仍与窗口预算取小）。条数触发（t_agent.compaction_trigger）
+         * 与之并列、先到先算，不是互斥项。
+         */
+        private String triggerMode;
+        /** triggerMode=tokens 时的 token 阈值（必须 &gt; 0） */
+        private Integer triggerTokens;
+        /** triggerMode=dynamic 时给摘要本身预留的缓冲 token（框架默认 20000） */
+        private Integer reserved;
         /**
          * 尾部保留方式（SPEC §29.20）：dynamic（默认）= 按上下文窗口预算留尾部，此时
          * t_agent.compaction_keep 不参与；messages = 按条数留尾部（keepMessages 生效）；

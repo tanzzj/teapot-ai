@@ -2753,6 +2753,24 @@ AgentScope 有六个模型供应商扩展模块，teapot 的 `ModelRegistry` 只
 
 **风险**：选"按条数"时若单条工具结果极大，10 条也可能顶满窗口 —— 框架有 context overflow 兜底重试（`CompactionMiddleware:146-156` 会以 `triggerMessages(1)/keepMessages(1)/keepTokens(0)` 强制压一次再重试），但那是报错后补救，不是预防。关掉两个默认机制同理会让历史更容易涨到窗口上限。
 
+### §29.21 触发口径按策略渲染：动态窗口预算 / 固定 token 阈值（2026-10-26 用户截图挑出）
+
+§29.20 把**保留**侧做成了按方式渲染，**触发**侧却仍是一个常驻的「压缩触发轮数」数字框，用户当场挑出这个不对称。回框架核对语义后确认：**触发做不到与保留对称的三态**，因为两个轴的性质不同——
+
+- `ConversationCompactor:283-294` 里条数与 token 是**两个并列触发器，先到先算**（各自 `>0` 才参与判断），不是互斥枚举；
+- **token 触发关不掉**：`triggerTokens=0` 的语义是"按窗口动态算"而不是"不触发"（`CompactionMiddleware:243-246` 取 `min(阈值, 窗口−reserved)`，所以填得再大也被窗口封顶）；
+- **能关的只有条数**：`triggerMessages=0` 即不按条数触发。
+
+所以做成**两态口径 + 恒在的条数兜底**，而不是摆一个假的"仅按轮数"：
+
+- `feature.compaction` 新增 `triggerMode`（`dynamic` 默认 / `tokens`）、`triggerTokens`（tokens 态必填正数）、`reserved`（dynamic 态留给摘要本身的缓冲，框架默认 20000）。`AgentBuilder.applyTriggerMode` 映射：tokens → `triggerTokens(N)`；dynamic → `triggerTokens(0)` + 显式填了才 `reserved(N)`；未配置 = 框架默认，行为与 §29.20 之后完全一致。
+- `t_agent.compaction_trigger` 新增合法值 **0 = 不按条数触发**（-1 仍是整块关压缩，1–200 不变），`AgentService.validateCompaction` 相应放开，报错文案把三个区间都列出来。
+- 界面：「触发口径」与「尾部保留」两个下拉并排；下一行**左格随口径**渲染"预缓冲 token"或"触发 token 阈值"、**右格随方式**渲染"压缩保留轮数"或"尾部 token 预算"（动态态两边都不摆数字，因为那时确实没有可填的数）；「触发轮数」单独一行恒在，tooltip 说明它是与 token 口径并列、先到先算的独立触发器。
+- 顺带修掉截图里那个空白框：`compaction_trigger` 为 null 时（存量 Agent 从没存过）开关显示"开"但数字框空着，看着像"没限制"。现在 placeholder 直接写生效默认值（30），保存时的回落条件由 `<=0 → 30` 收紧为 `<0 → 30`，好让显式填的 0 能存进去；`compactionEnabled` 的回显判定同步由 `<=0` 改成 `<0`，否则 0 会被显示成"关压缩"。
+- 下发仍然只写差异：`dynamic` 且未填 reserved → 不落 `triggerMode`；只有 `tokens` 才落 `triggerMode + triggerTokens`，避免存量 Agent 的 feature 白胖。
+
+**验证**：`mvn -o clean package -DskipTests` 与 `npm run build` 通过；`AgentFeature.validateCompaction` 的用例覆盖 dynamic 缺省 / dynamic+reserved / tokens+正阈值 / tokens 缺阈值 / 阈值非正 / 非法枚举。**未做**：真机跑一轮验证四种口径组合下实际触发时机（要登录态 + 长会话）。
+
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
 移动端「新建 Agent」弹窗（6 个字段 + 键盘弹起）几乎占满视口，且建完还得再进详情页配模型/提示词，等于同一批字段填两遍。改为**复用详情页当草稿**：

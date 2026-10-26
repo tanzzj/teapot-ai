@@ -235,6 +235,7 @@ public class AgentBuilder {
             CompactionConfig.Builder ccBuilder = CompactionConfig.builder()
                     .triggerMessages(trigger)
                     .keepMessages(keep);
+            applyTriggerMode(ccBuilder, compactionCfg);
             applyKeepMode(ccBuilder, compactionCfg);
             applyPrune(ccBuilder, compactionCfg);
             if (compactionCfg != null && compactionCfg.getModelId() != null && !compactionCfg.getModelId().isBlank()) {
@@ -387,6 +388,25 @@ public class AgentBuilder {
         // MCP Server 注册（SPEC §MCP）：Agent 级配置，引用系统记录或内联完整配置
         applyMcp(agent, feature.getMcp());
         return agent;
+    }
+
+    /**
+     * 触发口径 → 框架 triggerTokens（SPEC §29.21）。框架的 token 触发无法关闭：{@code 0}=按
+     * 「窗口 − reserved」动态算，{@code >0}=固定阈值但仍被窗口取小，所以这里只有动态/固定两态；
+     * 条数触发走 compaction_trigger 列（0 = 不按条数），与 token 触发先到先算。
+     */
+    private static void applyTriggerMode(CompactionConfig.Builder builder, AgentFeature.Compaction c) {
+        if (c == null || c.getTriggerMode() == null || c.getTriggerMode().isBlank()) {
+            return;
+        }
+        if ("tokens".equals(c.getTriggerMode())) {
+            builder.triggerTokens(c.getTriggerTokens());
+        } else {
+            builder.triggerTokens(0);
+            if (c.getReserved() != null) {
+                builder.reserved(c.getReserved());
+            }
+        }
     }
 
     /**

@@ -228,10 +228,10 @@ public class AgentService {
         return agent;
     }
 
-    /** compaction 取值校验：-1 = 关闭压缩，其余须落既有区间 */
+    /** compaction 取值校验：-1 = 关闭压缩，0 = 不按条数触发（只按 token/窗口），其余须落既有区间 */
     private static void validateCompaction(Integer trigger, Integer keep) {
-        if (trigger != null && trigger != -1 && (trigger < 1 || trigger > 200)) {
-            throw new BizException("compactionTrigger 须为 -1（关闭）或 1–200");
+        if (trigger != null && trigger != -1 && (trigger < 0 || trigger > 200)) {
+            throw new BizException("compactionTrigger 须为 -1（关闭）/ 0（不按条数触发）/ 1–200");
         }
         if (keep != null && keep != -1 && (keep < 0 || keep > 100)) {
             throw new BizException("compactionKeep 须为 -1（关闭）或 0–100");
