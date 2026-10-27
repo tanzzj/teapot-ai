@@ -2787,7 +2787,7 @@ AgentScope 有六个模型供应商扩展模块，teapot 的 `ModelRegistry` 只
 
 teapot 现有 13 个中间件全是「装配现场 new 一个、参数从 feature 现取」：每加一个可配中间件都要动三处 —— `AgentFeature` 加命名空间与校验、`AgentBuilder` 加挂载分支、界面加表单。本节把这条路径收敛成一套机制（落点 `core/middleware/feature/`，10 个文件）：
 
-- **中间件本体是单例 Bean，不持 Agent 状态**。每个 Agent 的差异全部外置到 `t_agent.feature` 的 `middleware_<key>` 命名空间（历史 `middleware_<key>Hook` 仍认）。`AgentFeature` 本来就「未知顶层命名空间原样保留（不拒不改）」，所以**无 DDL、无 AgentFeature 改动**：新增一个可配中间件 = 新增一个 Bean。
+- **中间件本体是单例 Bean，不持 Agent 状态**。每个 Agent 的差异全部外置到 `t_agent.feature` 的 `middleware_<key>` 命名空间。`AgentFeature` 本来就「未知顶层命名空间原样保留（不拒不改）」，所以**无 DDL、无 AgentFeature 改动**：新增一个可配中间件 = 新增一个 Bean。
 - **两层回调**。框架层是 `FeatureMiddlewareBinding`（每次装配一个实例，持有本次装配的 feature 快照，实现 `MiddlewareBase` 的 6 个钩子，`activePoints()`/`order()` 透传本体）；业务层是子类覆写的 `onXxx(config, agent, ctx, input, next)`，进来时 config 一定非 null。配置**首次用到才解析并记忆**（不触发的钩子不付解析代价）。
 - **启动 fail-fast / 运行 fail-open**。注册表构造时逐个内省，类名不以 `Middleware` 结尾、key 重复、`description()` 空白、泛型参数缺失（含被 CGLIB 代理掉）、字段缺 `@ConfigField`、类型不支持、`options` 非枚举常量、`defaultValue` 解析不了 —— 一律抛 `IllegalStateException` 让应用起不来。运行期解析失败只记警告并**原样放行**（`next.apply(input)`），不让一个中间件的配置问题拖死整轮对话。
 - **schema 与解析同源**。`@ConfigField(label/description/required/defaultValue/options)` 一份声明既产出前端 schema（`ConfigSchema`/`ConfigFieldSchema`）又产出解析规则（`ConfigModel` 带反射句柄，不外泄）。类型映射：String→STRING，int/long→INTEGER，double/float→NUMBER，boolean→BOOLEAN，枚举→ENUM（options 自动取常量），`Map<String,String>`→STRING_MAP，带 `options` 的 String→ENUM，其余类型直接失败不静默降级；配置类是 `List<T>` 时 schema 标 `array=true` 并内省 T。
@@ -2798,7 +2798,7 @@ teapot 现有 13 个中间件全是「装配现场 new 一个、参数从 featur
 
 解析口径的几个确定语义（探针实测）：`{}` / `[]` / 空白字符串 = 未配置（不触发必填校验、不装配）；未声明字段一律拒（Jackson 默认语义，防拼错的键静默丢失）；`options` 对 String 字段是**硬约束**，补在解析侧（Jackson 不管 String 的取值范围，枚举字段才由 Jackson 兜住）；`defaultValue` 只回填「解析后为 null」的字段，**基本类型不回填**（`boolean enabled` 带 `defaultValue="true"` 仍是 false —— 要默认值就用包装类型）。
 
-**验证**：`mvn -o -pl teapot-ai-core -am clean package -DskipTests` 通过（core 139 个源文件）；`npm run build`（`tsc -b` + vite）通过，入口 `index-CGeD_oci.js`。一次性 main 直跑真类 59 例全过：内省的类型映射/字段顺序/数组配置、11 类启动 fail-fast（含 key 重复与缺泛型）、accept 门控（未配置/空对象/已配置/历史 Hook 键/存量无关命名空间）、桥接层派发与三种 fail-open（缺必填、未声明字段、非法类型）、默认值回填与基本类型不回填、保存校验的拒与放（含数组元素级）、schema 出参的三重门控与 configError。跑完探针与解包目录已删。前端版式另用一次性页面（`middleware-preview.html` + 与接口同形状的 fixture）挂**真** `MiddlewareConfigSection` 在 dev server 里实测：必填框出红字「问候语 必填」、开关开→字段出现 / 关→字段隐藏并出提示、`configError` 出告警、数组形态出说明、以及保存映射（`runtime` 与数组命名空间原样保留、关掉的命名空间被删、存量非法字段被丢弃）。探针文件已删。
+**验证**：`mvn -o -pl teapot-ai-core -am clean package -DskipTests` 通过（core 139 个源文件）；`npm run build`（`tsc -b` + vite）通过，入口 `index-CGeD_oci.js`。一次性 main 直跑真类 59 例全过：内省的类型映射/字段顺序/数组配置、11 类启动 fail-fast（含 key 重复与缺泛型）、accept 门控（未配置/空对象/已配置/存量无关命名空间）、桥接层派发与三种 fail-open（缺必填、未声明字段、非法类型）、默认值回填与基本类型不回填、保存校验的拒与放（含数组元素级）、schema 出参的三重门控与 configError。跑完探针与解包目录已删。前端版式另用一次性页面（`middleware-preview.html` + 与接口同形状的 fixture）挂**真** `MiddlewareConfigSection` 在 dev server 里实测：必填框出红字「问候语 必填」、开关开→字段出现 / 关→字段隐藏并出提示、`configError` 出告警、数组形态出说明、以及保存映射（`runtime` 与数组命名空间原样保留、关掉的命名空间被删、存量非法字段被丢弃）。探针文件已删。
 
 **踩坑**：`raw == long.class ? Long.valueOf(t) : Integer.valueOf(t)` 这种「两个包装类型混在一支」的三元表达式会触发数值提升，默认值统统变 `Long`，与 schema 声明的 INTEGER 对不上（探针第一跑就 FAIL 在 `expected=<2> actual=<2>`）。数值分支必须写成 if/yield。
 

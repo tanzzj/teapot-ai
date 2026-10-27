@@ -42,9 +42,6 @@ public abstract class FeatureDrivenMiddleware<C> implements MiddlewareBase {
     /** feature 里配置命名空间的前缀 */
     public static final String NS_PREFIX = "middleware_";
 
-    /** 历史命名空间后缀（早期实现用 {@code middleware_<key>Hook}，仍认） */
-    private static final String LEGACY_NS_SUFFIX = "Hook";
-
     private static final String CLASS_SUFFIX = "Middleware";
 
     /** 一句话说清这个中间件做什么（进 schema 出参，界面直接展示）；空白在注册表启动时即失败 */
@@ -86,13 +83,12 @@ public abstract class FeatureDrivenMiddleware<C> implements MiddlewareBase {
         return true;
     }
 
-    /** 取该 key 的配置命名空间值（先认 {@code middleware_<key>}，再认历史 {@code ...Hook}） */
+    /** 取该 key 的配置命名空间值（{@code middleware_<key>}） */
     public static Object configNamespace(String key, Map<String, Object> namespaces) {
         if (namespaces == null || key == null) {
             return null;
         }
-        Object raw = namespaces.get(NS_PREFIX + key);
-        return raw != null ? raw : namespaces.get(NS_PREFIX + key + LEGACY_NS_SUFFIX);
+        return namespaces.get(NS_PREFIX + key);
     }
 
     /** 类名 → key；不以 Middleware 结尾的直接失败（key 要可预测，不能靠兜底猜测） */
