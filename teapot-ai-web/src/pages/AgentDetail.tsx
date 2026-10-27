@@ -66,6 +66,7 @@ import {
   applyMiddlewareFeature,
   seedMiddleware,
 } from '../components/MiddlewareConfig';
+import type { MiddlewareValues } from '../components/MiddlewareConfig';
 import { uploadAgentAvatar } from '../api/avatar';
 import { skillDelete, skillList } from '../api/skill';
 import { modelProviders } from '../api/model';
@@ -247,6 +248,8 @@ export default function AgentDetailPage() {
   const [mwViews, setMwViews] = useState<MiddlewareSchemaView[]>([]);
   /** 中间件装配位（SPEC §29.25）：只有点「装配中间件」挑中的才出现在界面并写进 feature */
   const [mwAttached, setMwAttached] = useState<Record<string, boolean>>({});
+  /** 中间件配置值（SPEC §29.27）：由装配/编辑弹窗收进来，不挂页面表单，避免同名字段两处挂载互相注销 */
+  const [mwValues, setMwValues] = useState<MiddlewareValues>({});
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
   /** 新建态：所属空间下拉与空间作用域的模型清单（SPEC §28.11 与后端保存闸门同源） */
   const { workspaces, activeId, loaded: wsLoaded, load: loadWorkspaces } = useWorkspaceStore();
@@ -597,8 +600,8 @@ export default function AgentDetailPage() {
       setMwViews(mwSchemas);
       const mwSeed = seedMiddleware(mwSchemas);
       setMwAttached(mwSeed.attached);
+      setMwValues(mwSeed.values);
       form.setFieldsValue({
-        mw: mwSeed.values,
         name: d.agent.name,
         description: d.agent.description,
         modelId: d.agent.modelId,
@@ -781,7 +784,7 @@ export default function AgentDetailPage() {
 
   const onSave = async () => {
     const values = await form.validateFields();
-    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, guard, customModels: customRows, modelSource, mw, ...rest } = values as Record<string, unknown> & {
+    const { sandbox, storageTarget, channel, mcp, runtime, multiagent, memory, sessionTitle, compaction: compactionFeature, compactionEnabled, a2ui, guard, customModels: customRows, modelSource, ...rest } = values as Record<string, unknown> & {
       sandbox?: Partial<AgentSandboxConfig>;
       storageTarget?: string;
       channel?: Partial<AgentChannelConfig>;
@@ -908,10 +911,9 @@ export default function AgentDetailPage() {
     if (multiagent !== undefined) {
       feature.multiagent = multiagent;
     }
-    if (mw !== undefined) {
-      // feature 驱动中间件（SPEC §29.23）：关 = 删命名空间，开 = 只写非空字段，数组形态原样保留
-      applyMiddlewareFeature(feature, mwViews, mw, mwAttached);
-    }
+    // feature 驱动中间件（SPEC §29.23/§29.27）：没装配的删命名空间，装配的只写非空字段，数组形态原样保留。
+    // 值来自弹窗收进来的 state（不挂本页表单），所以不依赖 validateFields 的返回
+    applyMiddlewareFeature(feature, mwViews, mwValues, mwAttached);
     if (memory !== undefined) {
       // enabled=false 时仅提交 {enabled:false}，落盘策略无意义（SPEC §25）
       feature.memory = memory.enabled ? memory : { enabled: false };
@@ -2198,11 +2200,12 @@ export default function AgentDetailPage() {
 
             {section === 'middleware' && (
               <MiddlewareConfigSection
-                form={form}
                 views={mwViews}
                 attached={mwAttached}
-                onAdd={(key) => setMwAttached((s) => ({ ...s, [key]: true }))}
-                onRemove={(key) => setMwAttached((s) => ({ ...s, [key]: false }))}
+                values={mwValues}
+                onAttach={(key) => setMwAttached((s) => ({ ...s, [key]: true }))}
+                onDetach={(key) => setMwAttached((s) => ({ ...s, [key]: false }))}
+                onValues={setMwValues}
               />
             )}
 
