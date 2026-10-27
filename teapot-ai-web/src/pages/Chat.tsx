@@ -20,6 +20,7 @@ import { AskQuestionCard } from '../chat/AskUserCard';
 import { A2uiCard } from '../chat/A2uiCard';
 import { registerSubmit } from '../chat/askUserStore';
 import { PlanEnterCard, PlanExitCard, PlanWriteCard, TodoWriteCard } from '../chat/PlanCards';
+import { ShellCard } from '../chat/ShellCard';
 import MediaGenCard from '../chat/MediaGenCard';
 import { createSessionBridge, revealHiddenSessions, updateSessionTitleInMirror } from '../chat/sessionBridge';
 import SessionPanel from '../chat/SessionPanel';
@@ -463,6 +464,8 @@ export default function Chat() {
         // a2ui_present 是 SDK 渲染子 Agent 的私有提交工具，不进主流，挂载点仅服务旧会话历史回放
         a2ui_render: A2uiCard,
         a2ui_present: A2uiCard,
+        // shell 工具（SPEC §29.28）：终端样式卡，命令行不再包成 JSON、退出码提成状态徽标
+        execute: ShellCard,
       },
       session: {
         multiple: true,
