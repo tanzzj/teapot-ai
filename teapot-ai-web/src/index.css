@@ -353,19 +353,33 @@ button[class*='btn-primary'] {
   padding: 10px 12px !important;
 }
 
-/* ── 弹窗关闭按钮钉在卡片右上角（SPEC §29.9）──
-   设计库把 ✕ 作为标题行的一个 flex 子项（两端对齐），位置随标题宽度/换行漂移；
-   改成绝对定位到弹窗右上角后，桌面与移动两条链路都固定在同一个位置。 */
+/* ── 弹窗关闭按钮钉在卡片右上角（SPEC §29.9，本轮补严）──
+   设计库把 ✕ 作为标题行的 flex 子项（两端对齐），位置随标题宽度/换行漂移，
+   所以改成绝对定位到弹窗右上角，桌面与移动两条链路同一个位置。
+   钉法必须把另一侧同时置 auto：只写 right 时，只要库（或 RTL 分支）给 left /
+   inset-inline-start 赋了值，绝对定位盒会被左右同时定住、拉满整行宽度，
+   图标就贴到左边、看着像掉到标题下面 —— 这就是"关闭按钮位置错"的成因。
+   !important 是给运行时注入的 CSS-in-JS 让路：静态表在 <head> 里排在它前面。 */
 .ant-modal .ant-modal-content {
-  position: relative;
+  position: relative !important;
 }
-.ant-modal .spark-modal-title-close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
+.ant-modal .spark-modal-title-close,
+.ant-modal .ant-modal-close {
+  position: absolute !important;
+  top: 14px !important;
+  right: 16px !important;
+  left: auto !important;
+  inset-inline-start: auto !important;
+  inset-inline-end: 16px !important;
+  bottom: auto !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  transform: none !important;
   z-index: 2;
 }
 /* 标题给右上角的 ✕ 让出点击区，长标题不会压在图标下面 */
-.ant-modal .spark-modal-title {
+.ant-modal .spark-modal-title,
+.ant-modal .ant-modal-title {
   padding-right: 28px;
 }
