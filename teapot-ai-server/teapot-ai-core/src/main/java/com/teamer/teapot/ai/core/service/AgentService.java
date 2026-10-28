@@ -306,6 +306,19 @@ public class AgentService {
         return agent;
     }
 
+    /**
+     * 批量移动到同一空间（SPEC §35）：整批一个事务 —— 只要有一条不合格（已停用、对某个源空间没成员权限、
+     * key 不存在）就整批回滚，不会出现"移了一半、界面上有的在旧空间有的在新空间"这种说不清的状态。
+     * 校验与审计仍逐条走 {@link #moveWorkspace}，所以报错文案能指名是哪一条、为什么。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public int moveWorkspaceBatch(List<String> agentKeys, Long targetWorkspaceId) {
+        for (String agentKey : agentKeys) {
+            moveWorkspace(agentKey, targetWorkspaceId);
+        }
+        return agentKeys.size();
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void delete(String agentKey) {
         AgentDO agent = requireAgent(agentKey);

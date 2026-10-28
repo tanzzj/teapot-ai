@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Col, Row, Spin } from 'antd';
+import { Checkbox, Col, Row, Spin } from 'antd';
 import {
   Button,
   Empty,
@@ -11,6 +11,7 @@ import {
   Switch,
 } from '@agentscope-ai/design';
 import {
+  SparkBatchMoveLine,
   SparkDeleteLine,
   SparkEditLine,
   SparkMessageLine,
@@ -18,7 +19,7 @@ import {
   SparkSearchLine,
 } from '@agentscope-ai/icons';
 import { useNavigate } from 'react-router-dom';
-import { agentDelete, agentList, agentMoveWorkspace } from '../api/agent';
+import { agentDelete, agentList, agentMoveWorkspace, agentMoveWorkspaceBatch } from '../api/agent';
 import { NEW_AGENT_KEY } from './AgentDetail';
 import type { Agent } from '../types';
 import { ResponsiveModal } from '../components/ResponsiveModal';
@@ -39,6 +40,12 @@ export default function Agents() {
   const [loading, setLoading] = useState(false);
   const [moveAgent, setMoveAgent] = useState<Agent | null>(null);
   const [moveTarget, setMoveTarget] = useState<string>('personal');
+  /** 批量移动（SPEC §35）：选择态只在当前这一页有效，翻页/搜索/换空间即清空 */
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchTarget, setBatchTarget] = useState<string>('personal');
+  const [batchBusy, setBatchBusy] = useState(false);
 
   useEffect(() => {
     if (!loaded) {
@@ -58,6 +65,8 @@ export default function Agents() {
       });
       setList(resp.list || []);
       setTotal(resp.total || 0);
+      // 列表内容变了，上一批勾选就不再对应屏幕上的卡片了
+      setSelected([]);
     } catch {
       // 已统一提示
     } finally {
@@ -84,6 +93,36 @@ export default function Agents() {
     message.success('已移动到目标空间');
     setMoveAgent(null);
     load();
+  };
+
+  const toggleSelect = (agentKey: string) => {
+    setSelected((prev) => (prev.includes(agentKey) ? prev.filter((k) => k !== agentKey) : [...prev, agentKey]));
+  };
+
+  const exitSelect = () => {
+    setSelecting(false);
+    setSelected([]);
+  };
+
+  const selectedAgents = list.filter((a) => selected.includes(a.agentKey));
+
+  const onBatchMove = async () => {
+    setBatchBusy(true);
+    try {
+      const moved = await agentMoveWorkspaceBatch(
+        selected,
+        batchTarget === 'personal' ? null : Number(batchTarget),
+      );
+      const name = batchTarget === 'personal' ? '个人空间' : spaceOptions.find((o) => o.value === batchTarget)?.label;
+      message.success(`已移动 ${moved} 个 Agent 到「${name}」`);
+      setBatchOpen(false);
+      exitSelect();
+      load();
+      // 移走之后当前空间少了一批，顶栏空间计数要跟着变，否则下拉里还是旧数字
+      loadWorkspaces();
+    } finally {
+      setBatchBusy(false);
+    }
   };
 
   return (
@@ -117,13 +156,43 @@ export default function Agents() {
             }}
           />
         </span>
-        <Button
-          type="primary"
-          icon={<SparkPlusLine />}
-          onClick={() => navigate(`/agents/${NEW_AGENT_KEY}`)}
-        >
-          New Agent
-        </Button>
+        {selecting ? (
+          <>
+            <span style={{ color: 'rgba(26, 26, 29, 0.55)', fontSize: 13, whiteSpace: 'nowrap' }}>
+              已选 {selected.length} 个
+            </span>
+            <Button
+              type="primary"
+              disabled={selected.length === 0}
+              onClick={() => {
+                setBatchTarget('personal');
+                setBatchOpen(true);
+              }}
+            >
+              移动到空间
+            </Button>
+            <Button type="text" onClick={exitSelect}>
+              取消
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              icon={<SparkBatchMoveLine />}
+              disabled={list.length === 0}
+              onClick={() => setSelecting(true)}
+            >
+              批量移动
+            </Button>
+            <Button
+              type="primary"
+              icon={<SparkPlusLine />}
+              onClick={() => navigate(`/agents/${NEW_AGENT_KEY}`)}
+            >
+              New Agent
+            </Button>
+          </>
+        )}
       </div>
 
       <Spin spinning={loading}>
@@ -131,15 +200,29 @@ export default function Agents() {
           <Empty description="暂无 Agent" style={{ marginTop: 60 }} />
         ) : (
           <Row gutter={[16, 16]}>
-            {list.map((agent) => (
+            {list.map((agent) => {
+              const isSelected = selected.includes(agent.agentKey);
+              return (
               <Col key={agent.agentKey} xs={24} md={12} xl={8} style={{ display: 'flex' }}>
                 <div
                   className="glass-card"
-                  style={{ padding: 20, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minWidth: 0 }}
-                  onClick={() => navigate(`/agents/${agent.agentKey}`)}
+                  style={{
+                    padding: 20,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                    flex: 1,
+                    minWidth: 0,
+                    // 选择态用描边标出勾选，卡片点击从"进详情"改成"切换选中"
+                    outline: isSelected ? '2px solid #5bb98b' : 'none',
+                    outlineOffset: -2,
+                  }}
+                  onClick={() => (selecting ? toggleSelect(agent.agentKey) : navigate(`/agents/${agent.agentKey}`))}
                 >
-                  {/* 卡片头：头像（SPEC §23：有头像图则展示，否则首字母占位） + 名称/key + 类型标签 */}
+                  {/* 卡片头：勾选框（仅选择态）+ 头像（SPEC §23：有头像图则展示，否则首字母占位） + 名称/key + 类型标签 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    {selecting && <Checkbox checked={isSelected} style={{ pointerEvents: 'none' }} />}
                     {agent.avatar ? (
                       <img
                         src={agent.avatar}
@@ -204,7 +287,8 @@ export default function Agents() {
                     {agent.description || '（无描述）'}
                   </div>
 
-                  {/* 底部操作（对话 / 编辑 / 删除） */}
+                  {/* 底部操作（对话 / 编辑 / 移动 / 删除）：选择态下整排收起，此时点卡片是勾选而不是进详情 */}
+                  {!selecting && (
                   <div
                     style={{
                       borderTop: '1px solid rgba(0, 0, 0, 0.06)',
@@ -250,9 +334,11 @@ export default function Agents() {
                       </span>
                     </Popconfirm>
                   </div>
+                  )}
                 </div>
               </Col>
-            ))}
+              );
+            })}
           </Row>
         )}
       </Spin>
@@ -279,6 +365,33 @@ export default function Agents() {
           style={{ width: '100%' }}
           options={spaceOptions}
         />
+      </ResponsiveModal>
+      {/* 批量移动（SPEC §35）：整批一个事务，失败即全批回滚 */}
+      <ResponsiveModal
+        title={`批量移动 ${selected.length} 个 Agent`}
+        open={batchOpen}
+        onOk={onBatchMove}
+        onCancel={() => setBatchOpen(false)}
+        okText="移动"
+        cancelText="取消"
+        confirmLoading={batchBusy}
+      >
+        <div style={{ marginBottom: 10, color: 'rgba(26, 26, 29, 0.65)', fontSize: 13, lineHeight: 1.7 }}>
+          {selectedAgents
+            .slice(0, 6)
+            .map((a) => `${a.name}（${a.agentKey}）`)
+            .join('、')}
+          {selectedAgents.length > 6 ? ` 等 ${selectedAgents.length} 个` : ''}
+        </div>
+        <Select
+          value={batchTarget}
+          onChange={(v) => setBatchTarget(String(v))}
+          style={{ width: '100%' }}
+          options={spaceOptions}
+        />
+        <div style={{ marginTop: 10, color: 'rgba(26, 26, 29, 0.45)', fontSize: 12 }}>
+          整批一次提交：其中任何一个已停用或你对其所在空间无权限，本次就全部不移动。
+        </div>
       </ResponsiveModal>
     </div>
   );

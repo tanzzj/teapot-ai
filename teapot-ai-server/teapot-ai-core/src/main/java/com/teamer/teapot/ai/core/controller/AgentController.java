@@ -4,6 +4,7 @@ import com.teamer.teapot.ai.common.model.PageData;
 import com.teamer.teapot.ai.common.model.Result;
 import com.teamer.teapot.ai.core.model.AgentDO;
 import com.teamer.teapot.ai.core.model.dto.AgentCreateRequest;
+import com.teamer.teapot.ai.core.model.dto.BatchMoveWorkspaceRequest;
 import com.teamer.teapot.ai.core.model.dto.AgentUpdateRequest;
 import com.teamer.teapot.ai.core.model.dto.BindSkillRequest;
 import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
@@ -105,6 +106,12 @@ public class AgentController {
     public Result<AgentDO> moveWorkspace(@PathVariable String agentKey,
                                          @RequestBody MoveWorkspaceRequest request) {
         return Result.ok(agentService.moveWorkspace(agentKey, request.getWorkspaceId()));
+    }
+
+    /** 批量移动到同一空间（SPEC §35）：整批一个事务，任一条不通过即全批回滚 */
+    @PutMapping("/batchMoveWorkspace")
+    public Result<Integer> moveWorkspaceBatch(@Valid @RequestBody BatchMoveWorkspaceRequest request) {
+        return Result.ok(agentService.moveWorkspaceBatch(request.getAgentKeys(), request.getWorkspaceId()));
     }
 
     @PostMapping("/bindSkill/{agentKey}")

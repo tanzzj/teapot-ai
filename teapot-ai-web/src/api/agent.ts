@@ -59,6 +59,13 @@ export function agentMoveWorkspace(agentKey: string, workspaceId: number | null)
   );
 }
 
+/** 批量移动到同一空间（SPEC §35）：整批一个事务，任一条不通过即全批回滚；返回移动条数 */
+export function agentMoveWorkspaceBatch(agentKeys: string[], workspaceId: number | null) {
+  return unwrap<number>(
+    http.put<Result<number>>('/api/agent/batchMoveWorkspace', { agentKeys, workspaceId }),
+  );
+}
+
 export function agentBindSkill(agentKey: string, skillName: string) {
   return unwrap<void>(http.post<Result<void>>(`/api/agent/bindSkill/${agentKey}`, { skillName }));
 }
