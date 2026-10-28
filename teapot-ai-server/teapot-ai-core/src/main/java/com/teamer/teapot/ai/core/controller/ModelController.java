@@ -4,6 +4,7 @@ import com.teamer.teapot.ai.common.model.Result;
 import com.teamer.teapot.ai.core.tool.MediaModelCatalog;
 import com.teamer.teapot.ai.core.model.ModelEntryDO;
 import com.teamer.teapot.ai.core.service.ModelService;
+import com.teamer.teapot.ai.core.service.ModelVendorClient;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -43,13 +44,16 @@ public class ModelController {
     /**
      * 已接入的供应商及其思考档表达力（SPEC §29.16）：界面 provider 下拉与「默认/开启/关闭」
      * 禁用联动的数据源，与后端保存校验同源（策略 Bean 清单）。
+     * {@code modelDiscovery} 表示该供应商能否自己报出上下文窗口与输入模态（SPEC §30.6）——
+     * 为 true 时界面不再让人手填这两项。
      */
     @GetMapping("/providers")
     public Result<List<Map<String, Object>>> providers() {
         List<Map<String, Object>> list = new ArrayList<>();
         for (String provider : new TreeSet<>(modelService.providers())) {
             list.add(Map.of("provider", provider,
-                    "thinkingSupport", modelService.thinkingSupportOf(provider).name()));
+                    "thinkingSupport", modelService.thinkingSupportOf(provider).name(),
+                    "modelDiscovery", modelService.supportsDiscovery(provider)));
         }
         return Result.ok(list);
     }
@@ -60,13 +64,29 @@ public class ModelController {
         return Result.ok(modelService.listEnabledCapabilities());
     }
 
-    /** DashScope 在售模型清单（admin；新建/编辑入口的模型名下拉数据源） */
+    /** 供应商在售模型清单（admin；新建/编辑入口的模型名下拉数据源，SPEC §30.2） */
     @GetMapping("/vendor-models/{provider}")
     public Result<List<String>> vendorModels(@PathVariable String provider) {
-        if (!"dashscope".equals(provider)) {
-            return Result.ok(List.of());
-        }
-        return Result.ok(modelService.listDashScopeVendorModels());
+        return Result.ok(modelService.listVendorModels(provider));
+    }
+
+    /**
+     * 模型入口探活（admin，SPEC §30.2）：一次 GET 验密钥与模型是否存在，
+     * 顺带把供应商报出的上下文窗口回填进入口（0 = 该接口不给出窗口，仅报可用性）。
+     */
+    @PostMapping("/{id}/probe")
+    public Result<ModelVendorClient.ProbeResult> probe(@PathVariable Long id) {
+        return Result.ok(modelService.probe(id));
+    }
+
+    /** 未落库模型的探活（SPEC §30.6）：Agent 自带模型在配置页就取回窗口与能力位；仅对可发现供应商开放 */
+    @PostMapping("/probe-draft")
+    public Result<ModelVendorClient.ProbeResult> probeDraft(@RequestBody ProbeDraftRequest request) {
+        return Result.ok(modelService.probeDraft(request.provider(), request.modelName(), request.apiKey()));
+    }
+
+    /** 探活入参：apiKey 只在服务端没有该供应商默认密钥时才用，且不会被回显 */
+    public record ProbeDraftRequest(String provider, String modelName, String apiKey) {
     }
 
     /**

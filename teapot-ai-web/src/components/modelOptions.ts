@@ -8,6 +8,8 @@ export interface CustomModelRow {
   /** 服务端已存有该模型密钥的标记（回显带出，不提交） */
   hasApiKey?: boolean;
   capabilities?: string[];
+  /** 上下文窗口 token 数；供应商报得出的由同步写入，报不出的可手填（SPEC §30.6） */
+  contextWindowSize?: number;
 }
 
 /** provider:model 标识，与后端 AgentFeature.CustomModel.modelId() 同构 */

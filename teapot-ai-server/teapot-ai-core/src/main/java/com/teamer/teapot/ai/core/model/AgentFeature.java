@@ -793,6 +793,8 @@ public class AgentFeature {
         private Boolean hasApiKey;
         /** 能力位，逗号分隔（image/video），与 t_model_entry.capabilities 同语义 */
         private String capabilities;
+        /** 上下文窗口 token 数；0/空 = 未配置，回落系统入口与框架查表（SPEC §30.1） */
+        private Integer contextWindowSize;
 
         /** 模型标识，与 t_model_entry 的 modelId 同构 */
         public String modelId() {

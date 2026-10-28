@@ -512,7 +512,8 @@ public class AgentBuilder {
                 }
             }
             creds.put(model.modelId(), new ModelRegistry.Credential(
-                    apiKey, model.getBaseUrl(), model.capabilitySet()));
+                    apiKey, model.getBaseUrl(), model.capabilitySet(),
+                    model.getContextWindowSize() == null ? 0 : model.getContextWindowSize()));
         }
         return creds;
     }

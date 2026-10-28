@@ -50,6 +50,9 @@ public class OllamaStrategy implements ModelProviderStrategy {
                             : ThinkOption.ThinkBoolean.DISABLED)
                     .build());
         }
+        if (spec.contextWindowSize() > 0) {
+            builder.contextWindowSize(spec.contextWindowSize());
+        }
         return builder.build();
     }
 }

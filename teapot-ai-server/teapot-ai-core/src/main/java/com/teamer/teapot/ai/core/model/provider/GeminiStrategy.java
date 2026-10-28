@@ -42,6 +42,9 @@ public class GeminiStrategy implements ModelProviderStrategy {
         if (ModelProviderStrategy.notBlank(spec.baseUrl())) {
             builder.baseUrl(spec.baseUrl());
         }
+        if (spec.contextWindowSize() > 0) {
+            builder.contextWindowSize(spec.contextWindowSize());
+        }
         return builder.build();
     }
 }

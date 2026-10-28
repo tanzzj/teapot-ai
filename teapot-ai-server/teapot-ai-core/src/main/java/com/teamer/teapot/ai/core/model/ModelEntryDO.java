@@ -23,6 +23,8 @@ public class ModelEntryDO {
     private String baseUrl;
     /** 能力位逗号分隔：image,audio,video；null=纯文本（SPEC §19） */
     private String capabilities;
+    /** 模型上下文窗口 token 数；0 = 未配置，由框架按模型名查表推断（SPEC §30.1） */
+    private Integer contextWindowSize;
     /** 1 启用 0 停用 */
     private Integer status;
     private String createdBy;

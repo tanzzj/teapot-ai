@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { AutoComplete, Space, Typography } from 'antd';
-import { Button, Form, Input, message, Popconfirm, Select, Switch, Table, Tag } from '@agentscope-ai/design';
+import { Button, Form, Input, InputNumber, message, Popconfirm, Select, Switch, Table, Tag } from '@agentscope-ai/design';
 import { SparkPlusLine } from '@agentscope-ai/icons';
 import {
   modelCreate,
   modelDelete,
   modelList,
+  modelProbe,
   modelProviders,
   modelUpdate,
   modelVendorModels,
@@ -16,6 +17,7 @@ import { workspaceAll } from '../api/workspace';
 import type { Workspace } from '../types';
 import { useIsPhone } from '../hooks/useIsPhone';
 import { ResponsiveModal } from '../components/ResponsiveModal';
+import { useVendorModelMeta, VendorModelMetaNote } from '../components/VendorModelMeta';
 
 /** 全局空间桶（SPEC §28.11）：模型开放到 0 = 全部空间（含个人空间）可用 */
 const GLOBAL_WS = 0;
@@ -40,6 +42,51 @@ const CAPABILITY_OPTIONS = [
   { label: '视频（video）', value: 'video' },
 ];
 
+/** 上下文窗口展示：131072 → 128K，1048576 → 1M（SPEC §30.1） */
+const formatWindow = (tokens: number) =>
+  tokens >= 1024 * 1024 ? `${Math.round(tokens / (1024 * 1024))}M` : `${Math.round(tokens / 1024)}K`;
+
+const CAPABILITIES_TOOLTIP = '勾选后前端对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点';
+const WINDOW_TOOLTIP =
+  '模型总窗口，决定 harness 给对话留多少预算。留空 = 交给框架按模型名查表，表里没有的新模型（如 qwen3.8-*）会退回 64000 硬编码上限，长会话报「Prepared model input exceeds budget」。';
+
+/**
+ * 能力位与上下文窗口（SPEC §30.6）：供应商报得出的（当前 DashScope）只展示同步结果、不让人手填；
+ * 报不出的才留手工字段。隐藏的两个 Form.Item 仍注册，同步值随表单一起提交。
+ */
+function CapabilityAndWindow({ discovery, note }: { discovery: boolean; note: ReactNode }) {
+  if (discovery) {
+    return (
+      <>
+        <Form.Item label="多模态能力 / 上下文窗口" tooltip="供应商报得出就不让人手填；保存时后端还会向供应商再核对一次">
+          {note}
+        </Form.Item>
+        <Form.Item name="capabilities" hidden>
+          <Select mode="multiple" options={CAPABILITY_OPTIONS} />
+        </Form.Item>
+        <Form.Item name="contextWindowSize" hidden>
+          <InputNumber />
+        </Form.Item>
+      </>
+    );
+  }
+  return (
+    <>
+      <Form.Item name="capabilities" label="多模态能力" tooltip={CAPABILITIES_TOOLTIP}>
+        <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
+      </Form.Item>
+      <Form.Item name="contextWindowSize" label="上下文窗口（tokens）" tooltip={WINDOW_TOOLTIP}>
+        <InputNumber
+          min={0}
+          step={1024}
+          style={{ width: '100%' }}
+          placeholder="留空=由框架按模型名推断（查不到兜底 64000）"
+        />
+      </Form.Item>
+    </>
+  );
+}
+
 /** 模型入口管理（SPEC §6.4 修订：界面配置化，admin 专属） */
 export default function Models() {
   const [list, setList] = useState<ModelEntry[]>([]);
@@ -55,6 +102,36 @@ export default function Models() {
   const providerOptions = (providerMeta.length ? providerMeta.map((p) => p.provider) : PROVIDER_FALLBACK)
     .map((provider) => ({ label: PROVIDER_LABELS[provider] ?? provider, value: provider }));
   const [vendorLoading, setVendorLoading] = useState(false);
+  /** 正在探活的入口 id（按钮 loading，避免重复点击） */
+  const [probingId, setProbingId] = useState<number | null>(null);
+
+  // 供应商报得出元数据的（当前 DashScope），能力位与窗口一律同步、不让人手填（SPEC §30.6）
+  const discoveryOf = (provider?: string) =>
+    Boolean(providerMeta.find((m) => m.provider === provider)?.modelDiscovery);
+  const createProvider = Form.useWatch('provider', createForm) as string | undefined;
+  const createModelName = Form.useWatch('modelName', createForm) as string | undefined;
+  const editProvider = Form.useWatch('provider', editForm) as string | undefined;
+  const editModelName = Form.useWatch('modelName', editForm) as string | undefined;
+  const createDiscovery = discoveryOf(createProvider);
+  const editDiscovery = discoveryOf(editProvider);
+  const createMeta = useVendorModelMeta({
+    provider: createProvider,
+    modelName: createModelName,
+    discovery: createDiscovery,
+    onSynced: (m) => createForm.setFieldsValue({
+      capabilities: m.capabilities,
+      contextWindowSize: m.contextWindowSize,
+    }),
+  });
+  const editMeta = useVendorModelMeta({
+    provider: editProvider,
+    modelName: editModelName,
+    discovery: editDiscovery,
+    onSynced: (m) => editForm.setFieldsValue({
+      capabilities: m.capabilities,
+      contextWindowSize: m.contextWindowSize,
+    }),
+  });
   /** 团队空间清单（模型开放范围数据源，SPEC §28.11） */
   const [teamSpaces, setTeamSpaces] = useState<Workspace[]>([]);
   const isPhone = useIsPhone();
@@ -105,6 +182,7 @@ export default function Models() {
       displayName: values.displayName || null,
       baseUrl: values.baseUrl?.trim() || null,
       capabilities: values.capabilities?.length ? values.capabilities.join(',') : null,
+      contextWindowSize: values.contextWindowSize || 0,
       status: 1,
       workspaceIds: values.workspaceIds || [],
     });
@@ -123,6 +201,7 @@ export default function Models() {
       displayName: values.displayName || null,
       baseUrl: values.baseUrl?.trim() || null,
       capabilities: values.capabilities?.length ? values.capabilities.join(',') : null,
+      contextWindowSize: values.contextWindowSize || 0,
       workspaceIds: values.workspaceIds || [],
     });
     message.success('保存成功');
@@ -135,6 +214,26 @@ export default function Models() {
     await modelUpdate(record.id, { status: enabled ? 1 : 0 });
     message.success(enabled ? '已启用' : '已停用');
     load();
+  };
+
+  /**
+   * 探活（SPEC §30.2）：只打供应商的模型详情端点，不发补全请求、不计费。
+   * 供应商报出的上下文窗口由后端直接回填，这里刷新列表即可看到生效值。
+   */
+  const onProbe = async (record: ModelEntry) => {
+    if (!record.id) return;
+    setProbingId(record.id);
+    try {
+      const result = await modelProbe(record.id);
+      if (result.ok) {
+        message.success(result.message);
+      } else {
+        message.error(result.message);
+      }
+      load();
+    } finally {
+      setProbingId(null);
+    }
   };
 
   return (
@@ -188,6 +287,18 @@ export default function Models() {
                 : '-',
           },
           {
+            title: '上下文窗口',
+            dataIndex: 'contextWindowSize',
+            width: 110,
+            // 未配置时框架按模型名查表，查不到会退回 64000 兜底上限（SPEC §30.1）
+            render: (v: number | null) =>
+              v && v > 0 ? (
+                formatWindow(v)
+              ) : (
+                <span style={{ color: 'rgba(26,26,29,0.35)' }}>未配置</span>
+              ),
+          },
+          {
             title: '开放空间',
             dataIndex: 'workspaceIds',
             width: 160,
@@ -217,7 +328,7 @@ export default function Models() {
           { title: '创建人', dataIndex: 'createdBy', width: 100 },
           {
             title: '操作',
-            width: 140,
+            width: 200,
             render: (_: unknown, record: ModelEntry) => (
               <Space>
                 <Button
@@ -229,12 +340,20 @@ export default function Models() {
                       displayName: record.displayName || '',
                       baseUrl: record.baseUrl || '',
                       capabilities: record.capabilities ? record.capabilities.split(',') : [],
+                      contextWindowSize: record.contextWindowSize || undefined,
                       workspaceIds: record.workspaceIds || [],
                     });
                     setEditTarget(record);
                   }}
                 >
                   编辑
+                </Button>
+                <Button
+                  size="small"
+                  loading={probingId === record.id}
+                  onClick={() => onProbe(record)}
+                >
+                  探活
                 </Button>
                 <Popconfirm
                   title={`确认删除「${record.provider}:${record.modelName}」？引用该模型的 Agent 将无法对话`}
@@ -304,9 +423,9 @@ export default function Models() {
           <Form.Item name="displayName" label="展示名">
             <Input placeholder="如 通义千问 Plus（留空显示模型标识）" />
           </Form.Item>
-          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点">
-            <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
-          </Form.Item>
+          <CapabilityAndWindow discovery={createDiscovery} note={
+            <VendorModelMetaNote meta={createMeta.meta} syncing={createMeta.syncing} onResync={createMeta.resync} />
+          } />
           <Form.Item
             name="workspaceIds"
             label="开放空间"
@@ -377,9 +496,9 @@ export default function Models() {
           <Form.Item name="displayName" label="展示名">
             <Input placeholder="留空显示模型标识" />
           </Form.Item>
-          <Form.Item name="capabilities" label="多模态能力" tooltip="勾选后前端对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点">
-            <Select mode="multiple" options={CAPABILITY_OPTIONS} placeholder="纯文本（默认）" />
-          </Form.Item>
+          <CapabilityAndWindow discovery={editDiscovery} note={
+            <VendorModelMetaNote meta={editMeta.meta} syncing={editMeta.syncing} onResync={editMeta.resync} />
+          } />
           <Form.Item
             name="workspaceIds"
             label="开放空间"

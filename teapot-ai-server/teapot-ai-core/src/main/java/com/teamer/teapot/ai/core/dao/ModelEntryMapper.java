@@ -28,6 +28,11 @@ public interface ModelEntryMapper {
 
     int update(ModelEntryDO entry);
 
+    /** 探活回填（SPEC §30.1/§30.2）：只更新窗口与能力位，null 表示该列不动 */
+    int updateProbe(@Param("id") Long id,
+                    @Param("contextWindowSize") Integer contextWindowSize,
+                    @Param("capabilities") String capabilities);
+
     int deleteById(@Param("id") Long id);
 
     /** 全部授权行（admin 列表批量回填 workspaceIds，SPEC §28.11） */

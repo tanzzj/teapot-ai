@@ -54,6 +54,9 @@ public class OpenAIResponsesStrategy implements ModelProviderStrategy {
         } else if (Boolean.FALSE.equals(spec.thinking())) {
             log.warn("openai-official 无显式关闭思考的通道，「关闭」按不下发处理 modelId={}", spec.modelId());
         }
+        if (spec.contextWindowSize() > 0) {
+            builder.contextWindowSize(spec.contextWindowSize());
+        }
         return builder.build();
     }
 }

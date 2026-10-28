@@ -1,7 +1,5 @@
 package com.teamer.teapot.ai.core.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamer.teapot.ai.common.exception.BizException;
 import com.teamer.teapot.ai.core.audit.AuditService;
 import com.teamer.teapot.ai.core.config.TeapotAiProperties;
@@ -12,22 +10,17 @@ import com.teamer.teapot.ai.core.model.provider.ThinkingSupport;
 import com.teamer.teapot.ai.rbac.context.ContextUtil;
 import com.teamer.teapot.ai.rbac.model.TeapotUser;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 模型入口管理（SPEC §6.4 修订：模型入口界面配置化，替代 yml 白名单）。
@@ -45,26 +38,16 @@ public class ModelService {
     private final ModelRegistry modelRegistry;
     private final AuditService auditService;
     private final TeapotAiProperties properties;
-
-    @Value("${DASHSCOPE_API_KEY:}")
-    private String dashscopeApiKey;
-
-    /** DashScope 模型清单缓存（列表庞大且变动低频，10 分钟 TTL） */
-    private volatile List<String> vendorModelsCache;
-    private volatile long vendorModelsCacheAt;
-    private static final long VENDOR_MODELS_TTL_MS = 10 * 60 * 1000L;
-    private static final String DASHSCOPE_MODELS_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
-
-    private static final ObjectMapper JSON = new ObjectMapper();
-    private static final HttpClient HTTP = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10)).build();
+    private final ModelVendorClient vendorClient;
 
     public ModelService(ModelEntryMapper modelEntryMapper, ModelRegistry modelRegistry,
-                        AuditService auditService, TeapotAiProperties properties) {
+                        AuditService auditService, TeapotAiProperties properties,
+                        ModelVendorClient vendorClient) {
         this.modelEntryMapper = modelEntryMapper;
         this.modelRegistry = modelRegistry;
         this.auditService = auditService;
         this.properties = properties;
+        this.vendorClient = vendorClient;
     }
 
     /** Agent 下拉枚举：DB 启用入口优先；DB 为空时兜底 yml 预设（平滑迁移） */
@@ -110,51 +93,102 @@ public class ModelService {
     }
 
     /**
-     * DashScope 在售模型清单（新建/编辑模型入口的下拉数据源）。
-     * 服务器 DASHSCOPE_API_KEY 代拉，密钥不出后端；仅保留 qwen 系 chat 模型；10 分钟缓存。
+     * 某供应商的在售模型清单（新建/编辑模型入口的模型名下拉数据源，SPEC §30.2）。
+     * 服务器密钥代拉，密钥不出后端；缓存由 {@link ModelVendorClient} 按供应商+网关持有。
      */
-    public List<String> listDashScopeVendorModels() {
+    public List<String> listVendorModels(String provider) {
         requireAdmin();
-        List<String> cached = vendorModelsCache;
-        if (cached != null && System.currentTimeMillis() - vendorModelsCacheAt < VENDOR_MODELS_TTL_MS) {
-            return cached;
+        return vendorClient.filterChatModels(vendorClient.listModels(provider, null, null), provider);
+    }
+
+    /**
+     * 模型入口探活（SPEC §30.2）：确认密钥可用、模型存在，并把供应商报出的上下文窗口与输入模态
+     * （即能力位，SPEC §19）回填进入口——这两项供应商自己是权威，不必靠模型名猜。
+     *
+     * <p>探活本身失败不抛异常也不改库存——「错在哪」就是要给界面看的内容；只有入口不存在才抛。
+     * 供应商没报的项（窗口 0 / 模态空列表）保持原值不动，空字符串能力位表示「确认为纯文本」。
+     * 有变化时失效模型实例缓存，下一轮装配即生效。
+     */
+    public ModelVendorClient.ProbeResult probe(Long id) {
+        requireAdmin();
+        ModelEntryDO entry = modelEntryMapper.selectById(id);
+        if (entry == null) {
+            throw new BizException("模型入口不存在：id=" + id);
         }
-        if (dashscopeApiKey.isBlank()) {
-            throw new BizException("未配置 DASHSCOPE_API_KEY，无法拉取模型清单");
+        ModelVendorClient.ProbeResult result = vendorClient.probe(
+                entry.getProvider(), entry.getModelName(), entry.getBaseUrl(), null);
+        Integer windowPatch = result.contextWindowSize() > 0
+                && !Objects.equals(entry.getContextWindowSize(), result.contextWindowSize())
+                ? result.contextWindowSize() : null;
+        String capsPatch = capabilitiesPatch(entry, result.inputModalities());
+        if (windowPatch != null || capsPatch != null) {
+            modelEntryMapper.updateProbe(id, windowPatch, capsPatch);
+            modelRegistry.evict(entry.modelId());
+            auditService.log("model.probe", entry.modelId(),
+                    "contextWindowSize=" + windowPatch + ", capabilities=" + capsPatch);
+            log.info("探活回填 modelId={} window={} capabilities={}", entry.modelId(), windowPatch, capsPatch);
+            return new ModelVendorClient.ProbeResult(result.ok(), result.httpStatus(),
+                    result.contextWindowSize(), result.inputModalities(),
+                    result.message() + "（已回填入口）");
         }
-        try {
-            HttpRequest req = HttpRequest.newBuilder(URI.create(DASHSCOPE_MODELS_URL))
-                    .header("Authorization", "Bearer " + dashscopeApiKey)
-                    .timeout(Duration.ofSeconds(15))
-                    .GET().build();
-            HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() != 200) {
-                throw new BizException("DashScope 模型清单拉取失败：HTTP " + resp.statusCode());
-            }
-            JsonNode data = JSON.readTree(resp.body()).path("data");
-            List<String> ids = new ArrayList<>();
-            for (JsonNode node : data) {
-                String id = node.path("id").asText("");
-                String lower = id.toLowerCase();
-                // 只留 qwen 系；排除非文本对话模型（图像生成 / ASR / 实时语音）
-                if (id.isBlank() || !lower.startsWith("qwen")) {
-                    continue;
-                }
-                if (lower.contains("image") || lower.contains("asr") || lower.contains("realtime")) {
-                    continue;
-                }
-                ids.add(id);
-            }
-            ids.sort(Comparator.naturalOrder());
-            vendorModelsCache = ids;
-            vendorModelsCacheAt = System.currentTimeMillis();
-            return ids;
-        } catch (BizException e) {
-            throw e;
-        } catch (Exception e) {
-            log.warn("DashScope 模型清单拉取异常", e);
-            throw new BizException("DashScope 模型清单拉取失败：" + e.getMessage());
+        return result;
+    }
+
+    /** 供应商报出的输入模态与库存能力位的差异；无模态信息或值相同 → null（不改） */
+    private String capabilitiesPatch(ModelEntryDO entry, List<String> vendorCapabilities) {
+        if (vendorCapabilities.isEmpty()) {
+            return null;
         }
+        String vendor = vendorCapabilities.stream().distinct().sorted().collect(Collectors.joining(","));
+        String current = entry.getCapabilities() == null ? "" : Arrays.stream(entry.getCapabilities().split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .sorted()
+                .collect(Collectors.joining(","));
+        return vendor.equals(current) ? null : vendor;
+    }
+
+    /**
+     * 供应商能报的就不让人手填（SPEC §30.6）：可发现供应商（当前 DashScope）在保存时以探活结果为权威，
+     * 覆盖上下文窗口与能力位；空模态即供应商确认「纯文本」，能力位置空。
+     *
+     * <p>探活不成功（模型不在目录、密钥未配、网络异常）不阻断保存，沿用提交值并留 WARN——
+     * 否则像 qwen-turbo 这种目录里已查不到的存量入口会连改名都做不到。
+     */
+    private void syncFromVendor(ModelEntryDO entry) {
+        if (!vendorClient.supportsDiscovery(entry.getProvider())) {
+            return;
+        }
+        ModelVendorClient.ProbeResult result = vendorClient.probe(
+                entry.getProvider(), entry.getModelName(), entry.getBaseUrl(), null);
+        if (!result.ok()) {
+            log.warn("保存时供应商同步未成功，沿用提交值 modelId={} reason={}",
+                    entry.modelId(), result.message());
+            return;
+        }
+        if (result.contextWindowSize() > 0) {
+            entry.setContextWindowSize(result.contextWindowSize());
+        }
+        entry.setCapabilities(String.join(",", result.inputModalities()));
+    }
+
+    /**
+     * 未落库的模型探活（SPEC §30.6）：Agent 自带模型在配置页就要拿到窗口与能力位，
+     * 密钥用用户填的那把（留空回落服务端环境变量）。
+     *
+     * <p>只对「可发现」的供应商开放：这类供应商的端点是固定的官方地址；其余供应商的 baseUrl
+     * 由调用方自定，放开等于让服务端去访问任意地址，故直接拒绝。
+     */
+    public ModelVendorClient.ProbeResult probeDraft(String provider, String modelName, String apiKey) {
+        if (!vendorClient.supportsDiscovery(provider)) {
+            throw new BizException(provider + " 不提供模型元数据，请手工填写上下文窗口与多模态能力");
+        }
+        if (modelName == null || modelName.isBlank()) {
+            throw new BizException("模型名不能为空");
+        }
+        return vendorClient.probe(provider, modelName.trim(), null,
+                apiKey == null ? null : apiKey.trim());
     }
 
     public ModelEntryDO create(ModelEntryDO request) {
@@ -166,6 +200,7 @@ public class ModelService {
         }
         request.setStatus(request.getStatus() == null ? 1 : request.getStatus());
         request.setCapabilities(normalizeCapabilities(request.getCapabilities()));
+        syncFromVendor(request);
         request.setCreatedBy(ContextUtil.currentUserId());
         modelEntryMapper.insert(request);
         saveGrants(request.getId(), request.getWorkspaceIds());
@@ -198,9 +233,14 @@ public class ModelService {
         existed.setDisplayName(request.getDisplayName());
         existed.setBaseUrl(request.getBaseUrl());
         existed.setCapabilities(normalizeCapabilities(request.getCapabilities()));
+        // 窗口允许显式清零（0 = 交回框架推断），但不传（null）表示这次不动它
+        if (request.getContextWindowSize() != null) {
+            existed.setContextWindowSize(request.getContextWindowSize());
+        }
         if (request.getStatus() != null) {
             existed.setStatus(request.getStatus());
         }
+        syncFromVendor(existed);
         modelEntryMapper.update(existed);
         if (request.getWorkspaceIds() != null) {
             saveGrants(id, request.getWorkspaceIds());
@@ -264,6 +304,11 @@ public class ModelService {
      */
     public Set<String> providers() {
         return modelRegistry.providers();
+    }
+
+    /** 某供应商标识是否能自己报出窗口与输入模态（SPEC §30.6）：界面据此决定是否还让人手填 */
+    public boolean supportsDiscovery(String provider) {
+        return vendorClient.supportsDiscovery(provider);
     }
 
     /** 某 modelId 所属供应商的思考档表达力；供应商未接入时返回 null */

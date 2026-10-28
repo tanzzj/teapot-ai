@@ -197,16 +197,23 @@ public class ModelRegistry {
         String baseUrl = ModelProviderStrategy.notBlank(cred == null ? null : cred.baseUrl())
                 ? cred.baseUrl()
                 : (entry == null ? null : entry.getBaseUrl());
+        // 窗口定序：Agent 自带 &gt; 系统入口配置；都为 0 时交给框架按模型名查表（SPEC §30.1）
+        int entryWindow = entry == null || entry.getContextWindowSize() == null
+                ? 0 : entry.getContextWindowSize();
+        int contextWindowSize = cred != null && cred.contextWindowSize() > 0
+                ? cred.contextWindowSize() : entryWindow;
         return strategy.create(new ModelProviderStrategy.Spec(
                 modelId, modelName, cred == null ? null : cred.apiKey(), baseUrl,
-                thinking, capabilities(modelId, cred)));
+                thinking, capabilities(modelId, cred), contextWindowSize));
     }
 
     /**
      * Agent 自带模型的解析凭证（SPEC §29）：由 {@code t_agent.feature.customModels} 解密后构造。
-     * 字段留空即回落系统入口/环境变量；{@code #fingerprint()} 只用于缓存分槽，不进日志。
+     * 字段留空即回落系统入口/环境变量（窗口同理，见 {@link #create}）；{@code #fingerprint()}
+     * 只用于缓存分槽，不进日志。
      */
-    public record Credential(String apiKey, String baseUrl, Set<String> capabilities) {
+    public record Credential(String apiKey, String baseUrl, Set<String> capabilities,
+                             int contextWindowSize) {
 
         public Credential {
             apiKey = apiKey == null ? "" : apiKey;
@@ -214,12 +221,13 @@ public class ModelRegistry {
             capabilities = capabilities == null ? Set.of() : Set.copyOf(capabilities);
         }
 
-        /** 凭证指纹（SHA-256 前 12 位）：同 modelId 不同密钥/网关必须分槽，否则会串号 */
+        /** 凭证指纹（SHA-256 前 12 位）：同 modelId 不同密钥/网关/窗口必须分槽，否则会串号 */
         String fingerprint() {
             try {
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 byte[] hash = digest.digest((apiKey + "\n" + baseUrl + "\n"
-                        + new TreeSet<>(capabilities)).getBytes(StandardCharsets.UTF_8));
+                        + new TreeSet<>(capabilities) + "\n" + contextWindowSize)
+                        .getBytes(StandardCharsets.UTF_8));
                 StringBuilder hex = new StringBuilder();
                 for (int i = 0; i < 6; i++) {
                     hex.append(String.format("%02x", hash[i]));

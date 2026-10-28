@@ -35,9 +35,11 @@ public interface ModelProviderStrategy {
      * @param baseUrl      生效网关（Agent 自带 &gt; 入口配置），空 = 实现回落自己的环境变量/SDK 默认
      * @param thinking     三态：TRUE 显式开 / FALSE 显式关 / null 不下发
      * @param capabilities 能力位（小写），如 image/video
+     * @param contextWindowSize 模型上下文窗口 token 数；0 = 未配置，交给框架按模型名查表
+     *                          （查不到时 harness 会退回 64000 硬编码上限，SPEC §30.1）
      */
     record Spec(String modelId, String modelName, String apiKey, String baseUrl,
-                Boolean thinking, Set<String> capabilities) {
+                Boolean thinking, Set<String> capabilities, int contextWindowSize) {
 
         public boolean hasApiKey() {
             return notBlank(apiKey);

@@ -46,6 +46,9 @@ public class OpenAIChatStrategy implements ModelProviderStrategy {
         if (!baseUrl.isBlank()) {
             builder.baseUrl(baseUrl);
         }
+        if (spec.contextWindowSize() > 0) {
+            builder.contextWindowSize(spec.contextWindowSize());
+        }
         return builder.build();
     }
 }

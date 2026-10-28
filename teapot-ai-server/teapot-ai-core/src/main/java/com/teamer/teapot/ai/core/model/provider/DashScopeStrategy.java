@@ -39,6 +39,10 @@ public class DashScopeStrategy implements ModelProviderStrategy {
         if (spec.thinking() != null) {
             builder.enableThinking(spec.thinking());
         }
+        // 入口配了窗口就显式下发，绕开框架按模型名查表失败时的 64000 兜底（SPEC §30.1）
+        if (spec.contextWindowSize() > 0) {
+            builder.contextWindowSize(spec.contextWindowSize());
+        }
         return builder.build();
     }
 }
