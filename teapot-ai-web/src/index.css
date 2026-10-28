@@ -119,8 +119,8 @@ body {
   filter: grayscale(1) brightness(0.25);
 }
 
-/* 头部 Agent 选择器：去边框，与对话页头部的无边框模型选择器一致（桌面/移动一致） */
-.teapot-agent-select [class*='-select-selector'] {
+/* 顶栏的下拉（Agent 选择器、业务空间切换）统一去边框，与对话页的无边框模型选择器一致 */
+.teapot-borderless-select [class*='-select-selector'] {
   border: none !important;
   box-shadow: none !important;
   background: transparent !important;

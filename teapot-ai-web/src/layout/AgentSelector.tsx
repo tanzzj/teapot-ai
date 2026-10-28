@@ -92,7 +92,7 @@ export default function AgentSelector() {
         </span>
       )}
       <Select
-        className="teapot-agent-select"
+        className="teapot-borderless-select"
         value={current}
         options={agents.map((a) => ({ label: a.name, value: a.agentKey }))}
         optionRender={(option) => {

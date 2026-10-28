@@ -125,6 +125,7 @@ export default function WorkspaceSwitcher() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
       <Select
+        className="teapot-borderless-select"
         value={activeValue}
         options={options}
         onChange={(v) => setActive(v === PERSONAL ? null : Number(v))}
