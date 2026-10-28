@@ -9,6 +9,7 @@ import com.teamer.teapot.ai.core.model.dto.BindSkillRequest;
 import com.teamer.teapot.ai.core.model.dto.ChatDebugRequest;
 import com.teamer.teapot.ai.core.model.dto.MoveWorkspaceRequest;
 import com.teamer.teapot.ai.core.model.dto.SessionHistoryItem;
+import com.teamer.teapot.ai.core.model.dto.SkillEnabledRequest;
 import com.teamer.teapot.ai.core.model.dto.SessionMessageItem;
 import com.teamer.teapot.ai.core.model.vo.AgentDetailVO;
 import com.teamer.teapot.ai.core.model.vo.FeatureMiddlewareVO;
@@ -117,6 +118,14 @@ public class AgentController {
     public Result<Void> unbindSkill(@PathVariable String agentKey,
                                     @Valid @RequestBody BindSkillRequest request) {
         agentService.unbindSkill(agentKey, request.getSkillName());
+        return Result.ok();
+    }
+
+    /** 启停一条已存在的绑定（SPEC §33）：与解绑不同，绑定关系保留 */
+    @PostMapping("/skillEnabled/{agentKey}")
+    public Result<Void> setSkillEnabled(@PathVariable String agentKey,
+                                        @Valid @RequestBody SkillEnabledRequest request) {
+        agentService.setSkillEnabled(agentKey, request.getSkillName(), request.getEnabled());
         return Result.ok();
     }
 

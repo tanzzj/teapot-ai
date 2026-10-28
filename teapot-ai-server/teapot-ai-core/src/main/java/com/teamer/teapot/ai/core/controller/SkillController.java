@@ -32,9 +32,14 @@ public class SkillController {
         this.skillService = skillService;
     }
 
+    /**
+     * skill 列表；带 agentKey 时额外标出该 Agent 的绑定/生效位（SPEC §33）。
+     * 权限不变：/api/skill/list 对 viewer 只读放行，agentKey 只是查询维度、不扩权。
+     */
     @GetMapping("/list")
-    public Result<List<SkillListVO>> list() {
-        return Result.ok(skillService.list());
+    public Result<List<SkillListVO>> list(
+            @RequestParam(name = "agentKey", required = false) String agentKey) {
+        return Result.ok(skillService.list(agentKey));
     }
 
     @GetMapping("/detail/{name}")

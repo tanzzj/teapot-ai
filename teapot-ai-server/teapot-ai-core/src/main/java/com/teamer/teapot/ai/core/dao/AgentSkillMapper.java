@@ -21,6 +21,11 @@ public interface AgentSkillMapper {
 
     int insert(AgentSkillBind bind);
 
+    /** 只改生效位（SPEC §33）：返回 0 表示这条绑定不存在，调用方据此报错 */
+    int updateEnabled(@Param("agentKey") String agentKey,
+                      @Param("skillName") String skillName,
+                      @Param("enabled") boolean enabled);
+
     int delete(@Param("agentKey") String agentKey, @Param("skillName") String skillName);
 
     int deleteByAgentKey(@Param("agentKey") String agentKey);

@@ -343,6 +343,21 @@ public class AgentService {
     }
 
     /**
+     * 启停一条已存在的绑定（SPEC §33）：只动生效位，绑定关系不增不减 ——
+     * 停用不是解绑，配置关系要留着以便随时恢复。没绑定过就没有可停的东西，直接报错而不是悄悄建一行。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void setSkillEnabled(String agentKey, String skillName, boolean enabled) {
+        requireAgent(agentKey);
+        if (agentSkillMapper.updateEnabled(agentKey, skillName, enabled) == 0) {
+            throw new BizException("Skill " + skillName + " 未绑定到该 Agent，请先绑定再"
+                    + (enabled ? "启用" : "停用"));
+        }
+        agentRegistry.invalidate(agentKey);
+        auditService.log("agent.skillEnabled", agentKey, "skill=" + skillName + " enabled=" + enabled);
+    }
+
+    /**
      * 同步调试对话（SPEC §7.1 /api/agent/chat）：
      * 复用 HarnessAgent 实例 + RuntimeContext(userId, sessionId)，与 AG-UI 流式链路同状态域。
      */

@@ -518,6 +518,13 @@ export interface SkillListItem {
   source?: string;
   /** 绑定该 skill 的 Agent（SPEC §29.10）：为空才允许删除本体 */
   boundAgents?: string[];
+  /**
+   * 查询带了 agentKey 时由服务端给出（SPEC §33）：这个 Agent 绑没绑这条 skill。
+   * null/undefined = 本次查询没带 agentKey，与 false（带了、但没绑）是两回事。
+   */
+  agentBound?: boolean;
+  /** 这条绑定是否生效：false = 已绑定但停用（不装配）；未绑定时不下发 */
+  agentEnabled?: boolean;
 }
 
 /** GET /api/skill/git/status 出参（SPEC §15.9） */

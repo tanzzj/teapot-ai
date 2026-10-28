@@ -67,6 +67,13 @@ export function agentUnbindSkill(agentKey: string, skillName: string) {
   return unwrap<void>(http.post<Result<void>>(`/api/agent/unbindSkill/${agentKey}`, { skillName }));
 }
 
+/** 启停一条已存在的绑定（SPEC §33）：与解绑不同，绑定关系保留、只是不装配 */
+export function agentSetSkillEnabled(agentKey: string, skillName: string, enabled: boolean) {
+  return unwrap<void>(
+    http.post<Result<void>>(`/api/agent/skillEnabled/${agentKey}`, { skillName, enabled }),
+  );
+}
+
 /** feature 驱动中间件清单（SPEC §29.23）：schema + 该 Agent 已存配置与解析错误 */
 export function middlewareSchema(agentKey?: string) {
   return unwrap<MiddlewareSchemaView[]>(

@@ -7,29 +7,36 @@
         <id property="id" column="id"/>
         <result property="agentKey" column="agent_key"/>
         <result property="skillName" column="skill_name"/>
+        <result property="enabled" column="enabled"/>
         <result property="createdBy" column="created_by"/>
         <result property="createdAt" column="created_at"/>
     </resultMap>
 
     <select id="selectByAgentKey" resultMap="bindMap">
-        SELECT id, agent_key, skill_name, created_by, created_at
+        SELECT id, agent_key, skill_name, enabled, created_by, created_at
         FROM t_agent_skill WHERE agent_key = #{agentKey} ORDER BY id
     </select>
 
     <select id="selectBySkillName" resultMap="bindMap">
-        SELECT id, agent_key, skill_name, created_by, created_at
+        SELECT id, agent_key, skill_name, enabled, created_by, created_at
         FROM t_agent_skill WHERE skill_name = #{skillName} ORDER BY id
     </select>
 
     <select id="selectAllBinds" resultMap="bindMap">
-        SELECT id, agent_key, skill_name, created_by, created_at
+        SELECT id, agent_key, skill_name, enabled, created_by, created_at
         FROM t_agent_skill ORDER BY skill_name, id
     </select>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO t_agent_skill (agent_key, skill_name, created_by)
-        VALUES (#{agentKey}, #{skillName}, #{createdBy})
+        INSERT INTO t_agent_skill (agent_key, skill_name, enabled, created_by)
+        VALUES (#{agentKey}, #{skillName}, #{enabled}, #{createdBy})
     </insert>
+
+    <!-- 只改生效位：绑定关系本身不动（SPEC §33 的两层语义） -->
+    <update id="updateEnabled">
+        UPDATE t_agent_skill SET enabled = #{enabled}
+        WHERE agent_key = #{agentKey} AND skill_name = #{skillName}
+    </update>
 
     <delete id="delete">
         DELETE FROM t_agent_skill WHERE agent_key = #{agentKey} AND skill_name = #{skillName}

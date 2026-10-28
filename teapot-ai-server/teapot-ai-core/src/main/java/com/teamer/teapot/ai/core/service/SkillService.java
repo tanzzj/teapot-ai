@@ -89,7 +89,13 @@ public class SkillService {
         this.ossRepoProvider = ossRepoProvider;
     }
 
-    public List<SkillListVO> list() {
+    /**
+     * skill 全量列表（跨来源合并）。
+     *
+     * @param agentKey 可空；给了则额外标出「这个 Agent 绑没绑、绑了是否生效」（SPEC §33），
+     *                 绑定态由服务端算，不让前端拿两份列表自己比对
+     */
+    public List<SkillListVO> list(String agentKey) {
         // 多来源合并（SPEC §15.8 扩展）：同名去重优先级 git > oss > mysql + warn
         Map<String, SkillListVO> merged = new LinkedHashMap<>();
         GitSkillRepository git = gitRepoProvider.getIfAvailable();
@@ -114,12 +120,26 @@ public class SkillService {
         List<SkillListVO> out = merged.values().stream()
                 .sorted(Comparator.comparing(SkillListVO::getName))
                 .toList();
-        // 绑定关系一次查全表再分组：Agent 侧「删除本体」要据此判断是否还有别的 Agent 在用
+        // 绑定关系一次查全表再分组：Agent 侧「删除本体」要据此判断是否还有别的 Agent 在用；
+        // 传了 agentKey 就顺手算出该 Agent 的绑定/生效位（SPEC §33），前端不必自己拿两份列表比对
+        String scoped = agentKey == null || agentKey.isBlank() ? null : agentKey;
         Map<String, List<String>> binds = new HashMap<>();
+        Map<String, AgentSkillBind> mine = new HashMap<>();
         for (AgentSkillBind bind : agentSkillMapper.selectAllBinds()) {
             binds.computeIfAbsent(bind.getSkillName(), k -> new ArrayList<>()).add(bind.getAgentKey());
+            if (scoped != null && scoped.equals(bind.getAgentKey())) {
+                mine.put(bind.getSkillName(), bind);
+            }
         }
-        out.forEach(vo -> vo.setBoundAgents(binds.getOrDefault(vo.getName(), List.of())));
+        out.forEach(vo -> {
+            vo.setBoundAgents(binds.getOrDefault(vo.getName(), List.of()));
+            if (scoped == null) {
+                return;
+            }
+            AgentSkillBind bind = mine.get(vo.getName());
+            vo.setAgentBound(bind != null);
+            vo.setAgentEnabled(bind == null ? null : bind.isEnabled());
+        });
         return out;
     }
 
