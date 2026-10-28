@@ -574,16 +574,16 @@ public class AgentFeature {
         }
     }
 
-    /** mcp 命名空间校验：启用时 servers 不能为空；每条 server 必须 record 或 transport 二选一 */
+    /** mcp 命名空间校验：启用时 mcpServers 不能为空；每条 server 必须 record 或 transport 二选一 */
     private void validateMcp() {
         MCP mcp = getMcp();
         if (mcp == null || !mcp.isEnabled()) {
             return;
         }
-        if (mcp.getServers() == null || mcp.getServers().isEmpty()) {
+        if (mcp.getMcpServers() == null || mcp.getMcpServers().isEmpty()) {
             throw new BizException("启用 MCP 必须配置至少一条 MCP Server（引用系统记录或内联配置）");
         }
-        for (MCP.Server srv : mcp.getServers()) {
+        for (MCP.Server srv : mcp.getMcpServers()) {
             boolean hasRecord = !isBlank(srv.getRecord());
             boolean hasTransport = !isBlank(srv.getTransport());
             if (!hasRecord && !hasTransport) {
@@ -870,13 +870,22 @@ public class AgentFeature {
         private String denyMessage;
     }
 
-    /** mcp 命名空间结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置） */
+    /**
+     * mcp 命名空间结构：Agent 级 MCP Server 配置（引用系统记录 或 内联完整配置）。
+     * 字段名即入库 JSON 的键名，与前端 {@code feature.mcp.mcpServers} 严格一致。
+     *
+     * <p>容忍未知键：这份 JSON 由前端写、由装配期读，键名一错位就不是"读成 null"而是
+     * convertValue 抛 IllegalArgumentException —— 保存期校验与每轮 Agent 装配都会炸（SPEC §32，
+     * 同 A2ui 的教训，§29.14）。忽略未知键后同样的错位退化成"没配 server"，
+     * 由 {@link #validateMcp()} 给中文文案拦住。
+     */
     @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class MCP {
         /** 是否启用 MCP 工具 */
         private boolean enabled;
         /** MCP Server 列表：每条可引用系统记录（record）或内联完整配置（transport + ...） */
-        private List<Server> servers;
+        private List<Server> mcpServers;
 
         /** 单条 MCP Server 配置（record 与 inline 二选一） */
         @Data

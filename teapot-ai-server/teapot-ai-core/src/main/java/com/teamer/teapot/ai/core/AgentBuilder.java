@@ -800,11 +800,11 @@ public class AgentBuilder {
      * 通过 McpServerRegistrar.register() 将 MCP 工具注册到 HarnessAgent 的 Toolkit。
      */
     private void applyMcp(HarnessAgent agent, AgentFeature.MCP mcp) {
-        if (mcp == null || !mcp.isEnabled() || mcp.getServers() == null || mcp.getServers().isEmpty()) {
+        if (mcp == null || !mcp.isEnabled() || mcp.getMcpServers() == null || mcp.getMcpServers().isEmpty()) {
             return;
         }
         Map<String, McpServerConfig> configs = new LinkedHashMap<>();
-        for (AgentFeature.MCP.Server srv : mcp.getServers()) {
+        for (AgentFeature.MCP.Server srv : mcp.getMcpServers()) {
             McpServerConfig cfg = resolveMcpServer(srv);
             if (cfg != null) {
                 String name = srv.getRecord() != null ? srv.getRecord() : (srv.getCommand() != null ? srv.getCommand() : srv.getUrl());

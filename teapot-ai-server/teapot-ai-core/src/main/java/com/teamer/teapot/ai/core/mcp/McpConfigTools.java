@@ -44,8 +44,8 @@ public class McpConfigTools {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("agentKey", agentKey);
         List<Map<String, Object>> agentServers = new ArrayList<>();
-        if (agentMcp != null && agentMcp.isEnabled() && agentMcp.getServers() != null) {
-            for (AgentFeature.MCP.Server srv : agentMcp.getServers()) {
+        if (agentMcp != null && agentMcp.isEnabled() && agentMcp.getMcpServers() != null) {
+            for (AgentFeature.MCP.Server srv : agentMcp.getMcpServers()) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 if (srv.getRecord() != null && !srv.getRecord().isBlank()) {
                     item.put("source", "record");
