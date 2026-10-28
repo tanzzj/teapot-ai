@@ -7,8 +7,13 @@ import type {
   SkillOssStatus,
 } from '../types';
 
-export function skillList() {
-  return unwrap<SkillListItem[]>(http.get<Result<SkillListItem[]>>('/api/skill/list'));
+/** skill 全量列表；带 agentKey 时服务端顺带标出该 Agent 的绑定/生效位（SPEC §33） */
+export function skillList(agentKey?: string) {
+  return unwrap<SkillListItem[]>(
+    http.get<Result<SkillListItem[]>>('/api/skill/list', {
+      params: agentKey ? { agentKey } : undefined,
+    }),
+  );
 }
 
 export function skillDelete(name: string) {
