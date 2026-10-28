@@ -15,6 +15,7 @@ import com.teamer.teapot.ai.core.model.vo.FeatureMiddlewareVO;
 import com.teamer.teapot.ai.core.model.vo.MemoryStoreVO;
 import com.teamer.teapot.ai.core.service.AgentService;
 import com.teamer.teapot.ai.core.service.MemoryStoreService;
+import com.teamer.teapot.ai.core.tool.ToolCatalog;
 import com.teamer.teapot.ai.core.service.SessionHistoryService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -68,6 +69,16 @@ public class AgentController {
     @GetMapping("/middleware-schema")
     public Result<List<FeatureMiddlewareVO>> middlewareSchema(@RequestParam(required = false) String agentKey) {
         return Result.ok(agentService.middlewareSchema(agentKey));
+    }
+
+    /**
+     * 可分组工具目录（SPEC §31）：工具名 + 说明 + 来源，配置页据此把工具拖进分组。
+     * 不依赖 agentKey —— 清单按依赖版本反射得出，与该 Agent 实际装配了哪些工具无关
+     * （分组里写了没装配的名字，框架按名匹配不上就忽略）。
+     */
+    @GetMapping("/tool-catalog")
+    public Result<List<ToolCatalog.Entry>> toolCatalog() {
+        return Result.ok(ToolCatalog.entries());
     }
 
     @PostMapping("/create")

@@ -193,6 +193,20 @@ export interface AgentGuardConfig {
   denyMessage?: string;
 }
 
+/**
+ * feature.toolGroups 的一项（SPEC §31）：入组工具默认不进模型工具表，
+ * 由模型调 reset_equipped_tools 按组名装备；未入组的工具始终可见。
+ * 组名与 active/scope 都由服务端固定（META 作用域、初始不激活），界面只填名字/说明/成员。
+ */
+export interface AgentToolGroup {
+  /** 组名：小写字母开头，可含小写字母/数字/下划线/短横线，2–64 位；basic 是框架保留名 */
+  name: string;
+  /** 给模型看的装备依据：这一组是干什么的、什么时候该装备 */
+  description?: string;
+  /** 组内工具名（1–60 个）；MCP 工具名由服务端自报，目录里没有也能填 */
+  tools: string[];
+}
+
 /** /api/model/media-models 目录项（SPEC-media-gen §4.8：实测可用模型清单 + 默认值） */
 export interface MediaModelCatalogEntry {
   /** runtime.mediaModels 的字段名 */
@@ -479,6 +493,18 @@ export interface MiddlewareSchemaView {
   config?: Record<string, unknown> | Record<string, unknown>[] | null;
   /** 已存配置解析失败的原因（存得下但跑不起来，要在界面上说出来） */
   configError?: string | null;
+}
+
+/**
+ * GET /api/agent/tool-catalog 出参（SPEC §31）：可入组的工具候选。
+ * 服务端按 @Tool 注解反射产出，是"这个版本可能注册出来的工具"，不代表某个 Agent 真装了它；
+ * 填了没注册的名字框架会静默忽略，所以 MCP 工具名允许手填。
+ */
+export interface ToolCatalogEntry {
+  name: string;
+  description?: string;
+  /** harness=框架自带 / platform=平台扩展（OSS、MCP 查询、A2UI）/ media=生图生视频语音 */
+  source: 'harness' | 'platform' | 'media';
 }
 
 export interface AgentDetail {

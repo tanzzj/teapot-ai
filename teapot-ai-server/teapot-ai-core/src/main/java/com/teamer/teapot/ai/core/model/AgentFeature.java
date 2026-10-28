@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * t_agent.feature 扩展功能配置模型（SPEC §16.6/§22.2/§24.3）：
@@ -42,6 +43,8 @@ public class AgentFeature {
     public static final String NS_GUARD = "guard";
     /** Agent 自带模型（SPEC §29）：用户自配 provider/模型名/baseUrl 与自己的 API Key（密文入库） */
     public static final String NS_CUSTOM_MODELS = "customModels";
+    /** 工具分组（SPEC §31）：入组工具默认不进模型工具表，由模型经 meta tool 按名装备 */
+    public static final String NS_TOOL_GROUPS = "toolGroups";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> ISOLATION_SCOPES = Set.of("SESSION", "USER", "AGENT", "GLOBAL");
@@ -83,6 +86,25 @@ public class AgentFeature {
      * token 侧接线（框架里 token 触发无法关闭），它表示"把条数当主输入"，见 §29.22。
      */
     private static final Set<String> COMPACTION_TRIGGER_MODES = Set.of("dynamic", "messages", "tokens");
+    /** 工具分组条数上限（SPEC §31）：每组的名字与说明都会进 meta tool 的 schema 与返回值，防配置撑爆上下文 */
+    private static final int TOOL_GROUP_MAX = 20;
+    /** 单组工具名条数上限 */
+    private static final int TOOL_GROUP_MAX_TOOLS = 60;
+    /** 组说明长度上限：模型装备该组时，说明原样拼进 meta tool 返回值当使用说明 */
+    private static final int TOOL_GROUP_DESC_MAX = 500;
+    /** 组名规则：进 meta tool 的 enum，也进说明文本，收紧字符集免得模型念不对 */
+    private static final Pattern TOOL_GROUP_NAME_PATTERN = Pattern.compile("^[a-z][a-z0-9_-]{1,63}$");
+    /** 工具名规则：MCP 工具按服务端自报的名字注册（本平台没开工具名前缀），故不能用 mcp__ 形态限定 */
+    private static final Pattern TOOL_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_.-]{1,128}$");
+    /** 框架保留组名：registerTool(Object) 注册的无分组工具都算在这一组，且始终激活 */
+    private static final String TOOL_GROUP_RESERVED = "basic";
+    /**
+     * 不许入组的工具名（SPEC §31）：入组即"未激活就不进模型工具表"，而这两个必须始终可见 ——
+     * {@code reset_equipped_tools} 是装备分组的唯一入口，藏起来等于分组再也打不开（死锁）；
+     * skill 查看器同理，框架有意让它不分组，好让早于它存在的旧会话也能加载 skill。
+     */
+    private static final Set<String> TOOL_GROUP_UNGROUPABLE = Set.of(
+            "reset_equipped_tools", "load_skill_through_path");
 
     /** 原始命名空间（保留未知项，序列化时原样写回） */
     private Map<String, Object> namespaces = new LinkedHashMap<>();
@@ -359,6 +381,36 @@ public class AgentFeature {
         }
     }
 
+    /** toolGroups 命名空间（SPEC §31）；未配置返回空表（= 不分组，工具全部照常可见） */
+    public List<ToolGroup> getToolGroups() {
+        Object raw = namespaces.get(NS_TOOL_GROUPS);
+        if (!(raw instanceof List)) {
+            return List.of();
+        }
+        List<ToolGroup> list = MAPPER.convertValue(raw, new TypeReference<List<ToolGroup>>() {
+        });
+        return list == null ? List.of() : list;
+    }
+
+    /** 写入/替换 toolGroups 命名空间（空列表 = 移除该命名空间） */
+    public void setToolGroups(List<ToolGroup> toolGroups) {
+        if (toolGroups == null || toolGroups.isEmpty()) {
+            namespaces.remove(NS_TOOL_GROUPS);
+        } else {
+            namespaces.put(NS_TOOL_GROUPS, MAPPER.convertValue(toolGroups,
+                    new TypeReference<List<Map<String, Object>>>() {
+                    }));
+        }
+    }
+
+    /**
+     * 不许入组的工具名（SPEC §31）：配置校验与工具目录共用一份口径 ——
+     * 目录里就不该把它们列成候选，否则用户拖进去才被保存拦下。
+     */
+    public static Set<String> ungroupableToolNames() {
+        return TOOL_GROUP_UNGROUPABLE;
+    }
+
     /**
      * 保存时强校验（SPEC §16.6/§22 校验表）：不合法直接抛 BizException 拒绝。
      * 记录存在性由 AgentService 补充校验（模型层不依赖 Service）。
@@ -375,6 +427,7 @@ public class AgentFeature {
         validateGuard();
         validateCustomModels();
         validateCompaction();
+        validateToolGroups();
         Sandbox sb = getSandbox();
         if (sb == null) {
             return;
@@ -628,6 +681,65 @@ public class AgentFeature {
             for (String c : cm.capabilitySet()) {
                 if (!MODEL_CAPABILITIES.contains(c)) {
                     throw new BizException("自定义模型能力位非法，可选值：" + MODEL_CAPABILITIES);
+                }
+            }
+        }
+    }
+
+    /**
+     * toolGroups 命名空间校验（SPEC §31）：组名唯一且合规则、每组非空、一个工具只能属于一个组、
+     * 不许装入必须常显的工具。
+     * 组内工具名是否与真实注册表对得上不在这里判 —— 那要构建一次 Agent 才知道，
+     * 装配时对不上的名字按框架口径跳过并告警（拼错的名字不会让整轮对话失败）。
+     */
+    private void validateToolGroups() {
+        List<ToolGroup> groups = getToolGroups();
+        if (groups.isEmpty()) {
+            return;
+        }
+        if (groups.size() > TOOL_GROUP_MAX) {
+            throw new BizException("工具分组最多 " + TOOL_GROUP_MAX + " 个");
+        }
+        Set<String> names = new LinkedHashSet<>();
+        // 一个工具只能属于一个组：框架的工具→组反向索引是一对一，重复归属时后写的覆盖先写的，
+        // 界面上"两个组都有它"与运行时"只有一个组管得住它"会对不上，所以在保存期就拦掉
+        Map<String, String> owner = new LinkedHashMap<>();
+        for (ToolGroup group : groups) {
+            String name = group.getName() == null ? "" : group.getName().trim();
+            if (!TOOL_GROUP_NAME_PATTERN.matcher(name).matches()) {
+                throw new BizException("工具分组名「" + name + "」非法：小写字母开头，仅含小写字母/数字/下划线/短横线，2-64 位");
+            }
+            if (TOOL_GROUP_RESERVED.equals(name)) {
+                throw new BizException("basic 是框架保留组名（无分组工具都算在它里面且始终激活），请换一个");
+            }
+            if (!names.add(name)) {
+                throw new BizException("工具分组名重复：" + name);
+            }
+            if (group.getDescription() != null && group.getDescription().trim().length() > TOOL_GROUP_DESC_MAX) {
+                throw new BizException("工具分组 " + name + " 的说明最多 " + TOOL_GROUP_DESC_MAX + " 字符");
+            }
+            List<String> tools = group.getTools();
+            if (tools == null || tools.isEmpty()) {
+                throw new BizException("工具分组 " + name + " 里至少要放一个工具（空组对模型没有意义）");
+            }
+            if (tools.size() > TOOL_GROUP_MAX_TOOLS) {
+                throw new BizException("工具分组 " + name + " 最多放 " + TOOL_GROUP_MAX_TOOLS + " 个工具");
+            }
+            Set<String> members = new LinkedHashSet<>();
+            for (String tool : tools) {
+                String toolName = tool == null ? "" : tool.trim();
+                if (!TOOL_NAME_PATTERN.matcher(toolName).matches()) {
+                    throw new BizException("工具分组 " + name + " 里的工具名「" + toolName + "」非法：仅含字母/数字/下划线/点/短横线，1-128 位");
+                }
+                if (TOOL_GROUP_UNGROUPABLE.contains(toolName)) {
+                    throw new BizException("工具 " + toolName + " 必须始终对模型可见，不能放进分组");
+                }
+                if (!members.add(toolName)) {
+                    throw new BizException("工具分组 " + name + " 里工具重复：" + toolName);
+                }
+                String previous = owner.put(toolName, name);
+                if (previous != null) {
+                    throw new BizException("工具 " + toolName + " 已经在分组 " + previous + " 里，一个工具只能属于一个组");
                 }
             }
         }
@@ -907,6 +1019,21 @@ public class AgentFeature {
             /** 描述（仅展示用） */
             private String description;
         }
+    }
+
+    /**
+     * toolGroups 命名空间的单条分组（SPEC §31）。
+     * 存量行可能带着后来删掉的键，读时忽略而不是抛异常（同 A2ui 的教训，§29.14）。
+     */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ToolGroup {
+        /** 组名：模型在 meta tool 的 enum 里看到的就是它，也是装备/卸载的单位 */
+        private String name;
+        /** 组说明：模型装备该组时原样回给它当使用说明，写清"这组能做什么、什么时候该要" */
+        private String description;
+        /** 组内工具名（按名匹配注册表；未注册的名字框架静默忽略） */
+        private List<String> tools;
     }
 
     /** runtime 命名空间结构：字段全部可空（null = 未配置，回落 SDK 默认 / 存量行为） */

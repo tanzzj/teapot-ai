@@ -9,6 +9,7 @@ import type {
   Result,
   SessionHistoryItem,
   SessionMessageItem,
+  ToolCatalogEntry,
 } from '../types';
 
 export function agentList(params: {
@@ -73,6 +74,11 @@ export function middlewareSchema(agentKey?: string) {
       params: agentKey ? { agentKey } : undefined,
     }),
   );
+}
+
+/** 可入组的工具目录（SPEC §31）：与 Agent 无关，只跟服务端依赖版本有关 */
+export function toolCatalog() {
+  return unwrap<ToolCatalogEntry[]>(http.get<Result<ToolCatalogEntry[]>>('/api/agent/tool-catalog'));
 }
 
 /** 同步调试对话（SPEC §7.1 /api/agent/chat） */

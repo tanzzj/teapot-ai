@@ -46,6 +46,7 @@ import com.teamer.teapot.ai.core.storage.RedisMemoryFilesystems;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.tool.ToolGroupScope;
 import io.agentscope.extensions.a2ui.A2uiConfig;
 import io.agentscope.extensions.a2ui.A2uiMiddleware;
 import io.agentscope.extensions.a2ui.ToolInstallingMiddleware;
@@ -254,6 +255,12 @@ public class AgentBuilder {
         // 超大工具输出落盘（SPEC §29.20）：与摘要压缩正交（管单条宽度，不管历史长度）
         applyEviction(builder, compactionCfg);
         applyRuntime(builder, rt);
+        // 工具分组（SPEC §31）：有组就要 meta tool，否则入组工具被隐藏后再没人能装备回来；
+        // 开关必须在 build 前给（框架在 build 里注册 meta tool），组本身在 build 后才建（见 applyToolGroups）
+        List<AgentFeature.ToolGroup> toolGroups = feature.getToolGroups();
+        if (!toolGroups.isEmpty()) {
+            builder.enableMetaTool(true);
+        }
         // 请求级计划模式覆盖（chat 界面 forwardedProps.planMode，SPEC §25）：
         // 优先于 Agent 配置；null = 未传参，回落 applyRuntime 已设置的值
         Boolean planHint = AgentRuntimeHints.getPlanMode();
@@ -397,6 +404,8 @@ public class AgentBuilder {
         applyMediaArtifactPersist(agent, agentKey, rt);
         // MCP Server 注册（SPEC §MCP）：Agent 级配置，引用系统记录或内联完整配置
         applyMcp(agent, feature.getMcp());
+        // 工具分组（SPEC §31）：排在所有工具注册之后，addToolToGroup 要求工具已在注册表里
+        applyToolGroups(agent, toolGroups);
         return agent;
     }
 
@@ -853,6 +862,51 @@ public class AgentBuilder {
             cfg.setHeaders(srv.getHeaders());
         }
         return cfg;
+    }
+
+    /**
+     * 工具分组装配（SPEC §31）：每组建成一个 META 作用域、初始不激活的组，再把工具名逐个挂进去。
+     * 入组的工具随即退出模型的默认工具表，改由模型自己调 meta tool（{@code reset_equipped_tools}）
+     * 按名装备；没入组的工具不受影响 —— 框架里「无分组」等于始终可见。
+     *
+     * <p>必须排在所有工具注册之后：{@code addToolToGroup} 要求组与工具都已在册，否则抛
+     * IllegalArgumentException。组名撞车或工具名对不上（拼错、被 runtime.allowedTools 白名单摘掉、
+     * MCP 没连上）都只跳过并告警 —— 一条配置写错不该让整轮对话装配失败。
+     */
+    private void applyToolGroups(HarnessAgent agent, List<AgentFeature.ToolGroup> groups) {
+        if (groups.isEmpty()) {
+            return;
+        }
+        Toolkit toolkit = agent.getToolkit();
+        if (toolkit == null) {
+            log.warn("工具分组已配置但 HarnessAgent Toolkit 为空，跳过装配 agentKey={}", agent.getName());
+            return;
+        }
+        int grouped = 0;
+        int created = 0;
+        for (AgentFeature.ToolGroup group : groups) {
+            String name = group.getName().trim();
+            String description = group.getDescription() == null ? "" : group.getDescription().trim();
+            try {
+                toolkit.createToolGroup(name, description, false, ToolGroupScope.META);
+                created++;
+            } catch (RuntimeException e) {
+                log.warn("工具分组创建失败，跳过该组 agentKey={} group={}：{}", agent.getName(), name, e.getMessage());
+                continue;
+            }
+            for (String tool : group.getTools()) {
+                String toolName = tool.trim();
+                try {
+                    toolkit.addToolToGroup(name, toolName);
+                    grouped++;
+                } catch (RuntimeException e) {
+                    log.warn("工具入组失败，跳过该工具 agentKey={} group={} tool={}：{}",
+                            agent.getName(), name, toolName, e.getMessage());
+                }
+            }
+        }
+        log.info("工具分组已装配 agentKey={} 组={}/{} 入组工具={} meta tool=reset_equipped_tools",
+                agent.getName(), created, groups.size(), grouped);
     }
 
     /**
