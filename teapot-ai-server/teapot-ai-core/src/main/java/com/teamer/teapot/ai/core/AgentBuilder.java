@@ -181,15 +181,20 @@ public class AgentBuilder {
             throw new BizException("Agent 不存在或已停用：" + agentKey);
         }
         Path workspace = Path.of(properties.getAgentscope().getWorkspaceRoot()).resolve(agentKey);
-        // Agent ↔ Skill
-        List<String> bound = agentSkillMapper.selectByAgentKey(agentKey)
-                .stream()
+        // Agent ↔ Skill：绑定与是否生效是两层（SPEC §33）——停用的绑定行仍在，只是不进 SkillFilter
+        List<AgentSkillBind> binds = agentSkillMapper.selectByAgentKey(agentKey);
+        List<String> bound = binds.stream()
+                .filter(AgentSkillBind::isEnabled)
                 .map(AgentSkillBind::getSkillName)
                 .toList();
         // 无「全局 skill」概念（SPEC §28.1）：未显式绑定即不装配任何 skill，每个 Agent 只用自己的
         SkillFilter skillFilter = bound.isEmpty() ?
                 SkillFilter.none() :
                 SkillFilter.only(bound.toArray(new String[0]));
+        if (binds.size() > bound.size()) {
+            log.info("skill 已绑定但停用，本轮不装配 agentKey={} 停用={} 生效={}", agentKey,
+                    binds.size() - bound.size(), bound.size());
+        }
 
         int trigger = agentDO.getCompactionTrigger() == null
                 ? DEFAULT_COMPACTION_TRIGGER : agentDO.getCompactionTrigger();
