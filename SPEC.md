@@ -2602,6 +2602,12 @@ v67 的形态是「Model 下拉里混进一个自定义组 + Basic Info 下面�
 
 **验证**（同一探针页，量相对 `.ant-modal-content` 的偏移）：两个分支均 `position: absolute`、`rightGap=17`、`topGap=17`（16px + 1px 边框），且与标题行顶边对齐（`inRowWithHeader=true`）、标题 `padding-right: 28px` 生效。探针页与 5199 端口的 vite 已删除。**未做**：真机目视（未发布）；也没拿到用户那台设备上的 DOM，若发布后位置仍不对，需要在用户浏览器里现场量一次。
 
+**§29.9 修订（2026-10-28，用户再拿截图指出"很多地方还是错的位置"）**：这回找到机制了。原规则只钉 `right:16px`，没管 `left` —— 绝对定位盒只要从别处拿到一个 `left`（库运行时注入的样式、RTL 分支、或任何给 `left` 赋值的规则），就会**左右同时定住、被拉满整行宽度**，里面的 ✕ 字形自然贴到最左边，而盒子高度被 `top` 定住，看起来就像"掉到标题下方左侧"。实测复现：给那颗按钮强加 `left:0`，盒子从 20px 宽变成 357px 宽、起点 `dx=1`（贴左）。这也解释了为什么探针一直量不到 —— 本地环境里没有任何规则给它 `left`。
+
+修法是把钉位写严，不给"另一侧"留口子：同时声明 `left/inset-inline-start: auto`、`width/height: auto`、`margin:0`、`transform:none`，并加 `!important`（库的样式是运行时注入的 CSS-in-JS，`<style>` 排在静态表之后，同特异性会赢）；选择器从 `.spark-modal-title-close` 扩到也覆盖 antd 自己的 `.ant-modal-close`，标题让位规则从 `.spark-modal-title` 扩到 `.ant-modal-title`。
+
+验证（mock + vite，量相对 `.ant-modal-content` 的偏移）：绑定已有 Skill 弹窗基线 `dx=338 / w=20 / rightGap=17`；**注入高优先级 `left:0` 后位置不变**（计算值仍是 auto 的解析结果）；模拟旧写法（强行 `left:0 !important`）即复现截图故障（`dx=1 / w=357`），撤掉立刻恢复；第二个组件（工具分组「新建分组」弹窗）同样 `dx=263 / w=20 / rightGap=17`。桌面分支（临时把 `useIsPhone` 短路成 false 量的，量完已还原）也是右上角。
+
 ### §29.10 Skill 工坊下线：skill 只能从 Agent 里 Add Skill（2026-10-24）
 
 §28.1 摘掉的是运行期「未绑定=全给」的兜底，但顶栏仍留着一个 Skill 工坊页（列表 + 新建/编辑 SKILL.md 的表单 + zip/git 导入 + 删除 + 立即同步）。用户判定这个入口不该存在：**Teapot 里不造 skill，平台上的 skill 完全通过 Agent 模式绑定**。三条已拍板的规则：
@@ -2894,6 +2900,46 @@ v80 上线后用户看手机截图第一句就是「不应该是这样，应该�
 
 **未做**：真机跑一轮 shell 调用看新会话与历史回放两条链路（挂载点对两者一致，但没实测过历史会话的 `tool_call_output` 合并形态）。
 
+### §29.29 execute 卡改用 spark 自带折叠壳（2026-10-27 用户截图挑出）
+
+§29.28 那张卡是我自己拼的 `CardShell` + 两块终端 `pre`，结果**没有折叠**，一条 66 行的 shell 输出把整条对话撑开；用户要求「execute 也要支持收起，块样式用 spark 自带的（同 thinking 块），只有命令内容用终端样式」。
+
+改成直接用聊天组件的 `Accordion`（thinking 块 `DeepThinking` 内部就是它，参数同款：`status` / `title` / `rightChildren` / `defaultOpen` / `bodyStyle.maxHeight` / `inline`）：
+
+- **折叠**：`defaultOpen={loading}` —— 执行中展开（看得到命令在跑），跑完自动收起，点头部展开。
+- **状态交给 spark**：`status` 取 `generating | error | finished`，退出码 0 → `finished`（组件自带绿色对勾 `spark-checkCircle-fill`）、非 0 → `error`（`spark-errorCircle-fill`）—— 也就是**连 §29.28 那个"exit 0 挂红点"的问题一起由状态机解决了**，不再靠我自绘图标。右侧仍留 `exit N` 小徽标 + 复制按钮。
+- **只有命令用终端样式**：`$ <command>` 保持深色底 + Menlo；输出退回正文观感（浅色、等宽 `pre-wrap`，保留列对齐），不再两块都是黑底。
+- 复制按钮 `stopPropagation`：头部点击是折叠开关，复制不能顺手把卡关掉。
+- 一个类型约束：`Accordion` 的 `children` 签名是 `string | ReactElement`（不收多子节点/数组），所以命令 + 工作目录 + 输出要包一层容器再传进去。
+
+**验证**：`npm run build` 通过（入口 `index-C1sRkpjs.js`）。一次性页面同时挂**真** `DeepThinking` 与三种形态的 `ShellCard`，按 DOM 类名与计算样式确认：4 个 `ant-accordion-group` 中 3 个默认 `...-close`（thinking + 两条已完成的 execute）、1 个 `...-open`（执行中那条）；点已收起卡片的头部 → 变 `open` 且命令块背景 `rgba(26,26,29,.92)`、字体 Menlo；点复制按钮后仍 `open`（不触发折叠）；`exit 0` 那张的状态图标是 `spark-checkCircle-fill ... icon-success`，`exit 1` 是 `spark-errorCircle-fill ... icon-error`。探针文件已删。
+
+**未做**：真机跑一轮 shell 调用看新会话与历史回放（同 §29.28 那条未验项）。
+
+### §29.30 execute 卡收起样式对齐 thinking，输入/输出拆成两个可滚动的框（2026-10-27 用户截图挑出）
+
+§29.29 选错了壳：对话里的 thinking 块根本不是 `Accordion`，而是 `OperateCard`（`OperateCard/preset/Thinking`），默认工具卡 `ToolCall` 也是它。所以 Accordion 版的 execute 收起后与 thinking 并排时明显不是一套东西；同时 §29.29 把命令和输出塞进同一个 `bodyStyle.maxHeight` 容器且没给 `overflowY`，内容被裁死、**滚不动**。
+
+改回 `OperateCard`（`src/chat/ShellCard.tsx`），壳与 thinking 完全同源：
+
+- **收起样式 = thinking**：`header.icon` 执行中转圈 `SparkLoadingLine`、结束 `SparkToolLine`（thinking 是 `SparkMemoryLine`，默认工具卡同款），`title='execute'`，退出码徽标挂在 `header.description`（`exit 0` 绿 / `exit N` 红，执行中不挂）。实测 thinking / execute 成功 / execute 失败 / SDK 默认工具卡四张卡的 header 类名、高度 28px、`padding 0 12px`、`gap 8px`、字号 14px 逐项相同。
+- **`body.defaultOpen={loading}`**：执行中展开、跑完收起，与默认工具卡口径一致。
+- **输入/输出各一个框**：`OperateCard.LineBody` 里两个 `tool-call-block`（沿用组件自带样式类：圆角边框 + 32px 灰底框头 + 内容 `max-height` 内滚动），输入框框头右侧放工作目录 + 复制按钮，输出框限高放宽到 288px（输入框用组件默认 128px）。两个框各自 `overflow-y: auto`，互不影响；框头可点，**单独收起一个框**（框头右侧箭头只作指示，点击靠框头冒泡，避免双触发）。
+- 复制按钮 `stopPropagation`：框头整条是收起开关，复制不能顺手把框折起来；复制成功图标换对勾 2s，失败 `message.error` 提示。
+- 命令仍是终端样式（深色底 + Menlo + `$` 提示符），输出保持正文观感；高度与滚动交给外层 `block-content`，`pre` 自己不再设 `maxHeight`（否则两层滚动条）。
+
+**验证**：`tsc -b` 与 `npm run build` 通过。一次性页面并排挂真 `Thinking`、真 SDK `ToolCall` 与三种形态的 `ShellCard`（探针已删）：四张卡 header 签名逐项相同；展开后 2 个 `tool-call-block`，输出框 `clientHeight 288 < scrollHeight 784` 且 `overflow-y auto`（能滚）；点输入框框头只收输入框、卡片与输出框不受影响；点复制按钮框不收起、`clipboard.writeText` 收到的是纯命令文本（无 `$`、无 JSON）、图标变对勾；正文不含 "Exit code"。无头 Edge 截图目视：收起行与 thinking 同款胶囊，展开后两个框与 SDK 默认工具卡的框同款。
+
+**未做**：真机跑一轮 shell 调用看新会话与历史回放（同 §29.28 那条未验项）。
+
+### §29.31 顶栏业务空间选择器改无边框（2026-10-27 用户截图）
+
+顶栏右侧两个下拉里，Agent 选择器早就去了边框（`index.css` 的 `.teapot-agent-select`），业务空间切换器还带着 antd 的描边框，并排看像两套控件。把那条规则改成共享类名 `.teapot-borderless-select`（`border/box-shadow/background` 全部透明），`WorkspaceSwitcher` 顶栏那个 `Select` 与 `AgentSelector` 同时挂它 —— 弹窗里的「移动到空间」选择器仍是有框的表单控件，不受影响。
+
+空间选择器是 `size="small"`（24px 高）而 Agent 是 `middle`（32px），实测两者文字都按 `alignItems: center` 落在同一条水平线上（文本框中心都是 28px、字号同为 14px），差别只在点击热区高度，所以不改尺寸。
+
+**验证**：一次性页面并排挂两个真 `Select`（小/中各一）+ 探针已删，计算样式确认 `border 0px none`、`box-shadow none`、`background rgba(0,0,0,0)`；`npm run build` 通过（入口 `index-CUr-CCVa.js`），产物 CSS 里只剩 `teapot-borderless-select`，旧类名 `teapot-agent-select` 全库不再出现。
+
 ### §29.12 新建 Agent 改为进详情页草稿态，去掉列表弹窗（2026-10-24 用户截图反馈）
 
 移动端「新建 Agent」弹窗（6 个字段 + 键盘弹起）几乎占满视口，且建完还得再进详情页配模型/提示词，等于同一批字段填两遍。改为**复用详情页当草稿**：
@@ -2937,10 +2983,312 @@ v80 上线后用户看手机截图第一句就是「不应该是这样，应该�
 
 ---
 
+## §30 模型窗口与探活（2026-10-27，由线上 "Prepared model input exceeds budget" 排查引出）
+
+线上会话 `35aab56a…`（digit-tim）从 12:01 起每问必挂：`INVALID_INPUT_ERROR / Prepared model input exceeds budget: estimated=64413, limit=64000`，且 estimated 逐次只涨十几个 token —— 会话被永久锁死。排查结论拆成三节，前两节已落地，第三节是框架侧收口方向。
+
+### §30.1 上下文窗口进入口配置：不再靠"猜模型名"
+
+`limit=64000` 不是任何配置值，是 `HarnessContextBuilder.inputLimit()` 在 `model.getContextWindowSize() <= 0` 时的硬编码兜底。窗口由 `ModelContextWindows.lookup()` 按**模型名前缀**查表得出，表里 DASHSCOPE 只有 `qwen3.7 / qwen-max / qwen-plus / …`，**没有 `qwen3.8-*`**（`qwen3.8-max` 也不以 `qwen-max` 开头）→ 返回 0 → 兜底 64000。同会话最后一次成功调用 provider 实测 `inputTokens=41296`，真实窗口 131072：即被一个假上限挡住。三个启用 Agent 里 digit-tim(qwen3.8-max) 与 general-assistant(qwen3.8-flash) 中招，teapot(qwen3.7-flash) 命中表项故无恙。
+
+- **落库**：`t_model_entry.context_window_size INT NOT NULL DEFAULT 0`（`sql/V16__model_context_window.sql`，0 = 未配置，维持框架现状）。初值口径见 §30.6：取 DashScope **原生目录** `model_info.context_window` 的实测值（qwen3.8-27b / qwen-plus / qwen3.7-flash / qwen3.8-flash / qwen3.8-max = 1,000,000，qwen-max = 32,768；qwen-turbo 与 qwen3-vl-flash-* 目录查无此模型，保持 0）。本节首版曾误用 compatible-mode 的 `default_envs.max_tokens`，已在 §30.6 纠正。
+- **下发链**：`ModelEntryDO.contextWindowSize` → mapper（`update` 用 `<if test="contextWindowSize != null">` 包住，表单不传即不清空；另有 `updateContextWindow` 单列语句给探活用）→ `ModelProviderStrategy.Spec` 新增末位字段 `int contextWindowSize` → 六个策略在 `builder.build()` 前统一 `if (spec.contextWindowSize() > 0) builder.contextWindowSize(...)`。`ModelRegistry.create` 是唯一装配点。
+- **界面**：模型表单加「上下文窗口（tokens）」`InputNumber`，placeholder 写明留空的后果；列表加「上下文窗口」列（131072 → `128K`，未配置灰显）。
+- **当时的已知缺口**：Agent 自带模型（`feature.customModels`）没有窗口字段，仍走框架查表 —— 已在 §30.6 补齐。`ModelContextWindows` 缺项属于上游问题，补表只能治一个模型名，不作为本项目的修法。
+
+### §30.2 探活与供应商模型清单：`ModelVendorClient`
+
+一次 GET 就能分清三件事：密钥对不对、模型在不在、窗口多大。刻意不走各家 SDK（DashScope SDK 至今没有清单类，各家 list 能力不同构），形状沿用「一家一份」的 `ModelProviderStrategy`，新增供应商在 `Vendor` 表加一行。
+
+- **端点**（2026-10-27 实测）：dashscope `GET /compatible-mode/v1/models[/{model}]` —— 错误密钥 401 `invalid_api_key`、未知模型 404 `model_not_found`、详情 200 带 `extra_info.default_envs.max_tokens`；**清单端点不返回窗口**，所以探活必须打详情端点。openai / openai-official 走 `{base}/models[/{model}]`（兼容网关同形），anthropic `api.anthropic.com/v1/models`，gemini `generativelanguage.googleapis.com/v1beta/models`，ollama 只有 `GET {base}/api/tags` 且无鉴权 → 探活退化为「在清单里查名字」，窗口报 0。
+- **口径**：`ProbeResult(ok, httpStatus, contextWindowSize, message)`。探活失败**不抛异常也不改库存**——"错在哪"正是要给界面看的内容；只有入口不存在才抛。`ok=true && contextWindowSize==0` 是合法结果（该供应商不给窗口），文案区分于失败。
+- **回填**：`ModelService.probe(id)` 探到窗口且与库存不一致时，`updateContextWindow` 单列写入 + `modelRegistry.evict(modelId)` + 审计 `model.probe`，下一轮装配即生效。
+- **接口**：`POST /api/model/{id}/probe`（admin）；`GET /api/model/vendor-models/{provider}` 由"仅 dashscope 硬编码"改为按 provider 分发，dashscope 保留原有 qwen 系文本模型过滤，清单缓存 10 分钟按「provider+生效网关」分槽。列表页操作列加「探活」按钮，成功/失败分别 `message.success/error`。
+- **验证边界**：dashscope 三个端点与状态码为线上实测；openai / anthropic / gemini / ollama 的 URL 与窗口字段名按各家公开契约写，**未用真密钥验证**，接进来时以探活结果为准。
+
+### §30.3 框架层收口（待办，不在本项目实现）
+
+模型发现的正应在 agentscope-java：`CredentialBase.listModels()` 是已声明、零实现的钩子，返回的 `ModelCard` 记录本就带 `context_size` 字段（`agentscope-core/…/credential/`）。收口方向：各 model extension 实现 `listModels()` 与一个轻量 `probe()`，`t_model_entry.context_window_size` 改为从其填充、teapot 侧 `ModelVendorClient` 退化为薄调用。届时 §30.2 里"各家 HTTP 端点"的知识应一并上移到框架，避免应用层各自维护一份。
+
+### §30.4 `agent_state` CAS 自冲突（框架侧修复，teapot 无改动）
+
+同一次排查里，该会话每轮必报一条 `agent_state CAS conflict — OVERWRITE applied`（近 7 天 8 次 `PRE_CALL` 对 8 次冲突，100% 确定性，非竞态）。根因是 `ReActAgent` 有两条落盘轨各记各的版本：轮末 `saveLegacyState` 用 `CallExecution.loadedVersion`，而 teapot 的 `PerMessageCheckpointMiddleware` 走 `saveAgentState(ctx)` 用 `slotVersions`；checkpoint 写成功后只回写 `slotVersions`，轮末仍拿旧版本号做 CAS → 必然落空 → 走默认 `ConflictPolicy.OVERWRITE` 盲写。当前不丢消息（两个写者序列化同一个 `AgentState` 实例），**但乐观锁在该部署里等于失效**：真有两个 run 重叠跑同一会话时是 last-writer-wins 整轮互吞。
+
+- **修法**（agentscope-java `agentscope-core`）：新增 `activeScopes`（slot → 活跃 `CallExecution`），把成功写入得到的新版本经 `publishSlotVersion(slot, version, written)` 同时投给 `slotVersions` 与活跃调用；**带 `live.state == written` 身份校验**，避免同槽并发的另一个调用借用别人的版本号，从而保住真冲突检测。`clearStateCache` 两处一并清理。
+- **验证**：新增 `ReActAgentCheckpointVersionTest` 两条——① checkpoint + 轮末两次写全程无冲突、无盲写、版本从 0 连续递增（**改代码前实测 `expected: <0> but was: <1>`，钉死后转绿**）；② checkpoint 之后插入一个外部竞争写，`FAIL` 策略仍抛 `ConcurrentSessionModificationException` 且库里留下对方的状态（证明修复没有把真冲突吞掉）。core 全量 2594 条，仅 `DangerousPathBypassTest` 2 条 error 为本机 Windows 无符号链接权限的既有环境噪声。
+- **teapot 侧**：无需改动；`PerMessageCheckpointMiddleware` 的类注释里「与轮末落盘共享版本缓存」这句假设正是错的，升级框架后才成立。
+
+### §30.5 v86 上线记录（2026-10-27 16:04）
+
+产物：`app.jar` 227,054,414B（前 227,043,185B）、前端入口 `index-CZlw17Eq.js`（md5 `5f8914fd…`）。回滚点 `app.jar.bak-20261027-160400` + `ui.bak-20261027-160400`；脚本 `deploy/tmp-deploy-v86-model-window-probe.sh`，驱动 `Temp/ssh114/deploy-v86.js` / `rerun-v86.js`。
+
+**顺序约束（值得留着）**：DDL 必须先于换 jar 之后的重启。新 mapper 的 `<sql id="cols">` 里含 `context_window_size`，列不在就是所有模型查询 `BadSqlGrammar`；反过来旧 jar 不引用该列，所以列先加无害、且**不需要回滚 DDL**。脚本因此做成可重入：`/tmp/app.jar` 不在就只核对已就位尺寸，zip 不在就按 md5 沿用现有 ui。
+
+闸门全绿：`DDL_OK configured_rows=6`（qwen3.8-27b=1048576，qwen-plus/3.7-flash/3.8-flash/3.8-max=131072，qwen-max=32768；qwen-turbo 与 qwen3-vl-flash 仍 0，等探活）、嵌套 `agentscope-core` 1,019,761B 且 `CORE_CAS_FIX_OK`/`CORE_ACTIVE_SCOPES_OK`（证明 §30.4 的修复真进了 fat jar，不只是源码）、`CONTEXT_WINDOW_WIRING_OK`（六家策略各自的 `contextWindowSize` 都在）、`PROBE_MAPPING_OK`/`PROBE_BACKFILL_OK`、`REGRESSION_GUARD_OK`；`Started in 12.045s`、`startup_error_lines=0`、`模型供应商已接入 6`、`/api/model/list` 与 `/api/model/probe` 均 401（路由在、鉴权门在）、UI 三处新文案在包内。
+
+线上态：三个启用 Agent 的模型现在全部带窗口（digit-tim 与 general-assistant 走 qwen3.8-flash=131072）→ harness 上限从兜底 64000 变成约 112067，那条会话的 64413 估算量落在预算内。
+
+**仍未确认**：① 该会话真发一轮消息后不再报 budget、且 `agent_state CAS conflict` 那条 WARN 消失——需要一次真实对话才算闭环；② 重启窗口里 6 行 `Failed to start channel 'discord-DC'` 是既有噪声（08:34/10:30/12:06/13:58 四次重启前就有，Discord 出口被重置），与本次无关。**两次构件门首跑失败都是脚本自身的门写错**（`ModelEntryDO` 漏了 `model/` 包段、`customCredentials` 误挂到 `ModelService` 而非 `AgentBuilder`），不是产物问题——构件门写错只会挡发布，不会放过问题，这个方向上的失败是安全的。
+
+### §30.6 供应商报得出的，不让人手填（2026-10-27 用户提出）
+
+v86/v87 把窗口做成了「入口可配 + 探活回填」，用户当场指出两点：能力位同样该从云厂商查，而且**既然查得到就不该再有手工框**。同时纠正了 §30.1 的口径错误（见下）。
+
+- **口径纠正（重要，别再犯）**：`GET /compatible-mode/v1/models/{model}` 的 `extra_info.default_envs` 是**请求默认参数袋**（同袋有 `num_beams/seed/top_p/do_sample`），里面的 `max_tokens` 是默认**输出**上限，不是上下文窗口。铁证：qwen3.8-max 那里报 131072，而原生目录 `model_info.max_output_tokens` 恰为 131072、`model_info.context_window` 是 **1,000,000**。v86 按错值回填，把五个模型的窗口低估了 7.6 倍（qwen3.8-27b 也错：1048576=2²⁰ vs 真值十进制 1,000,000；只有 qwen-max 巧合对上）。改用原生 `GET /api/v1/models`：`model_info.context_window` 给窗口，`inference_metadata.request_modality` 给模态。V16 的回填段因此改成**按模型名无条件覆盖、可重复执行**，重跑一次即纠正存量。
+- **原生目录的探测形状**：没有「按名取详情」端点（`/api/v1/models/{name}` 一律 404），用 `?name=<model>` 过滤代替；**未命中是 200 + 空列表而不是 404**，所以「模型不存在」要靠列表空判定。`qwen-turbo` 与 `qwen3-vl-flash-2026-01-22` 在目录里 `total:0` —— 这两个存量入口本身已失效，保持窗口 0。清单分页 `page_size=200`（500 会被拒），实测 total=359。
+- **`supportsDiscovery(provider)` 是单一判据**：只有 DashScope 能报模态，故只有它享受自动同步。判据经 `/api/model/providers` 的 `modelDiscovery` 字段下发给前端，界面不另立名单。OpenAI 兼容网关不在此列，一半是清单不报模态，一半是它的 baseUrl 由用户自定——放开探活等于让服务端去访问任意地址（SSRF），因此 `probe-draft` 明确只服务可发现供应商。
+- **保存期权威覆盖**：`ModelService.create/update` 对可发现供应商调 `syncFromVendor`——探活成功即以供应商值覆盖窗口与能力位（**空模态=供应商确认纯文本，能力位置空**，不是"留着不动"）；探活不成功则保留提交值并 WARN，不阻断保存，否则 qwen-turbo 这类目录查不到的存量入口连改名都做不到。
+- **Agent 自带模型同款**（用户第 2 点）：`CustomModel.contextWindowSize` 新增并进 `ModelRegistry.Credential`（**窗口纳入 `fingerprint()`**，否则同 modelId 不同窗口会命中同一缓存槽），窗口定序 Agent 自带 &gt; 系统入口 &gt; 框架查表。配置页填完模型名即自动同步，展示为「上下文窗口 976K + 模态标签 + 重新同步」，手工框只在不可发现供应商下出现。
+- **前端**：新增 `components/VendorModelMeta.tsx`（`useVendorModelMeta` + `VendorModelMetaNote`），模型入口与 Agent 配置两处共用；同步值仍写入 hidden `Form.Item`，提交形状不变。探活不成功时把供应商原文如实显示成红字，不静默退回手填。
+
+**验证**（v88，2026-10-27 18:14 上线；回滚点 `app.jar.bak-20261027-181437` / `ui.bak-20261027-181437`）：上线前用**待上线的 jar 在服务器上直跑真类**验 `syncFromVendor` 四态，全部符合预期 —— `qwen3.8-flash -> caps=[image,video] window=1000000`（供应商权威）、`qwen-max -> caps=[] window=32768`（确认纯文本、清空能力位）、`qwen-turbo -> caps=[image] window=1`（探活失败、保留提交值）、`openai(gpt-5.2) -> caps=[image] window=7`（不可发现供应商、完全不动）。构件门 `WIRING_ALL_OK`（八处接线）+ `PRIOR_GATES_HOLD`（含反向门：`ModelVendorClient` 字节码里再出现 `compatible-mode` 即拒绝上线）；`Started in 10.001s`、`startup_error_lines=0`、四个路由均 401、前端入口 `index-DDN6zd_1.js` md5 对上。**未做**：浏览器里真机点一次同步（需 admin 登录）；`probe-draft` 的 HTTP 层未跑通，其逻辑与 `probe` 同源且已被真类覆盖。
+
+**存量已补**：`qwen3.8-flash`、`qwen3.8-27b` 的 `capabilities` 按供应商实测值补为 `image,video`（此前为空，导致 digit-tim 换到 flash 后媒体模态守卫把图片当不支持）。六个在册入口的窗口现全部为原生目录实测值。
+
+---
+
+## §31 Tool Group：工具分组与模型自主装备（2026-10-28）
+
+需求（用户原话）：支持 tool group，在 Agent 配置页新建分组，用拖拽或点击把工具归到不同组里。本节改动**尚未提交、尚未上线**。
+
+### §31.1 框架语义与选型：META 作用域 + 初始不激活
+
+探针实测（一次性探针，跑完即删）确认的几条口径，直接决定了配置形状：
+
+- meta tool 叫 `reset_equipped_tools`，入参 `{to_activate: string[]}`（必填，enum = 当前 META 组名），**替换语义**（不是增量装备）。它的 parameters/description 每次调用重算，所以 `registerMetaTool()` 之后才创建的组照样出现在 enum 里 —— 这是「build 后建组」能成立的前提。
+- 入组的工具随即退出默认工具表：`getToolSchemas(activeGroups)` 不含它，未激活时调用被框架拒掉。**没入组的工具不受影响**（框架里「无分组」= 始终可见，归在保留组 `basic`）。
+- 组的激活状态是**会话级**的，且在 `ReActAgent` 构造时一次性播种进会话状态。
+
+因此选型是 `ToolGroupScope.META` + `active=false`：组一律建成不激活，由模型按组说明自己决定装备哪几组。配置里**刻意不暴露 `active` 与 `scope`** —— 构造后再把 `active` 改成 true 永远播种不到会话状态，那种字段等于在界面上摆一个不生效的开关（前端组件的 javadoc 写明了这一点）。
+
+### §31.2 存储与保存期校验
+
+存 `feature.toolGroups: [{name, description?, tools[]}]`，走 `AgentFeature` 既有的命名空间机制（未知命名空间原样往返；空列表移除该命名空间；整个 feature 为空时 `toJson()` 返回 null，维持列为 NULL 的语义）。
+
+`validateToolGroups()` 的规则：≤20 组；组名 `^[a-z][a-z0-9_-]{1,63}$`；不许用保留名 `basic`；组名唯一；说明 ≤500 字符；每组 ≥1 个工具（空组对模型没有意义）且 ≤60 个；工具名 `^[A-Za-z0-9_.-]{1,128}$`、组内不重复；**一个工具只能属于一个组**（框架的工具→组反向索引是一对一，重复归属时后写的覆盖先写的，界面上「两个组都有它」与运行时「只有一个组管得住它」会对不上，所以在保存期就拦掉）；`reset_equipped_tools` 与 `load_skill_through_path` 不许入组（藏掉 meta tool 等于分组再也打不开，是死锁；skill 查看器框架有意让它不分组，好让早于它存在的旧会话也能加载 skill）。
+
+**不在保存期判**「组里的工具名是否真在注册表上」：那要装配一次才知道。装配期匹配不上的名字按框架口径跳过并告警 —— 一条拼错的配置不该让整轮对话装配失败。
+
+### §31.3 工具目录：`GET /api/agent/tool-catalog`
+
+`ToolCatalog.entries()` 是与 Agent 无关、只跟服务端依赖版本有关的一张候选清单。**不去构建一个真 Agent 再读它的 Toolkit**：装配会连 MCP（stdio 传输要拉起子进程）、可能创建沙箱，配置页不该付这个代价，而且新建态的 Agent 还没落库、根本没法装配。改成反射扫 `@Tool`（RUNTIME 保留，注解里的 name 就是注册名、description 就是模型看到的那句）+ 5 条无注解实现按公开常量补录（`plan_enter` / `plan_write` / `plan_exit` / `a2ui_render` / `ask_user_question`）。扫的类都是编译期引用的，SDK 改类名会编译失败，不像硬编码工具名字符串那样静默过时。
+
+实测（拿真类跑，不是 fixture）：**41 条 = harness 26 / platform 6 / media 9**；按来源再按工具名排序、无重名、两个不可入组的工具没有泄漏进清单。
+
+清单只作候选、不作校验，所以前端另留自由录入，用来覆盖 MCP 工具（工具名由 MCP 服务端自报、本平台不加工具名前缀，只有连上才知道叫什么 —— 口径见 §32.3）。
+
+### §31.4 装配顺序（两处都不能挪）
+
+- **build 前**：只要配了组就 `builder.enableMetaTool(true)`。框架在 build 里注册 meta tool，晚了就没有；而入组工具被隐藏后再没人能装备回来。
+- **build 后、所有工具注册之后**：`applyToolGroups(agent, toolGroups)` 逐组 `createToolGroup(name, desc, false, META)`，再逐个 `addToolToGroup(name, tool)`。必须排在工具注册之后 —— `addToolToGroup` 要求组与工具都已在册，否则抛 `IllegalArgumentException`。建组失败跳过该组、入组失败跳过该工具，各自 warn；收尾一条 info 汇总 `组=created/total 入组工具=N`。
+
+另外两条实测约束：`ToolFilter`（`runtime.allowedTools`）跑在 meta tool 注册**之前**，所以白名单挡不住 meta tool；`Toolkit.copy()` 会带上组，子 Agent 继承同一套分组。
+
+### §31.5 前端：`components/ToolGroupsSection.tsx`
+
+- **入口位置（2026-10-28 用户截图追加）**：不再是左侧独立分区，而是并进 **Tool & Advanced 的第二个 Tab**（`AgentDetail` 里 `Tabs items`，默认停在「压缩与运行参数」，左侧菜单与 `Section` 联合类型里的 `toolgroups` 一并删掉）。这里有个必须守住的实现选择：**要用带 `children` 的 Tabs，不能改成"自己按 state 条件渲染两块面板"** —— `onSave` 走 `form.validateFields()`，参数面板一卸载，`form` 实例就与任何表单元素脱钩，切到分组页再保存会静默丢字段。rc-tabs 会保留看过的面板，所以隐藏中的 Form 照样被校验和读取（实测停在分组页点保存，PUT 同时带 `runtime` 与 `toolGroups`）。
+- 布局：左侧目录卡（搜索、「全部/未入组」切换、按来源分桶；chip 既可拖也可点，Dropdown 给「加入/移到/已在 X」；卡片本身是放置区 = 取消入组），右侧组卡（组名 + 计数 Tag + 编辑 + 删除 Popconfirm、说明行、空组警示、虚线放置区、可关闭可拖拽的工具 Tag、自由录入）。新建/编辑走 `ResponsiveModal`，组名即时校验。
+- 拖拽用**原生 HTML5 drag events**（项目没有 DnD 依赖，不为此引入）；跨组件传递用 `useRef` 存 `{tool, from}`，`dataTransfer` 只作兜底。
+- 状态不进 `Form`：与 middleware 分区同一路子（组件态 + 保存时写 feature）。保存前 `cleanToolGroups` 归一、`toolGroupsProblem` 逐条复刻后端规则，不合规直接 `message.error` 且**不发请求**；`feature` 从 `loadedFeature` 合并，避免一个分区覆盖另一个分区的命名空间。
+- 一个工具只属于一个组在前端同样执行：`assign()` 先把目标组之外的同名成员摘掉。
+- 目录加载失败不阻断本分区：降级成警示 Alert，自由录入照常可用（错误必须让用户看见，不静默吞掉）。
+
+### §31.6 验证
+
+- 后端：`mvn -o -B -pl teapot-ai-core -am -DskipTests compile` BUILD SUCCESS。一次性探针 7 条全绿：跨组重复被拒且报错里指名先占用的组、两组合法配置通过、`reset_equipped_tools` 入组被拒、`basic` 被拒、空组被拒、清空分组后 `toJson()` 回到 null、序列化往返一致（组名/说明/工具顺序都保持）。
+- 前端：`npx tsc -b --force` exit 0；`npm run build` ✓ built in 1m 40s。
+- 浏览器（mock 后端 9126 + vite dev 5173 + 内置浏览器 `evaluate_script`；页面处于 hidden，截图不可用，改用结构化断言）：播种已有配置、点击归组、chip 拖入组、组内 Tag 拖到另一组（= 移动）、Tag 拖回目录（= 取消入组）、放置区高亮、新建弹窗与组名校验、空组保存被拦（PUT 次数不增）、自由录入 MCP 名、不可入组工具被拒并弹原文案、搜索过滤、未入组切换、Tag 关闭、删除组 Popconfirm、组重命名，532px 窄屏无横向溢出。提交的 feature 形状与预期一致，`runtime` 命名空间未被覆盖。
+- 验证脚手架（mock server、vite、临时目录、探针）已全部拆除删除。
+
+### §31.7 遗留（已修，见 §32）
+
+本节收尾时报的遗留问题是「前端写 `mcpServers`、后端 DTO 字段叫 `servers` → `getServers()` 恒为 null → Agent 级 MCP 从来没注册上过」。**这条诊断是错的**，真跑探针后确认它比想象的严重，修法与结论落在 §32。
+
+---
+
+## §32 `feature.mcp` 键名错位：不是「静默不生效」，是「一启用就把 Agent 打挂」（2026-10-28）
+
+### §32.1 真实故障形态
+
+前端 `types.ts`/`AgentDetail` 写的键是 `mcpServers`，后端 `AgentFeature.MCP` 的字段叫 `servers`。原以为后果是「读成 null、MCP 静默不生效」，探针实测出来的是另一回事：
+
+- `AgentFeature.MCP` **没有** `@JsonIgnoreProperties`，而 `MAPPER` 是裸 `new ObjectMapper()`（Jackson 默认 `FAIL_ON_UNKNOWN_PROPERTIES=on`）⇒ `getMcp()` 里的 `convertValue` 对未知键 `mcpServers` 直接抛 `IllegalArgumentException: Unrecognized field "mcpServers" … (2 known properties: "servers", "enabled")`。
+- 两个调用点都致命：保存期 `validateMcp()` 先调 `getMcp()` → **保存 500**（抛的不是 BizException，界面只能显示 Jackson 原文）；行一旦落库，装配期 `AgentBuilder` 每轮调 `feature.getMcp()` → **该 Agent 每一轮都装配不起来**。也就是说从 UI 打开 MCP 开关这条路从来走不通。
+- 为什么一直没被发现：保存时关闭态只写 `{enabled:false}`（`AgentDetail.tsx` 的 `mcpOut.enabled ? mcpOut : { enabled: false }`），不带未知键，所以「没启用 MCP」的存量 Agent 一切正常。
+- **这是同一个坑的第二回**：§29.14 撤销「渲染后中断」时踩过一次，当时记的原话是「裸 `ObjectMapper` 默认 `FAIL_ON_UNKNOWN_PROPERTIES=true`，直接删字段会让这些 Agent 在装配时抛异常」。那一轮的修法只给 `A2ui` 一个类加了注解，没有改成全局口径 —— `MCP` 就是漏掉的那一个，而且它连字段名从一开始就没跟前端对上。
+
+### §32.2 修法：改后端键名，不动前端
+
+两个方向里只有一个是零迁移的。`servers` 这个键**没有任何代码写过**（全库检索：`setMcp()` 除自身定义外无调用方），而 `mcpServers` 是前端一直在写、可能已经在库里的形状。所以改后端：
+
+- 字段 `servers` → `mcpServers`（Lombok 派生 `getMcpServers()`），三处调用同步：`AgentBuilder.applyMcp`、`McpConfigTools.listMcpServers`、`AgentFeature.validateMcp`。
+- **不加** `@JsonAlias("servers")`：为一个不可能存在的存量键留兼容分支，正是本次要清理的那类代码。旧键现在只会被当成「没配 server」，给出中文校验文案。
+- 顺手补 `@JsonIgnoreProperties(ignoreUnknown = true)`：照 §29.14 已经记过的教训办 —— 这份 JSON 由前端写、由装配期读，而本项目又常态化只发前端（§29.30/§29.31 就是 UI-only 上线），键名漂移是会再发生的事。忽略未知键后漂移退化成「没配 server」，由 `validateMcp()` 拦住，而不是抛 Jackson 原文把 Agent 打挂。
+
+### §32.3 顺带纠正 §31 里我自己写错的一条事实
+
+框架侧确认：teapot 走 `McpServerRegistrar.register(toolkit, configs)`，`McpServerConfig.prefixToolNames` 默认 `false`，`Toolkit.ToolRegistration.mcpToolNamePrefix` 默认空串 ⇒ **MCP 工具按服务端自报的名字注册，不是 `mcp__{server}__{tool}`**。§31 里那句「MCP 工具名形如 mcp__server__tool」的注释与前端 placeholder 一并改掉（工具名正则本来就允许下划线，规则不动）。
+
+### §32.4 修完之后要知道的运维后果
+
+- MCP 现在**真的会连**：`enabled=true` 的 Agent 每次装配都会拉起/连接配置的 server。`McpServerConfig.required` 默认 `false` ⇒ 连不上只 WARN 并跳过，不会把整轮对话打挂。
+- 不漏进程：`HarnessAgent.close()` 关的 `ownedMcpToolkit` 与 `getToolkit()` 是同一个实例（build 里两处传的都是 `agentToolkit`），Web 链路每轮重建 + 轮末 `SingleUseAgentCloseMiddleware` 回收。
+- 但**每轮重连的代价是实打实的**：stdio server 每轮都要 spawn + initialize + listTools。`npx -y …` 这类每次还要走 npm 解析的命令，单轮额外延迟会很难看；要长驻复用请优先用 `record`（系统记录）或 http/sse 传输。
+- **密钥口径不一致（未改，等你定）**：`AgentService.redactSecrets()` 只处理自定义模型 `apiKey` 与自带沙箱 `e2bApiKey`，`feature.mcp` 的 `env`/`headers` 是明文入库、明文回显给任何能看这个 Agent 的人。MCP 以前从来没生效过，这条通道形同虚设；修完之后 env 里放 token 会变成常态，建议按 §29 的做法补 AES-GCM 加密 + `hasXxx` 回显。
+
+### §32.5 验证
+
+- `mvn -o -B -pl teapot-ai-core -am -DskipTests compile` BUILD SUCCESS；`npx tsc -b --force` exit 0。
+- 一次性探针（跑完即删）覆盖 7 个形状：`mcpServers` 读得出且 validate 通过、内联 stdio 通过、`{enabled:false}` 通过、启用但零条 server → 中文 BizException、**旧键 `servers` 现在也只给中文 BizException（修前是 Jackson 抛错）**、stdio 缺 command 被拦、`setMcp()` 往返写出的键是 `mcpServers` 且回读一致。
+- **未做**：线上库里是否已有带 `mcp` 命名空间的存量行 —— 本机到 114 的 22 端口这次不通，没查成。这决定「上线后是否立刻有 Agent 开始连 MCP」，发布前建议先跑一次 `select agent_key, json_extract(feature,'$.mcp.enabled') from t_agent where feature like '%"mcp"%'`。
+
+---
+
+## §33 Skill 的「绑定」与「生效」拆成两层（2026-10-28 用户截图提出）
+
+需求原话：绑定关系要在接口层面传 agentId 来查这个 Agent 到底绑了多少 skill，同时卡片要有解绑按钮（与 disable 不同）。
+
+动手前先摆清事实：改之前 `t_agent_skill` 只有 `(agent_key, skill_name)`，**那个开关切的就是 bind/unbind**，卡片上的 "Enabled/Disabled" 是错标 —— 界面上根本没有 disable 这一层。给用户看了两种口径（只做绑定/解绑并改正文案 vs 真做两层），用户选了**真做两层**。
+
+### §33.1 语义定稿
+
+- **绑定**（有这一行）= 这个 skill 属于该 Agent 的可装配集合；**解绑** = 删行。
+- **`enabled=0`** = 行还在（配置关系保留），但装配时不进 `SkillFilter`，模型看不到它。用途是"暂时停用，但不想丢掉绑定配置"。
+- 未绑定谈不上启用/停用 ⇒ 界面在未绑定时**不给开关**，只给「绑定」按钮（不摆无效控件）。
+
+### §33.2 迁移与默认值
+
+- `sql/V17__agent_skill_enabled.sql`：`ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1`，幂等写法沿用 V16（`INFORMATION_SCHEMA` 探针 + `PREPARE`，MySQL 8.4 无 `ADD COLUMN IF NOT EXISTS`）。**默认 1 是刻意的**：存量行全是"绑定且生效"，加列后行为与加列前逐位一致，不存在"上线即静默停用某个 Agent 的 skill"。
+- `AgentSkillBind.enabled` 字段初始化为 `true`：insert 语句直接带这一列，将来漏设也不会静默把 skill 停掉。
+- **顺序约束**（同 §30.5）：DDL 必须先于换 jar —— 新 mapper 的 select 列表含 `enabled`，列不在就是所有绑定查询 `BadSqlGrammar`；反向（旧 jar 遇到新列）无害，不需要回滚 DDL。
+
+### §33.3 接口
+
+- `GET /api/skill/list?agentKey=x` —— agentKey 可选。给了就在每条上多下发 `agentBound`（该 Agent 绑没绑）与 `agentEnabled`（这条绑定是否生效，未绑定时不下发）；没给则两者为 `null`，与 `false` 区分开（"没问" ≠ "问了且没有"）。绑定态与 `boundAgents` 同源，都出自同一次 `selectAllBinds()`，前端不再拿两份列表自己比对。
+- `POST /api/agent/skillEnabled/{agentKey}`，body `{skillName, enabled}`。`updateEnabled` 影响 0 行 = 这条绑定不存在 → `BizException("Skill x 未绑定到该 Agent，请先绑定再启用/停用")`，**不悄悄补一行**。`enabled` 用 `Boolean` + `@NotNull`：漏传必须报错，不能靠默认值把 skill 停掉。
+- 权限无需改动：`/api/agent/*` 已在 developer 通配内，`/api/skill/list` 对 viewer 只读放行，agentKey 只是查询维度、不扩权。
+- `AgentDetailVO.skillNames` 仍是"全部绑定行"（含停用的），Profile 卡的「绑定技能」计数语义不变。
+
+### §33.4 装配
+
+`AgentBuilder` 的 `SkillFilter` 只收 `isEnabled()` 的绑定；存在"绑定但停用"时补一条 info 日志（`skill 已绑定但停用 agentKey= 停用= 生效=`），便于排查"为什么模型没有这个 skill"。
+
+### §33.5 前端
+
+- 三态文案：`已绑定 · 生效中`（绿）/ `已绑定 · 已停用`（`token.colorWarning`）/ `未绑定`（灰），状态点同色。
+- 已绑定的卡片：启用开关（`checkedChildren=启用 / unCheckedChildren=停用`）+ 「解绑」text-danger 按钮带 Popconfirm，确认文案直接点出两层的区别："绑定行会被删掉；本体保留，其它 Agent 不受影响。只是暂时不用的话，选「停用」而不是解绑。"
+- 分区头计数：`本 Agent 已绑定 N 个 · 其中 M 个已停用`，数字取服务端按 agentKey 下发的绑定态。
+- 三个动作成功后就地 patch 那一条（连 `boundAgents` 一起改：它决定「删除本体」是否可用，漏改会让按钮在"刚解绑了最后一个 Agent"时仍禁着），不整页重拉。
+
+### §33.6 一个已知副作用（未处理）
+
+`AgentUpdateRequest.skillNames` 走 `replaceBindings`（删全部再插），**会把停用位重置回启用**。当前 SPA 从不提交该字段，界面路径不受影响；但直接用 update API 带 `skillNames` 的调用方需要知道这一点。
+
+### §33.7 验证
+
+- `mvn -o -B -pl teapot-ai-core -am -DskipTests compile` BUILD SUCCESS；`npx tsc -b --force` exit 0；`npm run build` ✓ built in 3m 40s。
+- 浏览器（mock 9126 + vite 5173；532px 视口走移动端布局，分区菜单项是 `[title=Skills]` 的 div 而非 `li`）：三态渲染正确；点「绑定」→ 卡片转生效中、头计数 3→4；拨停用 → 卡片转已停用、停用计数 1→2、toast 带"绑定关系保留"；点「解绑」→ Popconfirm 文案如上、卡片转未绑定且只剩「绑定」、页脚转"未被任何 Agent 使用"并出现「删除本体」、头计数回到 3。mock 日志确认四次调用分别是 `bindSkill` / `skillEnabled=false` / `skillEnabled=true` / `unbindSkill` 且载荷正确。
+- **未做**：真库执行 V17（要上线授权）；`setSkillEnabled` 的"未绑定" BizException 分支只做了代码级确认 —— 界面上未绑定不给开关，走不到那条路径。
+- 验证脚手架（mock、vite、临时目录）已拆除，端口 9126/5173 均无残留监听。
+
+---
+
+## §34 v89 上线记录（2026-10-28 14:10，一笔带 §31/§32/§33）
+
+产物：`app.jar` 227,072,504B（md5 `7b332c0e…`，上一版 v88 是 227,059,291B）、前端入口 `index-Ch_wmGfH.js`（md5 `c6951ed0…`、4,586,069B）。回滚点 `app.jar.bak-20261028-141033` + `ui.bak-20261028-141033`；脚本 `deploy/tmp-deploy-v89-skill-binding-mcp.sh`，驱动 `Temp/ssh114/run.js`（ssh2，口令只从 `~/.qoder-cn/secrets/ssh114.txt` 读）。
+
+**顺序**：V17 DDL 先行（新 mapper 的 select 列表含 `enabled`，缺列即所有绑定查询 `BadSqlGrammar`），再换 jar，最后换 ui。DDL 幂等且不需要回滚。
+
+闸门全绿：`V17_OK enabled_rows_1=4 enabled_rows_0=0` + 列形状 `tinyint(1) / 默认 1 / NOT NULL`；构件门 `MCP_FIELD_OK`（javap 看到 `List<…Server> mcpServers`）、`MCP_NO_LEGACY_ACCESSOR`（声明里再无 `getServers()`）、`MCP_IGNORE_UNKNOWN_OK`、`TOOLGROUP_WIRING_OK`（createToolGroup/enableMetaTool/addToolToGroup/validateToolGroups/tool-catalog/SOURCE_HARNESS 六处）、`MAPPER_XML_OK`+`INSERT_CARRIES_ENABLED`、v86~v88 的门不回退；`Started in 11.775s`、`startup_error_lines=0`（额外把 `Unrecognized field` 加进启动错误模式，正是 §32 那类炸法）、六个路由 401（含新 `/api/agent/skillEnabled/*`）、`BUNDLE_MD5_OK` + 新文案在包内 + 旧的 `"Enabled":"Disabled"` 三元式已消失。
+
+**上线后真库盘点（把 §32.5 的未决问题结掉）**：`agents_with_mcp_namespace=0`、`agents_with_tool_groups=0`、`t_agent_skill` 4 行全部 `enabled=1`（digit-tim 2 / teapot 2）。也就是说 §32 的修复**没有让任何线上 Agent 开始连 MCP**，§31 的工具分组是"带着但没人配"的暗状态；§33 的迁移对存量逐位无损。
+
+### §34.1 一个必须记住的 SQL 坑：`JSON_CONTAINS_PATH` 返回 0/1，不是 'YES'/'NO'
+
+第一版盘点写成 `json_contains_path(feature,'one','$.mcp')='YES'`，跑出 `agents_with_mcp_namespace=4`（=所有 feature 非空的 Agent）。真相是 MySQL 里 `JSON_CONTAINS_PATH` 返回**整数** 0/1，而整数与字符串比较时 MySQL 把 `'YES'` 转成数字 **0** ⇒ `0='YES'` 恒真 ⇒ "没有这个路径"反而全部命中。同一条 SQL 把该路径当列选出来看却是 0，所以这个谎只在 WHERE 里出现，最容易放过。
+
+- 判存在一律写 `=1`；判不存在写 `=0`，别写 `<>1`（NULL 行会被静默放掉）。
+- 盘点类查询要有反向对照：`locate('mcp', feature)` 这种不依赖 JSON 语义的原始定位，一眼就能看出 4 是假的。脚本里的注释已钉住这条。
+
+---
+
+### §34.2 后续（2026-10-28，未上线）：新建页的 Agent ID 口径与后端对齐
+
+复盘创建路径发现：后端从 M0 起就要求调用方自带 `agentKey`（`AgentCreateRequest` 的 `@Pattern ^[a-z][a-z0-9-]{2,31}$`，落库列 `t_agent.agent_key VARCHAR(32)`，SPEC §7.1 同一条），新建页也确实给了输入框 —— 但**规则是另一套**：`^[a-z][a-z0-9-]{1,63}$`（2–64 位，文案照抄成"2-64 位"）。后果是填 2 位或 33–64 位的 ID 时前端放行、后端拒绝，用户只看到一句来自服务端 toast 的陌生文案；标题还两处不一致（建页「Agent 标识」/ 详情页「Agent ID」）。
+
+- 改法：前端规则提成模块常量 `AGENT_KEY_RE`，与后端 `@Pattern` 逐字一致（3–32），`Input` 加 `maxLength={32}`，label 统一「Agent ID」，extra 写明"全局唯一、也是 AG-UI 的路由键、创建后不可修改"。
+- 口径来源写进常量注释而不是散在 JSX 里：这类"前端放宽一寸、用户多跑一趟"的规则必须能一眼看到它对谁负责。
+
+**验证**（mock 9126 + vite 5173，逐条独立加载）：`ab`(2) 拒、`abc`(3) 过、32 位过、33 位拒；label/extra/`maxlength=32` 在 DOM 上确认；`tsc -b` exit 0。
+**测试坑（值得留着）**：用原生 setter + `input` 事件给 antd 受控 `Input` 灌值时，**只有每次页面加载后的第一次会被 Form store 采纳**，后续赋值只改 DOM 不改 store —— 于是"合法值仍报错"是假阳性。每条用例都要重新 `navigate`；`press_key` 在这个隐藏页里也进不去（值不变）。另：原生 setter 绕过 `maxlength`，所以"输入被截断到 32"不能用这个方法验。
+
+---
+
+### §33.8 分区收窄成「只显示已绑定」+ 取用口搬家（2026-10-28 用户截图追加）
+
+用户看着 §33 上线后的截图提了一句：`hactl`、`meeting-notes` 这两个本 Agent 没绑的条目不该出现在这里。收窄后有两个动作会失去入口，必须一起搬家，否则是删功能：
+
+- **绑定库里已有的 skill**：`AddSkill` 过去只有 zip / Git 两条导入路径（导入即绑定），没有"取用现成条目"的口 —— 列表一收窄，`hactl` 这类就再也绑不上。所以 Add Skill 下拉加第三项「绑定已有 Skill」，弹窗只列 `agentBound !== true` 的候选（带搜索、来源、"N 个 Agent 在用"），点「绑定」即绑、**弹窗不关**（连着绑多个），父级 `load()` 后该行自动消失。
+- **删除 skill 本体**：工坊早已整页下线（§29.10），本体删除只有这一屏的「删除本体」；而它的前提是 `boundAgents` 为空 —— 已绑定的条目必然含本 Agent，永远不满足。所以这个按钮从分区卡片搬进上述弹窗（仍仅 admin、git 来源不给）。
+- 分区卡片随之简化：只剩「启用/停用」开关 + 「解绑」，状态文案不再需要"未绑定"分支；`boundSkills` 名称数组换成 `boundSkillItems` 对象数组（同源、少一次 map）。Profile 的「绑定技能」计数与分区头计数同用这一份。
+- 空态文案跟着改口径：从"还没有可绑定的 Skill"改成"本 Agent 还没绑定任何 Skill：可以绑定已有的，或导入新的"—— 前者在收窄后会误导（库里明明有）。
+
+**验证**（mock + vite，532px 移动端布局）：分区只列已绑定的 2 条、页面无"未绑定"字样；下拉三项；弹窗只列 2 个未绑定候选，`hactl`（别人在用）无删除入口、`meeting-notes`（孤儿）有；点 `hactl` 的「绑定」→ 弹窗内该行消失、分区变 3 张卡、头计数变 3；搜索 `meet` 只剩一条；「删除本体」的 Popconfirm 文案确认后条目消失；MobileModal 的关闭控件（`spark-modal-title-close`，不是桌面版的 `.ant-modal-close`）实测可关。`tsc -b` exit 0、`npm run build` ✓（入口 `index-Dox1jvta.js`）。**未做**：真库端到端（要上线）。
+
+---
+
+### §34.3 v90 上线记录（2026-10-28 16:30，仅前端）
+
+带 §34.2（Agent ID 口径同步）与 §33.8（Skills 分区只显示已绑定 + 「绑定已有 Skill」弹窗）。入口 `index-Dox1jvta.js`（md5 `989543c3…`、4,587,939B），回滚点 `ui.bak-20261028-163028`，脚本 `deploy/tmp-deploy-v90-skill-list-ui.sh`。**后端 jar 未动**（仍是 14:09 的 v89 产物，`systemctl is-active` 通过、`/api/skill/list` 401）。
+
+门的设计沿用 §30.5 那条顺序约束：**先在 `/tmp/ui-new` 里验完包再换目录** —— 入口 md5/尺寸、`index.html` 指向同一入口，全对才 `mv`。换完再核一次落盘 md5。文案门是双向的：新串必须在（`绑定已有 Skill`、`本 Agent 还没绑定任何 Skill`、`如 digit-tim`、`3-32 位`、`自己起一个全局唯一的`），被替换的旧串必须不在（`还没有可绑定的 Skill`、`2-64 位`、`Agent 标识`，以及 §33 的 `"Enabled":"Disabled"` 三元式）——反向门命中即拒绝，这类门写错只会挡发布，方向上是安全的。站点侧用域名回源（裸 IP 命中默认站点）：`index.html` 引用的入口与落盘一致、`/assets/<entry>` 200 且字节数等于 `ENTRY_SIZE`。
+
+**备份清理（2026-10-28 16:35，用户要求"不需要备份了"）**：`/main/apps/teapot-ai` 下 `ui.bak-*` 27 个目录（291M）+ `app.jar.bak-*` 32 个文件（4.1G）全部删除，磁盘 73%→62%（可用 11G→15G）。删后复核在线产物完好（`app.jar` 227,072,504B、`ui/index.html` 指向 `index-Dox1jvta.js`）、站点与 `/api/skill/list` 应答如常、`teapot-ai` active。**自此没有 ui/jar 的历史回滚点**，再出问题只能靠重新构建上一版提交，因此发布脚本里的 `BAK`/`UIBAK` 步骤保留（下次发布仍会生成当次回滚点）。
+
+- 未动的三类：`app.env.bak*` 四个（含配置与密钥，删它们的风险等级不同）、`app.jar.bak.20260818`（点号命名，不在 `app.jar.bak-*` 口径内，74M）、`dist.zip.bak-20260817`（3.5M）；`/main/backup` 数据库备份目录明确不在范围内。
+- **两个自己的检查脚本缺陷值得记住**：① 用 `case "$f" in *app.jar.bak-*)` 判"越界名单"时，前导 `*` 可以匹配空串，于是合法文件名被判越界、脚本在删除前中止（挡发布方向的失败，安全但白跑）——判名单要用锚定正则 `^(ui\.bak-|app\.jar\.bak-)`。② `shopt -s nullglob` 之下，`ls -1 app.jar.bak-* | wc -l` 在删干净后会退化成**无参 `ls`**，把整个目录条目数当剩余数（报出 52）。删后计数用 `find . -maxdepth 1 -name '<glob>' | wc -l`。
+
+---
+
+## §35 Agent 批量移动空间（2026-10-28 用户截图提出）
+
+需求：Agents 列表在「显示已停用」与 New Agent 之间加一个按钮，支持多选，把 Agent 批量移动到别的空间。
+
+### §35.1 接口
+
+`PUT /api/agent/batchMoveWorkspace`，body `{agentKeys:[], workspaceId}`（`workspaceId=null` = 移回个人空间，与单条移动同口径）。
+
+- **整批一个事务**：`AgentService.moveWorkspaceBatch` 循环复用 `moveWorkspace`，任一条不通过（不存在 / 已停用 / 对源空间无成员权限）就全批回滚。刻意不做"尽力而为逐条移动"——界面无法向用户解释"移了一半"的状态，而失败原因逐条弹 toast 只会变成一屏噪音。
+- 校验与审计仍逐条走 `moveWorkspace`，所以报错文案能指名是哪一条、为什么（实测 `Agent 已停用，不可移动：v68-draft-check`）。
+- `@NotEmpty` 挡空选；`workspaceId` **不加** `@NotNull` —— null 是合法语义（个人空间）。
+- 路由与 `PUT /{agentKey}/workspace` 不冲突（路径段数不同）；权限沿用 `/api/agent/*` 的 developer 通配，未改 resource-list。
+
+### §35.2 前端
+
+- 工具栏两态：常态「批量移动」+「New Agent」；进入选择态后整排换成「已选 N 个」+「移动到空间」（0 选时禁用）+「取消」。列表为空时「批量移动」直接禁用（没得选）。
+- 选择态下卡片点击从"进详情"改成"切换勾选"；勾选框是 `pointer-events: none` 的 Checkbox，只当指示器（否则和卡片点击双触发），选中描边 `#5bb98b`；底部单卡操作排（对话/编辑/移动/删除）整排收起。
+- **勾选只在当前页有效**：`load()` 一律清空 `selected` —— 翻页/搜索/换空间都会重载列表，留着旧勾选会让屏幕上的卡片和选中状态错位。
+- 弹窗列出被选的 `name（agentKey）`（超 6 个折叠成"等 N 个"）+ 目标空间下拉 + 一句原子性说明。成功后 toast 带条数与空间名，退出选择态，并重拉列表与空间清单（顶栏的空间计数会跟着变）。
+
+### §35.3 验证
+
+`mvn compile` BUILD SUCCESS、`tsc -b` exit 0、`npm run build` ✓（入口 `index-DYKZo7pM.js`）。浏览器（mock + vite）实测：进入选择态 → 4 张卡出勾选框、操作排收起；勾 2 张 → 「已选 2 个」+ 两张描边 + 「移动到空间」解禁；弹窗列出两条与三个空间选项；选 Rising Sun 确认 → mock 收到 `BATCH ["general-assistant","digit-tim"] -> workspaceId=2`、toast「已移动 2 个 Agent 到「Rising Sun」」、退出选择态、弹窗 wrap `display:none`。**失败路径**：勾上已停用的 `v68-draft-check` 再提交 → 后端原文 toast、勾选保留（仍 2 个选中）、列表没被本地改坏。**未做**：真库端到端（要上线授权）。
+
+---
+
+### §35.4 v93 上线记录（2026-10-28 21:39，后端 + 前端，无 DDL）
+
+一笔带 §35 批量移动与 §29.9 修订的弹窗钉位。产物：`app.jar` 227,074,425B（md5 `0fbc0538…`）、JS `index-VRdv8LtJ.js`（md5 `6c44904d…`）、CSS `index-Csk9ZuZv.css`（md5 `2364336d…`）。回滚点 `app.jar.bak-20261028-213929` / `ui.bak-20261028-213929`；脚本 `deploy/tmp-deploy-v93-batchmove-closepin.sh`。
+
+闸门：`BATCH_MOVE_WIRING_OK`（路由 + 服务方法 + 请求 DTO 三处）、`MCP_FIELD_HOLD` 与 §31/§33 的门不回退、`Started in 10.108s`、`startup_error_lines=0`、五个路由 401（含新的 `PUT /api/agent/batchMoveWorkspace`）。**这次新增了两类门**：① CSS 也进 md5/尺寸核对（以往只 gate JS，改样式等于没门）；② 钉位门直接查压缩后的 CSS 里必须同时出现 `position:absolute!important` 与 `left:auto!important`、`inset-inline-start:auto!important` —— 缺任何一侧就是回到会被拉满整行的旧写法。站点侧另用域名回源核了 JS/CSS 的 200 与字节数。
+
+---
+
 ## 附录 A：术语
 
 - **HarnessAgent**：AgentScope 2.0 推荐的长时运行 agent 入口，整合 workspace / 记忆 / 持久化 / subagent / 沙箱。
 - **AG-UI**：agent ↔ 前端 UI 的开放事件协议，经 SSE 传输，支持流式文本、工具调用、HITL 中断。
 - **多模态块**：AgentScope 消息模型中的 ImageBlock/AudioBlock/VideoBlock，源为 URL 或 Base64+mediaType（§19）。
 - **Skill**：`SKILL.md`（frontmatter + 指令）+ 可选 references/scripts 的打包能力单元；Agent 推理时按 name+description 决策加载。
+- **Tool Group / meta tool**：把部分工具收进命名分组、默认对模型隐藏，由模型调 `reset_equipped_tools`（meta tool）按组名自主装备（§31）。
 - **RuntimeContext**：每次调用的上下文（`userId`/`sessionId` 等），是无状态引擎多用户隔离的钥匙。
