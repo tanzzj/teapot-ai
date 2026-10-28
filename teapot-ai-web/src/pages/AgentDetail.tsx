@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AutoComplete, Col, Collapse, Empty, Row, Spin, theme, Tooltip } from 'antd';
+import { Alert, AutoComplete, Col, Collapse, Empty, Row, Spin, Tabs, theme, Tooltip } from 'antd';
 import {
   Button,
   Form,
@@ -31,13 +31,12 @@ import {
   SparkGuardrailLine,
   SparkPluginLine,
   SparkPlusLine,
-  SparkDeleteLine,
 } from '@agentscope-ai/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  agentBindSkill,
   agentCreate,
   agentDetail,
+  agentSetSkillEnabled,
   agentUnbindSkill,
   agentUpdate,
   deleteMemoryItem,
@@ -45,6 +44,7 @@ import {
   memoryItems,
   middlewareSchema,
   modelPresets,
+  toolCatalog,
 } from '../api/agent';
 import type { AgentCreatePayload } from '../api/agent';
 import { sandboxOptions, sandboxRecordNames, storageRecordNames } from '../api/config';
@@ -67,9 +67,15 @@ import {
   seedMiddleware,
 } from '../components/MiddlewareConfig';
 import type { MiddlewareValues } from '../components/MiddlewareConfig';
+import {
+  ToolGroupsSection,
+  cleanToolGroups,
+  toolGroupsProblem,
+} from '../components/ToolGroupsSection';
 import { uploadAgentAvatar } from '../api/avatar';
-import { skillDelete, skillList } from '../api/skill';
+import { skillList } from '../api/skill';
 import { modelProviders } from '../api/model';
+import { useVendorModelMeta, VendorModelMetaNote } from '../components/VendorModelMeta';
 import type { ModelProviderMeta } from '../api/model';
 import { AddSkillButton } from '../components/AddSkill';
 import { sessionStats } from '../api/session';
@@ -89,6 +95,7 @@ import type {
   AgentSandboxConfig,
   AgentSessionTitleConfig,
   AgentCompactionConfig,
+  AgentToolGroup,
   ChannelRecordName,
   MCPRecordName,
   MediaModelCatalogEntry,
@@ -98,9 +105,16 @@ import type {
   SandboxRecordName,
   SkillListItem,
   StorageRecordName,
+  ToolCatalogEntry,
 } from '../types';
 
 type Section = 'profile' | 'basic' | 'tools' | 'a2ui' | 'guard' | 'multiagent' | 'memory' | 'middleware' | 'sandbox' | 'channel' | 'mcp' | 'skills' | 'history';
+
+/** 自带模型的能力位选项（供应商不报元数据时才手填，SPEC §30.6） */
+const CUSTOM_CAPABILITY_OPTIONS = [
+  { label: '图片（image）', value: 'image' },
+  { label: '视频（video）', value: 'video' },
+];
 
 /** 胶囊菜单展开宽度（移动端悬浮展开层同宽） */
 const MENU_W = 208;
@@ -208,6 +222,13 @@ function Heatmap({ agentKey }: { agentKey: string }) {
  */
 export const NEW_AGENT_KEY = 'new';
 
+/**
+ * agentKey 口径必须与后端 AgentCreateRequest 的 @Pattern 逐字一致（SPEC §7.1）：
+ * 3–32 位、小写字母开头，落库列 t_agent.agent_key VARCHAR(32)。
+ * 这里放宽一寸，用户就多一次"前端过了、后端拒了"的往返，所以不写成 2–64 那种"看着宽松"的规则。
+ */
+const AGENT_KEY_RE = /^[a-z][a-z0-9-]{2,31}$/;
+
 /** 表单空间值 → 后端 workspaceId（'personal'/留空 = 个人空间懒创建，不下发该字段） */
 function toWorkspaceId(v: unknown): number | undefined {
   return !v || v === 'personal' ? undefined : Number(v);
@@ -232,8 +253,29 @@ export default function AgentDetailPage() {
   const [models, setModels] = useState<string[]>([]);
   /** 已接入供应商与思考档表达力（SPEC §29.16）：provider 下拉与档位禁用的数据源 */
   const [providerMeta, setProviderMeta] = useState<ModelProviderMeta[]>([]);
-  const [boundSkills, setBoundSkills] = useState<string[]>([]);
   const [allSkills, setAllSkills] = useState<SkillListItem[]>([]);
+  /**
+   * 本 Agent 的 skill 绑定态由 /api/skill/list?agentKey 下发（SPEC §33）：
+   * 绑定与生效是两层，前端不再拿 detail.skillNames 与全量列表自己比对推断。
+   * 分区只列已绑定的（用户提出）；未绑定的候选进 Add Skill 的「绑定已有 Skill」弹窗。
+   */
+  const boundSkillItems = allSkills.filter((s) => s.agentBound === true);
+  const unboundSkillItems = allSkills.filter((s) => s.agentBound !== true);
+  const disabledSkills = boundSkillItems.filter((s) => s.agentEnabled === false);
+  /**
+   * 绑定/停用/解绑成功后就地改这一条，不整页重拉。
+   * boundAgents 要同步改：它决定「删除本体」是否可用，漏改会让按钮在该解绑最后一个 Agent 时仍禁着。
+   */
+  const patchSkillBinding = (name: string, bound: boolean, enabled: boolean) => {
+    setAllSkills((prev) => prev.map((s) => (s.name !== name ? s : {
+      ...s,
+      agentBound: bound,
+      agentEnabled: bound ? enabled : undefined,
+      boundAgents: bound
+        ? (s.boundAgents?.includes(agentKey) ? s.boundAgents : [...(s.boundAgents ?? []), agentKey])
+        : (s.boundAgents ?? []).filter((k) => k !== agentKey),
+    })));
+  };
   const [detail, setDetail] = useState<{ name: string; description?: string; status: number; createdAt?: string; avatar?: string } | null>(null);
   const [sbOptions, setSbOptions] = useState<SandboxOptions | null>(null);
   const [storageNames, setStorageNames] = useState<StorageRecordName[]>([]);
@@ -250,6 +292,11 @@ export default function AgentDetailPage() {
   const [mwAttached, setMwAttached] = useState<Record<string, boolean>>({});
   /** 中间件配置值（SPEC §29.27）：由装配/编辑弹窗收进来，不挂页面表单，避免同名字段两处挂载互相注销 */
   const [mwValues, setMwValues] = useState<MiddlewareValues>({});
+  /** 工具分组（SPEC §31）：与中间件同款，值存在页面 state 里、保存时并进 feature，不挂本页表单 */
+  const [toolGroups, setToolGroups] = useState<AgentToolGroup[]>([]);
+  /** 可入组的工具目录：拉失败时为空 + 记下原因，分区里说明"仍可手填工具名" */
+  const [toolCat, setToolCat] = useState<ToolCatalogEntry[]>([]);
+  const [toolCatError, setToolCatError] = useState<string | null>(null);
   const isAdmin = useAuthStore((s) => s.hasRole('admin'));
   /** 新建态：所属空间下拉与空间作用域的模型清单（SPEC §28.11 与后端保存闸门同源） */
   const { workspaces, activeId, loaded: wsLoaded, load: loadWorkspaces } = useWorkspaceStore();
@@ -326,6 +373,23 @@ export default function AgentDetailPage() {
   const customModel = (Form.useWatch(['customModels', 0], form) as CustomModelRow | undefined);
   const customModelValue = customModelId(customModel ?? {});
   const hasCustomModel = Boolean(customModel?.provider && customModel?.modelName?.trim());
+  /**
+   * 自带模型的元数据同步（SPEC §30.6）：DashScope 报得出窗口与输入模态，就不让在这里手填；
+   * 密钥用用户填的那把（留空由服务端回落自己的环境变量）。
+   */
+  const customDiscovery = Boolean(
+    providerMeta.find((m) => m.provider === customModel?.provider)?.modelDiscovery,
+  );
+  const customVendorMeta = useVendorModelMeta({
+    provider: customModel?.provider,
+    modelName: customModel?.modelName,
+    apiKey: customModel?.apiKey,
+    discovery: isCustomModel && customDiscovery,
+    onSynced: (meta) => {
+      form.setFieldValue(['customModels', 0, 'capabilities'], meta.capabilities);
+      form.setFieldValue(['customModels', 0, 'contextWindowSize'], meta.contextWindowSize);
+    },
+  });
   /** 各界点子模型下拉：系统模型 + （自定义模式下的）那一个自带模型 */
   const modelOptions = useMemo(
     () => modelSelectOptions(models, isCustomModel && hasCustomModel ? [customModel!] : []),
@@ -495,10 +559,11 @@ export default function AgentDetailPage() {
       return;
     }
     setLoading(true);
+    let catErr: string | null = null;
     try {
-      const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog, pm, mwSchemas] = await Promise.all([
+      const [d, skills, sbOpts, ossNames, sbRecordNames, chNames, mcpList, mmCatalog, pm, mwSchemas, tc] = await Promise.all([
         agentDetail(agentKey),
-        skillList(),
+        skillList(agentKey),
         sandboxOptions(),
         storageRecordNames().catch(() => [] as StorageRecordName[]),
         sandboxRecordNames().catch(() => [] as SandboxRecordName[]),
@@ -507,7 +572,11 @@ export default function AgentDetailPage() {
         mediaModelCatalog().catch(() => [] as MediaModelCatalogEntry[]),
         modelProviders().catch(() => [] as ModelProviderMeta[]),
         middlewareSchema(agentKey).catch(() => [] as MiddlewareSchemaView[]),
+        // 目录拉失败只降级选择器（http 拦截器已经弹过一次原因），这里留住文案给分区里的说明
+        toolCatalog().catch((e: Error) => { catErr = e?.message || '工具目录加载失败'; return [] as ToolCatalogEntry[]; }),
       ]);
+      setToolCat(tc);
+      setToolCatError(catErr);
       setProviderMeta(pm);
       // 系统模型按 Agent 所属空间过滤（SPEC §28.11），与后端保存闸门同源；
       // 存量未归属的 Agent 落全局桶 0
@@ -537,6 +606,7 @@ export default function AgentDetailPage() {
       let a2ui: Partial<AgentA2uiConfig> = {};
       let gd: Partial<AgentGuardConfig> = {};
       let cms: CustomModelRow[] = [];
+      let tg: AgentToolGroup[] = [];
       let storageTarget = 'base64';
       let parsedFeature: Record<string, unknown> = {};
       if (d.agent.feature) {
@@ -585,10 +655,26 @@ export default function AgentDetailPage() {
                 capabilities: typeof m.capabilities === 'string' && m.capabilities
                   ? (m.capabilities as string).split(',')
                   : undefined,
+                contextWindowSize: typeof m.contextWindowSize === 'number' && m.contextWindowSize
+                  ? m.contextWindowSize
+                  : undefined,
               }));
             }
             if (f.storage && f.storage.mode === 'oss' && f.storage.storageRecord) {
               storageTarget = f.storage.storageRecord;
+            }
+            // 工具分组回显（SPEC §31）：形状不对的项按空值收进来，不整块丢 ——
+            // 保存前的自检会把它报成人话，而不是让用户莫名其妙少了一组配置
+            if (Array.isArray(f.toolGroups)) {
+              tg = (f.toolGroups as Record<string, unknown>[])
+                .filter((g) => g && typeof g === 'object')
+                .map((g) => ({
+                  name: typeof g.name === 'string' ? g.name : '',
+                  description: typeof g.description === 'string' ? g.description : undefined,
+                  tools: Array.isArray(g.tools)
+                    ? (g.tools as unknown[]).filter((t): t is string => typeof t === 'string')
+                    : [],
+                }));
             }
           }
         } catch {
@@ -596,6 +682,7 @@ export default function AgentDetailPage() {
         }
       }
       setLoadedFeature(parsedFeature);
+      setToolGroups(tg);
       // feature 驱动中间件回显（SPEC §29.23）：开关位由「有没有写这个命名空间」派生
       setMwViews(mwSchemas);
       const mwSeed = seedMiddleware(mwSchemas);
@@ -705,7 +792,6 @@ export default function AgentDetailPage() {
         customModels: cms.slice(0, 1),
         modelSource: cms.length > 0 ? 'custom' : 'system',
       });
-      setBoundSkills(d.skillNames || []);
       setModels(presets || []);
       setAllSkills(skills || []);
     } catch {
@@ -1016,6 +1102,7 @@ export default function AgentDetailPage() {
         if (m.baseUrl?.trim()) out.baseUrl = m.baseUrl.trim();
         if (m.apiKey?.trim()) out.apiKey = m.apiKey.trim();
         if (m.capabilities?.length) out.capabilities = m.capabilities.join(',');
+        if (m.contextWindowSize) out.contextWindowSize = m.contextWindowSize;
         feature.customModels = [out];
         payload.modelId = customModelId(m);
       } else {
@@ -1024,6 +1111,19 @@ export default function AgentDetailPage() {
     } else {
       // 选「空间模型」即彻底放弃自带模型：命名空间整体不下发，服务端随之清除密文
       delete feature.customModels;
+    }
+    // 工具分组（SPEC §31）：规则与后端保存校验一一对应，先自检再发请求 ——
+    // 空组/重名这类问题不该让用户等一个来回才看到
+    const cleanedGroups = cleanToolGroups(toolGroups);
+    const groupProblem = toolGroupsProblem(cleanedGroups);
+    if (groupProblem) {
+      message.error(groupProblem);
+      return;
+    }
+    if (cleanedGroups.length > 0) {
+      feature.toolGroups = cleanedGroups;
+    } else {
+      delete feature.toolGroups;
     }
     if (Object.keys(feature).length > 0) {
       payload.feature = feature;
@@ -1376,7 +1476,7 @@ export default function AgentDetailPage() {
                   </div>
                   <Row gutter={16} style={{ marginBottom: 20 }}>
                     {[
-                      { n: boundSkills.length, label: '绑定技能' },
+                      { n: boundSkillItems.length, label: '绑定技能' },
                       { n: models.length, label: '可用模型' },
                       { n: detail?.status === 1 ? 1 : 0, label: '运行状态' },
                       { n: 0, label: '自动任务' },
@@ -1399,17 +1499,14 @@ export default function AgentDetailPage() {
                     <>
                       <Form.Item
                         name="agentKey"
-                        label="Agent 标识"
+                        label="Agent ID"
                         rules={[
-                          { required: true, message: '请输入标识' },
-                          {
-                            pattern: /^[a-z][a-z0-9-]{1,63}$/,
-                            message: '小写字母开头，仅含小写字母/数字/短横线，2-64 位',
-                          },
+                          { required: true, message: '请输入 Agent ID' },
+                          { pattern: AGENT_KEY_RE, message: '小写字母开头，仅含小写字母/数字/短横线，3-32 位' },
                         ]}
-                        extra="创建后不可修改"
+                        extra="自己起一个全局唯一的 ID（也是 AG-UI 的路由键），创建后不可修改"
                       >
-                        <Input placeholder="如 general-assistant" />
+                        <Input placeholder="如 digit-tim" maxLength={32} />
                       </Form.Item>
                       <Form.Item name="workspaceId" label="所属空间">
                         <Select options={spaceOptions} />
@@ -1506,17 +1603,52 @@ export default function AgentDetailPage() {
                           </Form.Item>
                         </Col>
                       </Row>
-                      <Form.Item
-                        name={['customModels', 0, 'capabilities']}
-                        label="多模态能力"
-                        tooltip="勾选后对话台开放对应附件上传；DashScope 会改走 multimodal-generation 端点"
-                      >
-                        <Select
-                          mode="multiple"
-                          options={[{ label: '图片（image）', value: 'image' }, { label: '视频（video）', value: 'video' }]}
-                          placeholder="纯文本（默认）"
-                        />
-                      </Form.Item>
+                      {customDiscovery ? (
+                        <>
+                          <Form.Item
+                            label="多模态能力 / 上下文窗口"
+                            tooltip="该供应商报得出这两项，就不用手填；保存时后端还会向供应商再核对一次"
+                          >
+                            <VendorModelMetaNote
+                              meta={customVendorMeta.meta}
+                              syncing={customVendorMeta.syncing}
+                              onResync={customVendorMeta.resync}
+                            />
+                          </Form.Item>
+                          <Form.Item name={['customModels', 0, 'capabilities']} hidden>
+                            <Select mode="multiple" options={CUSTOM_CAPABILITY_OPTIONS} />
+                          </Form.Item>
+                          <Form.Item name={['customModels', 0, 'contextWindowSize']} hidden>
+                            <InputNumber />
+                          </Form.Item>
+                        </>
+                      ) : (
+                        <>
+                          <Form.Item
+                            name={['customModels', 0, 'capabilities']}
+                            label="多模态能力"
+                            tooltip="勾选后对话台开放对应附件上传；该供应商不报模型元数据，需手工确认"
+                          >
+                            <Select
+                              mode="multiple"
+                              options={CUSTOM_CAPABILITY_OPTIONS}
+                              placeholder="纯文本（默认）"
+                            />
+                          </Form.Item>
+                          <Form.Item
+                            name={['customModels', 0, 'contextWindowSize']}
+                            label="上下文窗口（tokens）"
+                            tooltip="模型总窗口，决定框架给对话留多少预算；留空 = 交给框架按模型名查表，查不到会退回 64000 硬编码上限（SPEC §30.1）"
+                          >
+                            <InputNumber
+                              min={0}
+                              step={1024}
+                              style={{ width: '100%' }}
+                              placeholder="留空=由框架按模型名推断（查不到兜底 64000）"
+                            />
+                          </Form.Item>
+                        </>
+                      )}
                     </div>
                   ) : null}
                   <Form.Item
@@ -1595,6 +1727,17 @@ export default function AgentDetailPage() {
             )}
 
             {section === 'tools' && (
+              /* 工具分组并进 Tool & Advanced 成一个 Tab（用户提出）。默认停在参数页，
+                 所以 Form 与原来一样立即挂载；切到分组页时 rc-tabs 不销毁已看过的面板，
+                 Save 仍能校验到 Form 的全部字段 —— 若改成"自己条件渲染面板"，
+                 Form 会在分组页下卸载，保存就作用在一个没连接到任何表单元素的实例上。 */
+              <Tabs
+                defaultActiveKey="params"
+                items={[
+                  {
+                    key: 'params',
+                    label: '压缩与运行参数',
+                    children: (
               <div className="glass-card" style={{ padding: 24 }}>
                 <Form form={form} layout="vertical">
                   <Form.Item
@@ -1863,6 +2006,23 @@ export default function AgentDetailPage() {
                   )}
                 </Form>
               </div>
+                    ),
+                  },
+                  {
+                    // 工具分组（feature.toolGroups，SPEC §31）：拖拽或点击把工具归进组，组由模型自己装备
+                    key: 'toolgroups',
+                    label: '工具分组',
+                    children: (
+              <ToolGroupsSection
+                groups={toolGroups}
+                catalog={toolCat}
+                catalogError={toolCatError}
+                onChange={setToolGroups}
+              />
+                    ),
+                  },
+                ]}
+              />
             )}
 
             {/* A2UI 界面生成（feature.a2ui，AgentScope a2ui 扩展）：开启即挂 A2uiMiddleware */}
@@ -2586,18 +2746,23 @@ export default function AgentDetailPage() {
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                   <div style={{ fontSize: 20, fontWeight: 700, color: 'rgba(26, 26, 29, 0.92)' }}>Skills</div>
+                  {/* 计数取服务端按 agentKey 下发的绑定态（SPEC §33），不是前端自己数开关 */}
+                  <div style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>
+                    本 Agent 已绑定 {boundSkillItems.length} 个
+                    {disabledSkills.length > 0 ? ` · 其中 ${disabledSkills.length} 个已停用` : ''}
+                  </div>
                   <div style={{ flex: 1 }} />
-                  <AddSkillButton agentKey={agentKey} onAdded={load} />
+                  <AddSkillButton agentKey={agentKey} onAdded={load} candidates={unboundSkillItems} />
                 </div>
 
-                {allSkills.length === 0 ? (
+                {boundSkillItems.length === 0 ? (
                   <div className="glass-card" style={{ padding: 32, textAlign: 'center', color: token.colorTextTertiary, fontSize: 13 }}>
-                    还没有可绑定的 Skill，用右上角 Add Skill 导入（zip 上传或 Git 仓库）
+                    本 Agent 还没绑定任何 Skill：右上角 Add Skill 可以「绑定已有 Skill」，或导入 zip / Git 新的。
                   </div>
                 ) : (
                   <Row gutter={[16, 16]}>
-                    {allSkills.map((s) => {
-                      const bound = boundSkills.includes(s.name);
+                    {boundSkillItems.map((s) => {
+                      const enabled = s.agentEnabled !== false;
                       return (
                         <Col xs={24} lg={12} key={s.name}>
                           <div className="glass-card" style={{ padding: 18 }}>
@@ -2627,23 +2792,36 @@ export default function AgentDetailPage() {
                                     </span>
                                   )}
                                 </div>
-                                <div style={{ fontSize: 11, marginTop: 2, color: bound ? '#5bb98b' : 'rgba(26, 26, 29, 0.35)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                                  <span style={{ width: 6, height: 6, borderRadius: 999, background: bound ? '#5bb98b' : '#ccc' }} />
-                                  {bound ? 'Enabled' : 'Disabled'}
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    marginTop: 2,
+                                    color: enabled ? '#5bb98b' : token.colorWarning,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: 6,
+                                      height: 6,
+                                      borderRadius: 999,
+                                      background: enabled ? '#5bb98b' : token.colorWarning,
+                                    }}
+                                  />
+                                  {/* 这一屏只有已绑定的条目，所以文案只讲第二层：生效还是停用（SPEC §33） */}
+                                  {enabled ? '已绑定 · 生效中' : '已绑定 · 已停用'}
                                 </div>
                               </div>
                               <Switch
-                                checked={bound}
+                                checked={enabled}
+                                checkedChildren="启用"
+                                unCheckedChildren="停用"
                                 onChange={async (v) => {
-                                  if (v) {
-                                    await agentBindSkill(agentKey, s.name);
-                                    message.success(`已绑定 ${s.name}`);
-                                    setBoundSkills((prev) => [...prev, s.name]);
-                                  } else {
-                                    await agentUnbindSkill(agentKey, s.name);
-                                    message.success(`已解绑 ${s.name}`);
-                                    setBoundSkills((prev) => prev.filter((n) => n !== s.name));
-                                  }
+                                  await agentSetSkillEnabled(agentKey, s.name, v);
+                                  message.success(v ? `已启用 ${s.name}` : `已停用 ${s.name}（绑定关系保留）`);
+                                  patchSkillBinding(s.name, true, v);
                                 }}
                               />
                             </div>
@@ -2660,28 +2838,26 @@ export default function AgentDetailPage() {
                             >
                               {s.description || '（无描述）'}
                             </div>
-                            {/* 本体是跨 Agent 共享资产（SPEC §29.10）：开关只解绑，
-                                删本体要等没有任何 Agent 绑定时才允许（git 来源后端禁删，不给入口） */}
+                            {/* 本体是跨 Agent 共享资产（SPEC §29.10）：这里的「解绑」只删本 Agent 的绑定行；
+                                删本体不在这一屏 —— 已绑定的条目 boundAgents 至少含本 Agent，永远不满足禁删条件，
+                                所以那个动作搬去 Add Skill 的「绑定已有 Skill」弹窗（孤儿只在那里可见） */}
                             <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
                               <span style={{ fontSize: 11, color: 'rgba(26, 26, 29, 0.4)' }}>
-                                {(s.boundAgents?.length ?? 0) > 0
-                                  ? `${s.boundAgents!.length} 个 Agent 在用`
-                                  : '未被任何 Agent 使用'}
+                                {s.boundAgents?.length ?? 1} 个 Agent 在用
                               </span>
-                              {isAdmin && (s.boundAgents?.length ?? 0) === 0 && s.source !== 'git' && (
-                                <Popconfirm
-                                  title={`删除 Skill 本体「${s.name}」？删除后不可恢复。`}
-                                  onConfirm={async () => {
-                                    await skillDelete(s.name);
-                                    message.success(`已删除 ${s.name}`);
-                                    load();
-                                  }}
-                                >
-                                  <Button size="small" danger icon={<SparkDeleteLine />}>
-                                    删除本体
-                                  </Button>
-                                </Popconfirm>
-                              )}
+                              <Popconfirm
+                                title={`从本 Agent 解绑「${s.name}」？`}
+                                description="绑定行会被删掉；本体保留，其它 Agent 不受影响。只是暂时不用的话，选「停用」而不是解绑。"
+                                onConfirm={async () => {
+                                  await agentUnbindSkill(agentKey, s.name);
+                                  message.success(`已解绑 ${s.name}`);
+                                  patchSkillBinding(s.name, false, false);
+                                }}
+                              >
+                                <Button size="small" danger type="text">
+                                  解绑
+                                </Button>
+                              </Popconfirm>
                             </div>
                           </div>
                         </Col>
