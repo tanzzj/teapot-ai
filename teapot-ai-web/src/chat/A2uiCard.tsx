@@ -3,7 +3,7 @@ import { AppstoreOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { ToolCall } from '@agentscope-ai/chat';
 import type { A2uiComponent } from '../a2ui/envelope';
 import { parseEnvelope, toolErrorText } from '../a2ui/envelope';
-import { extractQuestions, questionsToComponents } from '../a2ui/askForm';
+import { extractFormFrame, extractQuestions, questionsToComponents } from '../a2ui/askForm';
 import { A2uiSurfaceView, collectFields } from '../a2ui/A2uiSurfaceView';
 import {
   getAnsweredPayload,
@@ -78,7 +78,7 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
 
   const components: A2uiComponent[] = useMemo(() => {
     if (isAsk) {
-      return interruptEnv?.components ?? questionsToComponents(extractQuestions(args));
+      return interruptEnv?.components ?? questionsToComponents(extractQuestions(args), extractFormFrame(args));
     }
     return env?.components ?? [];
   }, [isAsk, interruptEnv, env, args]);

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { QuestionCircleOutlined } from '@ant-design/icons';
 import { parseEnvelope, str, bool, strList } from '../a2ui/envelope';
-import { extractQuestions } from '../a2ui/askForm';
+import { extractFormFrame, extractQuestions } from '../a2ui/askForm';
 import { A2uiCard } from './A2uiCard';
 import {
   getAnsweredPayload,
@@ -14,8 +14,8 @@ import { CardShell, headerRow } from './PlanCards';
 
 /**
  * ask_user_question（框架 ClarificationMiddleware 纯文本档）问题卡片：
- * 挂起时渲染 questions[]（text/select/multi_select/confirm，与框架工具 schema 一致）为
- * 纯文本问题卡，提交 → resolveInterrupt（payload = {id: 答案}，恢复工具结果）。
+ * 挂起时渲染 questions[]（text/textarea/select/multi_select/radio/checkbox/confirm，与框架工具
+ * schema 一致）为纯文本问题卡，提交 → resolveInterrupt（payload = {id: 答案}，恢复工具结果）。
  * a2ui 开启时服务端注册的是表单档（interrupt message = A2UI 信封），由挂载分发器
  * AskQuestionCard 分流到 A2uiCard 渲染表单，本文件不再消费旧 {question, options} 形态。
  */
@@ -38,10 +38,10 @@ interface Question {
   type: string;
   options: string[];
   required: boolean;
+  placeholder?: string;
 }
 
-/** 恢复工具结果 = 答案 JSON 文本（历史回放）；非 object 不认 */
-function parseAnswersJson(text?: string): Record<string, unknown> | null {
+/** 恢复工具结果 = 答案 JSON 文本（历史回放）；非 object 不认 */function parseAnswersJson(text?: string): Record<string, unknown> | null {
   if (!text || text.trimStart().startsWith('Error')) return null;
   try {
     const obj = JSON.parse(text) as unknown;
@@ -72,6 +72,7 @@ function toQuestions(raw: Record<string, unknown>[]): Question[] {
       type,
       options: type === 'confirm' && !options.length ? ['yes', 'no'] : options,
       required: bool(q.required),
+      placeholder: str(q.placeholder),
     };
   });
 }
@@ -89,12 +90,23 @@ const chipStyle = (selected: boolean, clickable: boolean): React.CSSProperties =
   wordBreak: 'break-word',
 });
 
+const fieldStyle: React.CSSProperties = {
+  padding: '6px 12px',
+  borderRadius: 8,
+  fontSize: 13,
+  border: '1px solid rgba(26, 26, 29, 0.12)',
+  background: 'rgba(255, 255, 255, 0.6)',
+  outline: 'none',
+  resize: 'vertical',
+};
+
 export function AskUserCard({ data, readOnly }: { data: RuntimeMessageLike; readOnly?: boolean }) {
   const args = data?.content?.[0]?.data?.arguments ?? '';
   const callId = data?.content?.[0]?.data?.call_id ?? '';
   const output = data?.content?.[1]?.data?.output;
 
   const questions = useMemo(() => toQuestions(extractQuestions(args)), [args]);
+  const frame = useMemo(() => extractFormFrame(args), [args]);
   const pending = isPendingToolCall(callId);
   const answeredText = getAnsweredSelection(callId);
   const answeredPayload = getAnsweredPayload(callId);
@@ -148,8 +160,13 @@ export function AskUserCard({ data, readOnly }: { data: RuntimeMessageLike; read
   };
 
   return (
-    <CardShell header={headerRow(<QuestionCircleOutlined />, '请确认', chip)}>
+    <CardShell header={headerRow(<QuestionCircleOutlined />, frame.title || '请确认', chip)}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {frame.description ? (
+          <div style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.55)', wordBreak: 'break-word' }}>
+            {frame.description}
+          </div>
+        ) : null}
         {questions.map((q) => {
           // 已作答/历史回放：直接展示「问题: 答案」行
           if (!interactive) {
@@ -170,21 +187,36 @@ export function AskUserCard({ data, readOnly }: { data: RuntimeMessageLike; read
                 {q.text}
                 {q.required ? <span style={{ color: '#ff4d4f', marginLeft: 2 }}>*</span> : null}
               </div>
-              {q.type === 'text' ? (
-                <input
+              {q.type === 'textarea' ? (
+                <textarea
+                  rows={3}
                   value={typeof v === 'string' ? v : ''}
+                  placeholder={q.placeholder}
                   onChange={(e) => {
                     setError('');
                     setValues((prev) => ({ ...prev, [q.id]: e.target.value }));
                   }}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 8,
-                    fontSize: 13,
-                    border: '1px solid rgba(26, 26, 29, 0.12)',
-                    background: 'rgba(255, 255, 255, 0.6)',
-                    outline: 'none',
+                  style={fieldStyle}
+                />
+              ) : q.type === 'checkbox' ? (
+                <div
+                  onClick={() => {
+                    setError('');
+                    setValues((prev) => ({ ...prev, [q.id]: v === 'yes' ? '' : 'yes' }));
                   }}
+                  style={{ alignSelf: 'flex-start' }}
+                >
+                  <span style={chipStyle(v === 'yes', true)}>{v === 'yes' ? '是' : '否'}</span>
+                </div>
+              ) : q.type === 'text' ? (
+                <input
+                  value={typeof v === 'string' ? v : ''}
+                  placeholder={q.placeholder}
+                  onChange={(e) => {
+                    setError('');
+                    setValues((prev) => ({ ...prev, [q.id]: e.target.value }));
+                  }}
+                  style={fieldStyle}
                 />
               ) : (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -216,7 +248,7 @@ export function AskUserCard({ data, readOnly }: { data: RuntimeMessageLike; read
                 color: '#fff',
               }}
             >
-              提交
+              {frame.submitText || '提交'}
             </div>
             {error ? <span style={{ fontSize: 12, color: '#ff4d4f' }}>{error}</span> : null}
           </div>
