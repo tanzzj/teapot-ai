@@ -5,6 +5,7 @@ import com.teamer.teapot.ai.core.model.AgentFeature;
 import com.teamer.teapot.ai.core.model.ChannelConfigDO;
 import com.teamer.teapot.ai.core.service.ChannelConfigService;
 import io.agentscope.extensions.channel.dingtalk.DingTalkChannel;
+import io.agentscope.extensions.channel.discord.DiscordChannel;
 import io.agentscope.harness.agent.gateway.channel.Channel;
 import io.agentscope.harness.agent.gateway.channel.ChannelConfig;
 import io.agentscope.harness.agent.gateway.channel.DmScope;
@@ -57,7 +58,7 @@ public final class ChannelFactory {
         return DingTalkChannel.fromProperties(channelId, config, props);
     }
 
-    /** Discord channel（JDA Gateway WebSocket 出站长连，无需公网回调；§24 修订） */
+    /** Discord channel（JDA Gateway WebSocket 出站长连，无需公网回调；§24 修订：改用 agentscope 官方扩展） */
     private static Channel discord(ChannelConfigDO plain, String agentKey, AgentFeature.Channel feature) {
         String channelId = ChannelConfigService.TYPE_DISCORD + "-" + plain.getName();
         DmScope dmScope = feature.getDmScope() == null || feature.getDmScope().isBlank()
@@ -67,9 +68,10 @@ public final class ChannelFactory {
                 .dmScope(dmScope)
                 .build();
         // botToken 存 app_secret 列（AES-GCM）；only_at_reply 缺省 true（对齐 py 版）；
-        // 第 5 参为 channel 链路统一身份（渠道名称，§24.2 修订）
-        return new DiscordChannel(channelId, config, plain.getAppSecret(), true,
-                ChannelConfigService.TYPE_DISCORD);
+        // 代理从 JVM 系统属性读取（JDA nv-websocket-client 不走 -Dhttps.proxyHost）
+        String proxyHost = System.getProperty("discord.proxy.host");
+        int proxyPort = Integer.parseInt(System.getProperty("discord.proxy.port", "7890"));
+        return DiscordChannel.create(channelId, config, plain.getAppSecret(), true, proxyHost, proxyPort);
     }
 
     /** GitHub channel（公网 webhook 回调 + PAT 出站评论，参考官方 channel-github 实现；§24 修订） */

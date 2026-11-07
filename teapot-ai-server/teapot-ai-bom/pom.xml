@@ -126,6 +126,12 @@
                 <artifactId>agentscope-extensions-channel-dingtalk</artifactId>
                 <version>${agentscope.version}</version>
             </dependency>
+            <!-- Discord Channel 连接器（SPEC §24 修订：改用 agentscope 官方扩展，JDA Gateway WebSocket） -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-channel-discord</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
             <!-- A2UI 界面生成能力（纯 middleware 装配：a2ui_render / ask_user_question 表单档；另有 ClarificationMiddleware 纯文本澄清档） -->
             <dependency>
                 <groupId>io.agentscope</groupId>
@@ -138,7 +144,7 @@
                 <artifactId>agentscope-extensions-jev</artifactId>
                 <version>${agentscope.version}</version>
             </dependency>
-            <!-- JDA（SPEC §24 修订：Discord 渠道自实现 channel 适配器） -->
+            <!-- JDA（agentscope-extensions-channel-discord 传递依赖，版本须在此锁定） -->
             <dependency>
                 <groupId>net.dv8tion</groupId>
                 <artifactId>JDA</artifactId>
