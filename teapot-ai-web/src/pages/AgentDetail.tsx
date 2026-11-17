@@ -773,6 +773,7 @@ export default function AgentDetailPage() {
           enabled: !!a2ui.enabled,
           catalogId: a2ui.catalogId,
           catalogResource: a2ui.catalogResource,
+          componentsText: argsToLines(a2ui.catalogComponents),
           maxComponents: a2ui.maxComponents,
           surfacePersistEnabled: a2ui.surfacePersistEnabled !== false,
           appendPreference: a2ui.appendPreference,
@@ -881,7 +882,7 @@ export default function AgentDetailPage() {
       sessionTitle?: Partial<AgentSessionTitleConfig>;
       compaction?: Partial<AgentCompactionConfig>;
       compactionEnabled?: boolean;
-      a2ui?: Partial<AgentA2uiConfig>;
+      a2ui?: Partial<AgentA2uiConfig> & { componentsText?: string };
       guard?: Partial<AgentGuardConfig> & { acceptText?: string; rejectText?: string };
       customModels?: CustomModelRow[];
       modelSource?: 'system' | 'custom';
@@ -1057,6 +1058,14 @@ export default function AgentDetailPage() {
           } else {
             delete a2uiOut[key];
           }
+        }
+        // 组件白名单：多行文本转数组，空 = 整个目录（回落 SDK 默认），不落冗余键
+        const components = linesToArgs(a2ui.componentsText ?? '');
+        delete a2uiOut.componentsText;
+        if (components.length) {
+          a2uiOut.catalogComponents = components;
+        } else {
+          delete a2uiOut.catalogComponents;
         }
         if (a2uiOut.maxComponents == null) {
           delete a2uiOut.maxComponents;
@@ -2059,6 +2068,17 @@ export default function AgentDetailPage() {
                           </Form.Item>
                         </Col>
                       </Row>
+                      <Form.Item
+                        name={['a2ui', 'componentsText']}
+                        label="组件白名单（一行一个，可选）"
+                        tooltip="只把这些组件编进渲染子 Agent 的目录指南，提交期也只接受这些组件——指南与校验接受范围同步收窄，界面用不到的组件不必占提示词。留空 = 整个目录（存量行为）。名字必须是目录里声明的组件，写错会在装配期报错并降级为不挂载；布局组件 Row/Column/Card/List/Text 务必保留，否则剩下的组件拼不成界面"
+                      >
+                        <Input.TextArea
+                          rows={3}
+                          placeholder={'留空 = 整个目录\nRow\nColumn\nCard\nText\nButton'}
+                          style={{ fontFamily: 'monospace' }}
+                        />
+                      </Form.Item>
                       <Row gutter={16}>
                         <Col xs={24} sm={8}>
                           <Form.Item

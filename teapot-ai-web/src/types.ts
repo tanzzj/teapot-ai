@@ -162,6 +162,8 @@ export interface AgentA2uiConfig {
   catalogId?: string;
   /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json；自定义资源需放在服务端 */
   catalogResource?: string;
+  /** 组件白名单：只把这些组件编进渲染子 Agent 目录指南，提交期也只接受这些；留空 = 整个目录 */
+  catalogComponents?: string[];
   /** 单信封组件数上限 1–500，留空 = 50 */
   maxComponents?: number;
   /** surface 状态跨轮持久化；关闭则界面状态仅存活于单轮 */

@@ -620,6 +620,9 @@ public class AgentBuilder {
         if (notBlank(cfg.getCatalogResource())) {
             cb.catalogResource(cfg.getCatalogResource().trim());
         }
+        if (cfg.getCatalogComponents() != null && !cfg.getCatalogComponents().isEmpty()) {
+            cb.catalogComponents(cfg.getCatalogComponents().toArray(new String[0]));
+        }
         if (cfg.getMaxComponents() != null) {
             cb.maxComponents(cfg.getMaxComponents());
         }

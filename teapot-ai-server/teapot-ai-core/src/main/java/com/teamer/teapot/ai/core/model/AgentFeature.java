@@ -942,6 +942,13 @@ public class AgentFeature {
         private String catalogId;
         /** 组件目录 classpath 资源路径，留空 = a2ui/basic-catalog.json（扩展 jar 内置基础目录） */
         private String catalogResource;
+        /**
+         * 组件白名单（SDK A2uiConfig.catalogComponents）：只把这些组件编进渲染子 Agent 的目录指南，
+         * 提交期也只接受这些组件，指南与校验接受范围同步收窄。留空 = 整个目录（存量行为）。
+         * 名字必须是目录里声明的组件，写错在装配期报错并降级为不挂载；布局组件
+         * （Row/Column/Card/List/Text）务必保留，否则剩下的组件拼不成界面。
+         */
+        private List<String> catalogComponents;
         /** 单信封组件数上限 [1,500]，留空 = 50 */
         private Integer maxComponents;
         /** surface 状态跨轮持久化（AgentStateStore），留空 = true；关闭则 surface 仅存活于单轮 */

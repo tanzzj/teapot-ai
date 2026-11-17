@@ -160,6 +160,12 @@ export default function AgentConfigPanel({ agentKey }: { agentKey: string }) {
                 {a2ui.catalogResource && (
                   <KV k="A2UI Catalog" v={<span style={mono}>{a2ui.catalogResource}</span>} />
                 )}
+                {!!a2ui.catalogComponents?.length && (
+                  <KV
+                    k="A2UI 组件白名单"
+                    v={<span style={mono}>{a2ui.catalogComponents.join(', ')}</span>}
+                  />
+                )}
               </>
             )}
             {/* 指定的生成模型（SPEC-media-gen §4.8）：未配置的保持默认，不占行 */}
