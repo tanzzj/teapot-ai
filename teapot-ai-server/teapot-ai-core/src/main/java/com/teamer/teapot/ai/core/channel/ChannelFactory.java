@@ -15,7 +15,7 @@ import java.util.Map;
 
 /**
  * Channel 工厂（SPEC §24.4）：channel_type → Channel 构造；
- * 已支持 dingtalk（官方扩展）、discord（自实现 JDA 适配器，§24 修订）与
+ * 已支持 dingtalk（官方扩展）、discord（官方扩展，§24 修订）与
  * github（自实现 webhook 适配器，参考官方 channel-github 源码），后续飞书/企微只加分支。
  */
 public final class ChannelFactory {
