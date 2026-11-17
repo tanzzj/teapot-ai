@@ -70,7 +70,15 @@ export default function A2uiRenderer({
       (action) => actionRef.current?.(action),
       {
         version: '1.0',
-        validationConfig: { ...STRICT_VALIDATION, targetVersion: '1.0' },
+        // 拓扑三项放宽：官方增量流里组件可以后一条消息才到（root 引用模板、占位卡先于父节点），
+        // 逐条严判会把规范合法的流整批拒掉。图规则的权威校验在后端提交期，这里只判组件本身。
+        validationConfig: {
+          ...STRICT_VALIDATION,
+          targetVersion: '1.0',
+          allowMissingRoot: true,
+          allowDanglingReferences: true,
+          allowOrphanComponents: true,
+        },
         reportErrorsOnly: true,
         errorHandler: (e) => setErrors((prev) => [...prev, errorText(e)]),
       },
