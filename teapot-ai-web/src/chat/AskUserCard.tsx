@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { QuestionCircleOutlined } from '@ant-design/icons';
-import { parseEnvelope, str, bool, strList } from '../a2ui/envelope';
+import { parseEnvelope } from '../a2ui/envelope';
+import { str, bool, strList } from '../a2ui/values';
 import { extractFormFrame, extractQuestions } from '../a2ui/askForm';
 import { A2uiCard } from './A2uiCard';
 import {
@@ -259,8 +260,9 @@ export function AskUserCard({ data, readOnly }: { data: RuntimeMessageLike; read
 }
 
 /**
- * ask_user_question 统一挂载分发：中断 message 可解析为 A2UI 信封（a2ui 开启时的表单档）
- * → A2uiCard 表单；否则（纯文本澄清档、历史回放）→ AskUserCard 纯文本问题卡。
+ * ask_user_question 统一挂载分发：未决且未作答、中断 message 可解析为官方 v1.0 信封
+ * （a2ui 开启时的表单档）→ A2uiCard 官方渲染器；否则（纯文本澄清档、已回答、历史回放）
+ * → AskUserCard 纯文本问题卡，直接回显「问题: 答案」。
  */
 export function AskQuestionCard({
   data,
@@ -270,9 +272,10 @@ export function AskQuestionCard({
   readOnly?: boolean;
 }) {
   const callId = data?.content?.[0]?.data?.call_id ?? '';
-  const envelope = isPendingToolCall(callId)
-    ? parseEnvelope(getInterruptMessage(callId))
-    : null;
+  const envelope =
+    isPendingToolCall(callId) && getAnsweredPayload(callId) === undefined
+      ? parseEnvelope(getInterruptMessage(callId))
+      : null;
   if (envelope) return <A2uiCard data={data} readOnly={readOnly} />;
   return <AskUserCard data={data} readOnly={readOnly} />;
 }

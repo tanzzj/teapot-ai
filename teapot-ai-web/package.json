@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@a2ui/react": "0.15.0",
+    "@a2ui/web_core": "0.15.0",
     "@agentscope-ai/chat": "^1.1.71",
     "@agentscope-ai/design": "^1.0.32",
     "@agentscope-ai/icons": "^1.0.68",
@@ -22,6 +24,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
+    "zod": "^3.25.76",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
@@ -33,5 +36,10 @@
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2",
     "vite": "^5.4.8"
+  },
+  "overrides": {
+    "@a2ui/markdown-it": {
+      "@a2ui/web_core": "$@a2ui/web_core"
+    }
   }
 }

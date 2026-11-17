@@ -1,4 +1,4 @@
-import { str, strList } from '../envelope';
+import { str, strList } from '../values';
 import { C, money, numOrStr, objs, PillButton, Thumb } from './parts';
 import { MOCK_STORES } from './mock';
 

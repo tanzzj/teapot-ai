@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { str } from '../envelope';
+import { str } from '../values';
 
 /** 千问外卖卡共用视觉件：配色、金额格式化、缩略图、胶囊按钮 */
 

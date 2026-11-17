@@ -1,5 +1,5 @@
 import { AlipayCircleFilled, EditOutlined, RightOutlined } from '@ant-design/icons';
-import { str, strList } from '../envelope';
+import { str, strList } from '../values';
 import { C, money, numOrStr, objs, PillButton, Thumb } from './parts';
 import { MOCK_ORDER } from './mock';
 

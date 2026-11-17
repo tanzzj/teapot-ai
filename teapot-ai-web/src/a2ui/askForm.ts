@@ -1,10 +1,9 @@
-import type { A2uiComponent } from './envelope';
-import { extractObjects, str, strList } from './envelope';
+import { str } from './values';
 
 /**
- * ask_user_question（表单档）挂起时信封只存在于 interrupt message（工具无 TOOL_CALL_RESULT）；
- * 历史回放拿不到 message，则从工具入参（声明式表单 spec）前端重建同款表单
- * ——与后端 AskUserQuestionTool.toFormComponents 一一对应。
+ * ask_user_question 的入参（声明式表单 spec）解析。两档共用同一份入参：
+ * a2ui 档由后端编译成官方 v1.0 表单信封，前端只渲染信封；纯文本档与历史回放
+ * 没有信封，由 AskUserCard 直接按这里的 questions/frame 画问题卡并回显答案。
  */
 
 export interface AskFormFrame {
@@ -42,50 +41,79 @@ function extractStringArg(src: string, key: string): string | undefined {
   }
 }
 
-export function questionsToComponents(
-  questions: Record<string, unknown>[],
-  frame: AskFormFrame = {},
-): A2uiComponent[] {
-  const components: A2uiComponent[] = [];
-  if (frame.title) {
-    components.push({ id: 'a2ui_title', component: 'Heading', props: { text: frame.title } });
-  }
-  if (frame.description) {
-    components.push({ id: 'a2ui_desc', component: 'Text', props: { text: frame.description } });
-  }
-  for (const q of questions) {
-    const id = str(q.id)!;
-    const type = str(q.type) ?? 'text';
-    const options = strList(q.options);
-    const placeholder = str(q.placeholder);
-    const props: Record<string, unknown> = { name: id, label: str(q.question) };
-    if (q.required === true) props.required = true;
-    let component = 'TextInput';
-    if (type === 'select') {
-      component = 'Select';
-      props.options = options;
-    } else if (type === 'multi_select') {
-      component = 'Select';
-      props.options = options;
-      props.multiple = true;
-    } else if (type === 'radio') {
-      component = 'RadioGroup';
-      props.options = options;
-    } else if (type === 'checkbox') {
-      component = 'Checkbox';
-    } else if (type === 'textarea') {
-      component = 'TextArea';
-    } else if (type === 'confirm') {
-      component = 'RadioGroup';
-      props.options = ['yes', 'no'];
+/** 定位 `"key":[ ... ]` 的数组体（闭合取到 ] 前；流式未闭合取到结尾） */
+function arraySlice(src: string, key: string): string | null {
+  const m = new RegExp(`"${key}"\\s*:\\s*\\[`).exec(src);
+  if (!m) return null;
+  let depth = 1;
+  let inStr = false;
+  let esc = false;
+  const start = m.index + m[0].length;
+  for (let i = start; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
     }
-    if (component === 'TextInput' && placeholder) props.placeholder = placeholder;
-    components.push({ id: `q_${id}`, component, props });
+    if (ch === '"') inStr = true;
+    else if (ch === '[' || ch === '{') depth++;
+    else if (ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) return src.slice(start, i);
+    }
   }
-  components.push({
-    id: 'a2ui_submit',
-    component: 'Button',
-    props: { text: frame.submitText || 'Submit', action: 'submit' },
-  });
-  return components;
+  return src.slice(start);
+}
+
+/**
+ * 流式容错提取顶层对象数组（arguments 中途不完整时逐个截取配平的 {...}）：
+ * 先整段 JSON.parse，失败退化为扫描。
+ */
+export function extractObjects(src: string, key: string): Record<string, unknown>[] {
+  if (!src) return [];
+  try {
+    const obj = JSON.parse(src) as Record<string, unknown>;
+    const arr = obj?.[key];
+    if (Array.isArray(arr)) {
+      return arr.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object');
+    }
+  } catch {
+    // 流式未完成，走截取路径
+  }
+  const slice = arraySlice(src, key);
+  if (slice === null) return [];
+  const items: string[] = [];
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let start = 0;
+  for (let i = 0; i < slice.length; i++) {
+    const ch = slice[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{' || ch === '[') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0 && i > start) items.push(slice.slice(start, i + 1));
+    }
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const it of items) {
+    try {
+      const o = JSON.parse(it) as unknown;
+      if (o && typeof o === 'object') out.push(o as Record<string, unknown>);
+    } catch {
+      // 尾部未闭合的对象，流式中途自然跳过
+    }
+  }
+  return out;
 }

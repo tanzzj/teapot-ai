@@ -1,13 +1,19 @@
-import { useMemo, useState } from 'react';
+import { Suspense, lazy, useMemo, useState } from 'react';
 import { AppstoreOutlined, QuestionCircleOutlined } from '@ant-design/icons';
-import { ToolCall } from '@agentscope-ai/chat';
-import type { A2uiComponent } from '../a2ui/envelope';
-import { parseEnvelope, toolErrorText } from '../a2ui/envelope';
-import { extractFormFrame, extractQuestions, questionsToComponents } from '../a2ui/askForm';
-import { A2uiSurfaceView, collectFields } from '../a2ui/A2uiSurfaceView';
+import { Markdown, ToolCall } from '@agentscope-ai/chat';
+import type { ActionPayload } from '@a2ui/web_core/v1_0';
+import type { MarkdownComponentProps } from '@a2ui/react';
+import {
+  envelopeNote,
+  envelopeOperation,
+  envelopeSurfaceId,
+  parseEnvelope,
+  toolErrorText,
+} from '../a2ui/envelope';
+import { extractQuestions } from '../a2ui/askForm';
+import { str, strList } from '../a2ui/values';
 import {
   getAnsweredPayload,
-  getAnsweredSelection,
   getInterruptMessage,
   isPendingToolCall,
   resolveInterrupt,
@@ -17,15 +23,21 @@ import { CardShell, headerRow } from './PlanCards';
 
 /**
  * A2UI surface 渲染卡片（挂在 customToolRenderConfig 的 a2ui_render 与 ask 分发器上）：
- * - a2ui_render：surface 只渲染工具返回的信封结果
- *   （content[1].data.output = 信封 JSON）；未拿到信封（执行中的 toolcall、错误文本）
- *   一律回落到默认 ToolCall 块；入参只有自然语言 description
- *   （组件树由 SDK 内部的渲染子 Agent 生成）；
+ * - a2ui_render：surface 只渲染工具返回的官方 v1.0 信封
+ *   （content[1].data.output = 信封 JSON）；未拿到信封（执行中的 toolcall、错误文本、
+ *   旧版单层信封）一律回落到默认 ToolCall 块；入参只有自然语言 description
+ *   （组件树由 SDK 内部的渲染子 Agent 生成）；带 agentscopeNote 的信封是同轮幂等退回的
+ *   重复调用（界面与上一张卡逐字节相同），默认折成一行细条，可展开；
  * - ask_user_question 表单档（a2ui 开启时框架注册）：工具挂起无 result，
- *   信封 = interrupt message（askUserStore），由 AskUserCard 的分发器路由到这里；
- *   提交 → resume payload = {字段name: 答案} 对象（后端 JSON 序列化为工具结果）。
- * 提交派发：ask 未决走 resolveInterrupt（带 resume 恢复）；展示卡走普通消息发送。
+ *   信封 = interrupt message（askUserStore），由 AskQuestionCard 分流到这里；
+ *   提交动作 → resume payload = {问题id: 答案} 对象（后端 JSON 序列化为工具结果）。
+ * 组件渲染交给官方渲染器（懒加载，只有出现信封卡片时才拉 @a2ui/* 依赖），
+ * 本文件只负责卡片外壳、状态 chip 与动作派发。
  */
+
+const A2uiRenderer = lazy(() => import('../a2ui/A2uiRenderer'));
+
+const A2uiMarkdown = ({ markdown }: MarkdownComponentProps) => <Markdown content={markdown} />;
 
 interface ToolData {
   name?: string;
@@ -42,23 +54,11 @@ interface RuntimeMessageLike {
 
 const TOOL_ASK = 'ask_user_question';
 
-/** 恢复工具结果 = 答案 JSON 文本（历史回放）；信封之外的 object 才认 */
-function parseAnswersJson(text?: string): Record<string, unknown> | null {
-  if (!text || text.trimStart().startsWith('Error')) return null;
-  try {
-    const obj = JSON.parse(text) as unknown;
-    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-      return obj as Record<string, unknown>;
-    }
-  } catch {
-    // 非 JSON（如错误提示）不认
-  }
-  return null;
-}
-
 function fmtAnswer(v: unknown): string {
-  if (Array.isArray(v)) return v.join('、');
+  if (Array.isArray(v)) return v.map(fmtAnswer).join('、');
   if (typeof v === 'boolean') return v ? '是' : '否';
+  if (v === 'yes') return '是';
+  if (v === 'no') return '否';
   return String(v ?? '');
 }
 
@@ -72,29 +72,28 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
   const isAsk = name === TOOL_ASK;
   const pending = isPendingToolCall(callId);
   const answeredPayload = getAnsweredPayload(callId);
-  const answeredText = getAnsweredSelection(callId);
-  const env = parseEnvelope(output);
-  const interruptEnv = isAsk && pending ? parseEnvelope(getInterruptMessage(callId)) : null;
-
-  const components: A2uiComponent[] = useMemo(() => {
-    if (isAsk) {
-      return interruptEnv?.components ?? questionsToComponents(extractQuestions(args), extractFormFrame(args));
+  const env = useMemo(() => parseEnvelope(output), [output]);
+  const interruptEnv = useMemo(
+    () => (isAsk && pending ? parseEnvelope(getInterruptMessage(callId)) : null),
+    [isAsk, pending, callId],
+  );
+  const envelope = isAsk ? interruptEnv : env;
+  const note = envelope ? envelopeNote(envelope) : undefined;
+  const [dupOpen, setDupOpen] = useState(false);
+  // 提交动作只带回答键，气泡里的「问题: 答案」文本要回入参取标签
+  const labels = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const q of extractQuestions(args)) {
+      const id = str(q.id);
+      if (id) map.set(id, str(q.question) ?? id);
     }
-    return env?.components ?? [];
-  }, [isAsk, interruptEnv, env, args]);
+    return map;
+  }, [args]);
 
-  const fields = useMemo(() => collectFields(components), [components]);
+  const interactive = !readOnly && (isAsk ? pending && !answeredPayload : !loading);
+  const errorText = !envelope ? toolErrorText(output) : null;
 
-  const answered = answeredPayload ?? parseAnswersJson(output) ?? undefined;
-  const interactive =
-    !readOnly && (isAsk ? pending && !answeredPayload : !loading);
-
-  const [values, setValues] = useState<Record<string, unknown>>({});
-  const [submitError, setSubmitError] = useState('');
-
-  const errorText = !env && !interruptEnv ? toolErrorText(output) : null;
-
-  // 非信封的 render/present 结果（执行中的 toolcall、错误文本）→ 默认 ToolCall 块：
+  // 非信封的 render/present 结果（执行中的 toolcall、错误文本、旧版信封）→ 默认 ToolCall 块：
   // toolcall 就按 toolcall 展示，surface 只在信封结果到达后渲染
   if (!isAsk && !env) {
     const serverLabel = data?.content?.[0]?.data?.server_label;
@@ -116,58 +115,79 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
       </CardShell>
     );
   }
-  if (!components.length) return null;
+  if (!envelope) return null;
 
-  const onSubmit = () => {
+  const onAction = (action: ActionPayload) => {
     if (!interactive) return;
+    if (!isAsk) {
+      const text = action.userMessage || action.name;
+      if (text) submitMessage(text);
+      return;
+    }
+    if (action.name !== 'submit') return;
+    const raw = action.context?.answers;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+    const multi = new Set(strList(action.context?.multiSelect));
     const answers: Record<string, unknown> = {};
     const lines: string[] = [];
-    for (const f of fields) {
-      const v = values[f.name];
-      const empty = v === undefined || v === '' || (Array.isArray(v) && !v.length);
-      if (f.required && empty) {
-        setSubmitError(`请填写「${f.label}」`);
-        return;
-      }
-      if (empty) continue;
-      answers[f.name] = v;
-      lines.push(`${f.label}: ${fmtAnswer(v)}`);
+    for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+      // 单选 picker 在数据模型里也是一元素数组，恢复载荷按 id→标量 读，只有 multiSelect 保留数组
+      const v = !multi.has(id) && Array.isArray(value) && value.length === 1 ? value[0] : value;
+      if (v === undefined || v === '' || (Array.isArray(v) && !v.length)) continue;
+      answers[id] = v;
+      lines.push(`${labels.get(id) ?? id}: ${fmtAnswer(v)}`);
     }
-    setSubmitError('');
-    const displayText = lines.join('\n') || '已提交';
-    if (isAsk) {
-      resolveInterrupt(callId, answers, displayText);
-    } else if (fields.length) {
-      submitMessage(displayText);
-    }
+    resolveInterrupt(callId, answers, lines.join('\n') || '已提交');
   };
 
-  const ctx = {
-    values: answered && !interactive ? (answeredPayload ?? parseAnswersJson(output) ?? {}) : values,
-    setValue: (n: string, v: unknown) => {
-      setSubmitError('');
-      setValues((prev) => ({ ...prev, [n]: v }));
-    },
-    disabled: !interactive,
-    // 业务卡按钮 → 普通消息发送；ask 卡的动作仍走表单 resume，不接按钮
-    onAction: isAsk
-      ? undefined
-      : (text: string) => {
-          if (interactive && text) submitMessage(text);
-        },
-  };
+  // 同轮重复调用：界面已在上一张卡上，这里只留一行痕迹，展开才重建 surface
+  if (note && !dupOpen) {
+    return (
+      <div
+        onClick={() => setDupOpen(true)}
+        title={note}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          margin: '2px 0',
+          padding: '5px 12px',
+          maxWidth: 640,
+          borderRadius: 10,
+          border: '1px dashed rgba(26, 26, 29, 0.14)',
+          background: 'rgba(26, 26, 29, 0.02)',
+          fontSize: 12,
+          color: 'rgba(26, 26, 29, 0.45)',
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        <AppstoreOutlined />
+        重复调用已合并
+        <span style={{ color: 'rgba(26, 26, 29, 0.3)' }}>
+          surface {envelopeSurfaceId(envelope) ?? ''}
+        </span>
+        <span style={{ marginLeft: 'auto' }}>展开</span>
+      </div>
+    );
+  }
 
   const chip = isAsk
-    ? answeredText !== undefined || answered
-      ? <span style={{ color: '#52c41a' }}>已回答</span>
-      : pending
-        ? <span style={{ color: 'rgba(26, 26, 29, 0.45)' }}>请填写表单</span>
-        : <span style={{ color: 'rgba(26, 26, 29, 0.35)' }}>已跳过</span>
+    ? <span style={{ color: 'rgba(26, 26, 29, 0.45)' }}>请填写表单</span>
     : loading
       ? <span style={{ color: 'rgba(26, 26, 29, 0.45)' }}>界面生成中…</span>
-      : (env?.messageType === 'updateComponents'
-        ? <span style={{ color: 'rgba(26, 26, 29, 0.45)' }}>界面更新</span>
-        : <span style={{ color: 'rgba(26, 26, 29, 0.35)' }}>surface {env?.surfaceId ?? ''}</span>);
+      : note
+        ? (
+          <span
+            onClick={() => setDupOpen(false)}
+            style={{ color: 'rgba(26, 26, 29, 0.45)', cursor: 'pointer' }}
+          >
+            重复调用 · 收起
+          </span>
+        )
+        : envelopeOperation(envelope) === 'updateComponents'
+          ? <span style={{ color: 'rgba(26, 26, 29, 0.45)' }}>界面更新</span>
+          : <span style={{ color: 'rgba(26, 26, 29, 0.35)' }}>surface {envelopeSurfaceId(envelope) ?? ''}</span>;
 
   return (
     <CardShell
@@ -177,10 +197,23 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
         chip,
       )}
     >
-      <A2uiSurfaceView components={components} ctx={ctx} onSubmit={onSubmit} />
-      {submitError ? (
-        <div style={{ fontSize: 12, color: '#ff4d4f', marginTop: 6 }}>{submitError}</div>
-      ) : null}
+      <Suspense
+        fallback={<div style={{ fontSize: 12.5, color: 'rgba(26, 26, 29, 0.45)' }}>界面加载中…</div>}
+      >
+        <A2uiRenderer
+          messages={envelope.messages}
+          markdown={A2uiMarkdown}
+          disabled={!interactive}
+          onAction={onAction}
+          onMessage={
+            isAsk
+              ? undefined
+              : (text) => {
+                  if (interactive && text) submitMessage(text);
+                }
+          }
+        />
+      </Suspense>
     </CardShell>
   );
 }
