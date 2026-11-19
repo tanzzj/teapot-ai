@@ -32,8 +32,8 @@ import { CardShell, headerRow } from './PlanCards';
  *   信封 = interrupt message（askUserStore），由 AskQuestionCard 分流到这里；
  *   提交动作 → resume payload = {问题id: 答案} 对象（后端 JSON 序列化为工具结果）。
  * 组件渲染交给官方渲染器（懒加载，只有出现信封卡片时才拉 @a2ui/* 依赖），
- * 本文件只负责卡片外壳、状态 chip 与动作派发；surface 卡下面恒挂一个标准 ToolCall 块
- * （默认折叠，点开可见入参与原始信封 JSON）；同轮更新信封不建卡，增量应用到原卡。
+ * 本文件只负责卡片外壳、状态 chip 与动作派发；标准 ToolCall 块（默认折叠，点开可见
+ * 入参与原始信封 JSON）恒在上方，surface 卡渲染在它下方；同轮更新信封不建卡，增量应用到原卡。
  */
 
 const A2uiRenderer = lazy(() => import('../a2ui/A2uiRenderer'));
@@ -117,10 +117,10 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
   if (errorText) {
     return (
       <>
+        {toolCall}
         <CardShell header={headerRow(<AppstoreOutlined />, 'A2UI', <span style={{ color: '#ff4d4f' }}>渲染失败</span>)}>
           <div style={{ fontSize: 12.5, color: 'rgba(26, 26, 29, 0.65)', wordBreak: 'break-word' }}>{errorText}</div>
         </CardShell>
-        {toolCall}
       </>
     );
   }
@@ -132,12 +132,12 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
   if (!envelope.messages.some((m) => !!m.createSurface)) {
     return (
       <>
+        {toolCall}
         <Suspense
           fallback={<div style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>界面更新应用中…</div>}
         >
           <A2uiRenderer messages={envelope.messages} markdown={A2uiMarkdown} disabled />
         </Suspense>
-        {toolCall}
       </>
     );
   }
@@ -216,10 +216,11 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
 
   return (
     <>
+      {toolCall}
       <CardShell
         header={headerRow(
           isAsk ? <QuestionCircleOutlined /> : <AppstoreOutlined />,
-          isAsk ? '请确认' : 'A2UI 界面',
+          isAsk ? '请确认' : '',
           chip,
         )}
       >
@@ -241,7 +242,6 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
           />
         </Suspense>
       </CardShell>
-      {toolCall}
     </>
   );
 }
