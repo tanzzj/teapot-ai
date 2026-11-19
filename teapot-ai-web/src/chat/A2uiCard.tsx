@@ -32,7 +32,8 @@ import { CardShell, headerRow } from './PlanCards';
  *   信封 = interrupt message（askUserStore），由 AskQuestionCard 分流到这里；
  *   提交动作 → resume payload = {问题id: 答案} 对象（后端 JSON 序列化为工具结果）。
  * 组件渲染交给官方渲染器（懒加载，只有出现信封卡片时才拉 @a2ui/* 依赖），
- * 本文件只负责卡片外壳、状态 chip 与动作派发。
+ * 本文件只负责卡片外壳、状态 chip 与动作派发；surface 卡下面恒挂一个标准 ToolCall 块
+ * （默认折叠，点开可见入参与原始信封 JSON）；同轮更新信封不建卡，增量应用到原卡。
  */
 
 const A2uiRenderer = lazy(() => import('../a2ui/A2uiRenderer'));
@@ -66,6 +67,7 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
   const name = data?.content?.[0]?.data?.name ?? '';
   const callId = data?.content?.[0]?.data?.call_id ?? '';
   const args = data?.content?.[0]?.data?.arguments ?? '';
+  const serverLabel = data?.content?.[0]?.data?.server_label;
   const output = data?.content?.[1]?.data?.output;
   const loading = data?.status === 'in_progress' && output === undefined;
 
@@ -93,29 +95,52 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
   const interactive = !readOnly && (isAsk ? pending && !answeredPayload : !loading);
   const errorText = !envelope ? toolErrorText(output) : null;
 
+  // 工具调用的入参与原始结果始终随卡展示：界面渲染成功不等于调用细节可以藏起来，
+  // 排查「渲染不完整」时要能直接对着 param/result 看。ask 挂起期没有 result，用表单信封顶上。
+  const rawResult = output ?? (isAsk ? getInterruptMessage(callId) : undefined) ?? '';
+  const toolCall = (
+    <ToolCall
+      title={serverLabel ? `${serverLabel} / ${name}` : name}
+      loading={loading}
+      defaultOpen={false}
+      input={args}
+      output={rawResult}
+    />
+  );
+
   // 非信封的 render/present 结果（执行中的 toolcall、错误文本、旧版信封）→ 默认 ToolCall 块：
   // toolcall 就按 toolcall 展示，surface 只在信封结果到达后渲染
   if (!isAsk && !env) {
-    const serverLabel = data?.content?.[0]?.data?.server_label;
-    return (
-      <ToolCall
-        title={serverLabel ? `${serverLabel} / ${name}` : name}
-        loading={loading}
-        defaultOpen={loading}
-        input={args}
-        output={output ?? ''}
-      />
-    );
+    return toolCall;
   }
 
   if (errorText) {
     return (
-      <CardShell header={headerRow(<AppstoreOutlined />, 'A2UI', <span style={{ color: '#ff4d4f' }}>渲染失败</span>)}>
-        <div style={{ fontSize: 12.5, color: 'rgba(26, 26, 29, 0.65)', wordBreak: 'break-word' }}>{errorText}</div>
-      </CardShell>
+      <>
+        <CardShell header={headerRow(<AppstoreOutlined />, 'A2UI', <span style={{ color: '#ff4d4f' }}>渲染失败</span>)}>
+          <div style={{ fontSize: 12.5, color: 'rgba(26, 26, 29, 0.65)', wordBreak: 'break-word' }}>{errorText}</div>
+        </CardShell>
+        {toolCall}
+      </>
     );
   }
   if (!envelope) return null;
+
+  // 同轮更新信封（force 重渲染产出 updateComponents/updateDataModel）：surface 在上一张卡上，
+  // 这里把增量应用到共享 processor、只留一行痕迹，不另建卡——新 processor 找不到 surface
+  // 会报 Surface not found。入参/原始结果仍随下面的 ToolCall 展示。
+  if (!envelope.messages.some((m) => !!m.createSurface)) {
+    return (
+      <>
+        <Suspense
+          fallback={<div style={{ fontSize: 12, color: 'rgba(26, 26, 29, 0.45)' }}>界面更新应用中…</div>}
+        >
+          <A2uiRenderer messages={envelope.messages} markdown={A2uiMarkdown} disabled />
+        </Suspense>
+        {toolCall}
+      </>
+    );
+  }
 
   const onAction = (action: ActionPayload) => {
     if (!interactive) return;
@@ -190,31 +215,34 @@ export function A2uiCard({ data, readOnly }: { data: RuntimeMessageLike; readOnl
           : <span style={{ color: 'rgba(26, 26, 29, 0.35)' }}>surface {envelopeSurfaceId(envelope) ?? ''}</span>;
 
   return (
-    <CardShell
-      header={headerRow(
-        isAsk ? <QuestionCircleOutlined /> : <AppstoreOutlined />,
-        isAsk ? '请确认' : 'A2UI 界面',
-        chip,
-      )}
-    >
-      <Suspense
-        fallback={<div style={{ fontSize: 12.5, color: 'rgba(26, 26, 29, 0.45)' }}>界面加载中…</div>}
+    <>
+      <CardShell
+        header={headerRow(
+          isAsk ? <QuestionCircleOutlined /> : <AppstoreOutlined />,
+          isAsk ? '请确认' : 'A2UI 界面',
+          chip,
+        )}
       >
-        <A2uiRenderer
-          messages={envelope.messages}
-          markdown={A2uiMarkdown}
-          disabled={!interactive}
-          onAction={onAction}
-          onMessage={
-            isAsk
-              ? undefined
-              : (text) => {
-                  if (interactive && text) submitMessage(text);
-                }
-          }
-        />
-      </Suspense>
-    </CardShell>
+        <Suspense
+          fallback={<div style={{ fontSize: 12.5, color: 'rgba(26, 26, 29, 0.45)' }}>界面加载中…</div>}
+        >
+          <A2uiRenderer
+            messages={envelope.messages}
+            markdown={A2uiMarkdown}
+            disabled={!interactive}
+            onAction={onAction}
+            onMessage={
+              isAsk
+                ? undefined
+                : (text) => {
+                    if (interactive && text) submitMessage(text);
+                  }
+            }
+          />
+        </Suspense>
+      </CardShell>
+      {toolCall}
+    </>
   );
 }
 
