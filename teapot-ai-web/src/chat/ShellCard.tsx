@@ -17,7 +17,7 @@ import {
  * 只有命令内容用终端样式（深色底 + 等宽 + `$` 提示符），不再摆整坨 arguments JSON。
  *
  * <p>退出码从正文里提成状态徽标挂在 header 上：0 绿 / 非 0 红 / 执行中灰。默认收起，
- * 只有还在跑的时候展开，免得一次长输出的 shell 调用把整条对话撑开。
+ * 跑的时候也不自动展开，免得一次长输出的 shell 调用把整条对话撑开；要看输出点 header。
  *
  * <p>退出码为什么在正文里：harness 两条执行路径都把它拼进工具输出文本 —— 沙箱路径
  * （ShellExecuteTool）前导 `Exit code: N`，本地路径（LocalFilesystemWithShell）只在非 0 时
@@ -207,7 +207,7 @@ export function ShellCard({ data }: { data: RuntimeMessageLike }) {
         description: exit === null ? undefined : <span style={chipStyle(exit)}>exit {exit}</span>,
       }}
       body={{
-        defaultOpen: loading,
+        defaultOpen: false,
         children: (
           <OperateCard.LineBody>
             <Block

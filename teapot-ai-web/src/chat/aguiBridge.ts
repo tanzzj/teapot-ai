@@ -102,7 +102,16 @@ function createRunParser() {
     const prev = state.reasoningActive;
     state.reasoningActive = null;
     if (!prev || prev.text === '') return null;
-    return textContent(prev.id, prev.text, true);
+    // 必须走 message 级更新：Builder 的 content 增量只改 content 不改消息 status，
+    // 上一块会一直 in_progress（loading 转圈）到轮末全量回传才停
+    return {
+      object: 'message',
+      id: prev.id,
+      role: 'assistant',
+      type: 'reasoning',
+      status: 'completed',
+      content: [textContent(prev.id, prev.text, true)],
+    };
   }
 
   /** 新开一个 thinking block：本地序号生成唯一消息 id，按序登记 */
